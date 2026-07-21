@@ -1,0 +1,16 @@
+{
+  "name": "internal-agent-workbench",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Internal macOS AI agent workbench with Plan, persistent Goals, embedded browser, and native Computer Use.",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/browser-mcp.cjs && node --check src/renderer.js",
+    "package:mac": "electron-packager . 'Internal Agent Workbench' --platform=darwin --arch=arm64 --out=dist --overwrite --app-bundle-id=com.openai.internal-agent-workbench --ignore='^/work$'"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.3.6",
+    "electron": "^43.1.1"
+  }
+}

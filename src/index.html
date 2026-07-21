@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+    <title>Internal Agent Workbench</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app-shell" class="app-shell">
+      <aside id="app-sidebar" class="app-sidebar" aria-label="任务侧栏">
+        <div class="sidebar-brand">
+          <span class="brand-mark" aria-hidden="true">IA</span>
+          <strong>Workbench</strong>
+          <button id="sidebar-toggle" class="icon-button sidebar-hide" type="button" aria-label="收起侧栏">◧</button>
+        </div>
+
+        <button id="new-task" class="new-task" type="button"><span aria-hidden="true">⌑</span>新建任务</button>
+
+        <nav class="task-nav" aria-label="任务列表">
+          <div class="nav-section">
+            <div class="nav-label">当前任务</div>
+            <button class="task-row active" type="button">
+              <span class="task-row-title">未命名任务</span>
+              <span class="task-row-state" id="sidebar-task-state">就绪</span>
+            </button>
+          </div>
+
+          <div class="nav-section project-section">
+            <div class="nav-label">项目</div>
+            <div class="project-row"><span aria-hidden="true">◇</span><span id="project-name">Workspace</span></div>
+            <div class="project-meta" id="project-path">正在读取工作目录…</div>
+          </div>
+        </nav>
+
+        <details class="runtime-settings">
+          <summary><span>运行设置</span><span aria-hidden="true">⌄</span></summary>
+          <div class="settings-fields">
+            <label>工作目录<input id="cwd" value="" /></label>
+            <label>模型提供商
+              <select id="provider">
+                <option value="">当前 Codex 配置</option>
+                <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama</option>
+                <option value="lmstudio">LM Studio</option>
+              </select>
+            </label>
+            <label>模型名称<input id="model" placeholder="使用默认模型" /></label>
+          </div>
+        </details>
+
+        <div class="sidebar-footer">
+          <div class="runtime-status"><i id="runtime-dot"></i><span id="runtime-label">正在连接 Agent</span></div>
+          <div id="computer-use-status" class="computer-status"><i></i><span>Computer Use 检测中</span></div>
+        </div>
+      </aside>
+
+      <header class="topbar">
+        <div class="title-group">
+          <button id="sidebar-show" class="icon-button sidebar-show" type="button" aria-label="展开侧栏">◧</button>
+          <strong id="task-title">新任务</strong>
+          <span id="thread-label">NEW THREAD</span>
+        </div>
+        <div class="topbar-actions">
+          <span class="boundary-badge"><i></i>工作区可写</span>
+          <button id="browser-toggle" class="panel-toggle active" type="button" aria-pressed="true"><span aria-hidden="true">▱</span> 浏览器</button>
+        </div>
+      </header>
+
+      <main id="content-area" class="content-area">
+        <section class="conversation-panel">
+          <section id="goal-panel" class="goal-panel" hidden>
+            <div class="goal-rail" aria-hidden="true"></div>
+            <div class="goal-copy">
+              <span id="goal-status" class="goal-status">ACTIVE</span>
+              <strong id="goal-objective"></strong>
+              <small id="goal-usage"></small>
+            </div>
+            <div class="goal-actions">
+              <button id="goal-edit" type="button" class="secondary">编辑</button>
+              <button id="goal-pause" type="button" class="secondary">暂停</button>
+              <button id="goal-clear" type="button" class="secondary danger">清除</button>
+            </div>
+          </section>
+
+          <div id="timeline" class="timeline">
+            <div class="welcome-card">
+              <span class="welcome-mark" aria-hidden="true">IA</span>
+              <h1>今天要完成什么？</h1>
+              <p>让本机 Agent 操作代码、终端、浏览器或桌面应用。任务执行会留在可审阅的轨迹里。</p>
+              <div class="capability-row" aria-label="可用能力">
+                <span>Plan</span><span>Goals</span><span>Browser</span><span>Computer Use</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer-dock">
+            <form id="composer" class="composer">
+              <textarea id="prompt" rows="2" placeholder="描述一个任务…"></textarea>
+              <div class="composer-bottom">
+                <div class="mode-row" role="radiogroup" aria-label="任务模式">
+                  <button type="button" class="mode-option active" data-mode="default" aria-pressed="true">执行</button>
+                  <button type="button" class="mode-option" data-mode="plan" aria-pressed="false">Plan</button>
+                  <button type="button" class="mode-option" data-mode="goal" aria-pressed="false">Goal</button>
+                  <label id="goal-budget-wrap" class="goal-budget" hidden>预算
+                    <input id="goal-budget" type="number" min="1" step="1000" placeholder="tokens" />
+                  </label>
+                </div>
+                <div class="composer-actions">
+                  <button id="stop" type="button" class="stop-button" aria-label="停止">■</button>
+                  <button id="send" type="submit" class="send-button" aria-label="运行任务">↑</button>
+                </div>
+              </div>
+            </form>
+            <span class="composer-hint">⌘ Enter 运行 · 原生工具操作会按策略请求批准</span>
+          </div>
+        </section>
+
+        <section id="browser-panel" class="browser-panel">
+          <div class="browser-heading">
+            <div><strong>浏览器</strong><span>Agent 工具面板</span></div>
+            <button id="browser-close" class="icon-button" type="button" aria-label="收起浏览器">×</button>
+          </div>
+          <div class="browser-toolbar">
+            <button id="back" aria-label="后退">‹</button>
+            <button id="forward" aria-label="前进">›</button>
+            <button id="reload" aria-label="刷新">↻</button>
+            <form id="address-form"><input id="address" placeholder="输入网址并批准域名" /></form>
+          </div>
+          <div class="browser-meta">
+            <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
+            <span>独立持久化会话</span>
+          </div>
+          <div id="browser-slot" class="browser-slot">
+            <webview id="embedded-browser" partition="persist:internal-agent-browser" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%3Bmargin%3A0%7Dbody%7Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23fafaf9%3Bcolor%3A%23777772%3Bfont%3A13px%20-apple-system%2CBlinkMacSystemFont%2Csans-serif%7D.card%7Bmax-width%3A360px%3Bpadding%3A28px%3Bborder%3A1px%20solid%20%23e5e5e2%3Bborder-radius%3A14px%3Bbackground%3Awhite%3Bbox-shadow%3A0%2012px%2036px%20rgba(35%2C35%2C32%2C.06)%7Dstrong%7Bdisplay%3Ablock%3Bcolor%3A%23242422%3Bfont-size%3A16px%3Bmargin-bottom%3A9px%7Dp%7Bmargin%3A0%3Bline-height%3A1.65%7D%3C%2Fstyle%3E%3Cdiv%20class%3D%22card%22%3E%3Cstrong%3EEmbedded%20browser%20ready%3C%2Fstrong%3E%3Cp%3E%E5%9C%A8%E4%B8%8A%E6%96%B9%E8%BE%93%E5%85%A5%E7%BD%91%E5%9D%80%E3%80%82%E9%A6%96%E6%AC%A1%E6%89%8B%E5%8A%A8%E8%AE%BF%E9%97%AE%E4%BC%9A%E6%89%B9%E5%87%86%E8%AF%A5%E5%9F%9F%E5%90%8D%E4%BE%9B%E5%BD%93%E5%89%8D%20Agent%20%E4%BD%BF%E7%94%A8%E3%80%82%3C%2Fp%3E%3C%2Fdiv%3E"></webview>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
