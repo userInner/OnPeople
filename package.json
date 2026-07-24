@@ -1,16 +1,42 @@
 {
   "name": "internal-agent-workbench",
-  "version": "0.4.0",
+  "version": "0.29.9",
   "private": true,
-  "description": "Internal macOS AI agent workbench with Plan, persistent Goals, embedded browser, and native Computer Use.",
+  "description": "Cross-platform agent workbench for OpenAI-compatible and local language models.",
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/browser-mcp.cjs && node --check src/renderer.js",
-    "package:mac": "electron-packager . 'Internal Agent Workbench' --platform=darwin --arch=arm64 --out=dist --overwrite --app-bundle-id=com.openai.internal-agent-workbench --ignore='^/work$'"
+    "check": "node --check src/main.cjs && node --check src/platform-runtime.cjs && node --check src/agent-runtime.cjs && node --check src/thread-contexts.cjs && node --check src/thread-recovery.cjs && node --check src/model-gateway.cjs && node --check src/browser-navigation.cjs && node --check src/browser-fill.cjs && node --check src/browser-visual.cjs && node --check src/browser-session-manager.cjs && node --check src/browser-profile-importer.cjs && node --check src/browser-credential-vault.cjs && node --check src/chromium-profile-importer.cjs && node --check src/quick-launcher.cjs && node --check src/project-actions.cjs && node --check src/git-workflow.cjs && node --check src/workspace-location.cjs && node --check src/review-comments.cjs && node --check src/scheduled-tasks.cjs && node --check src/project-files.cjs && node --check src/agent-profiles.cjs && node --check src/effective-config.cjs && node --check src/local-memory.cjs && node --check src/usage-ledger.cjs && node --check src/secret-store.cjs && node --check src/pet-state.cjs && node --check src/pet-preload.cjs && node --check src/pet.js && node --check src/task-trace.js && node --check src/preload.cjs && node --check src/browser-mcp.cjs && node --check src/artifact-mcp.cjs && node --check src/image-generation-mcp.cjs && node --check src/renderer.js && node --check scripts/stage-runtime.cjs && node --check scripts/package-win.cjs && node --check scripts/package-win-installer.cjs && node scripts/check-platform-runtime.cjs && node scripts/check-windows-packaging.cjs && node scripts/check-agent-runtime.cjs && node scripts/check-thread-contexts.cjs && node scripts/check-thread-recovery.cjs && node scripts/check-model-gateway.cjs && node scripts/check-concurrent-runtime-e2e.cjs && node scripts/check-browser-navigation.cjs && node scripts/check-browser-fill.cjs && node scripts/check-browser-actions.cjs && node scripts/check-browser-visual.cjs && node scripts/check-browser-session.cjs && node scripts/check-browser-profile-importer.cjs && node scripts/check-chromium-profile-importer.cjs && node scripts/check-quick-launcher.cjs && node scripts/check-project-actions.cjs && node scripts/check-git-workflow.cjs && node scripts/check-workspace-location.cjs && node scripts/check-review-comments.cjs && node scripts/check-scheduled-tasks.cjs && node scripts/check-project-files.cjs && node scripts/check-task-trace.cjs && node scripts/check-pet-state.cjs && node scripts/check-artifact-mcp.cjs && node scripts/check-image-generation.cjs && node scripts/check-management-features.cjs && node scripts/check-project-management.cjs && node scripts/check-terminal-pty.cjs",
+    "rebuild:native": "electron-rebuild -f -w node-pty",
+    "stage:runtime": "node scripts/stage-runtime.cjs",
+    "package:mac": "npm run stage:runtime && node scripts/package-mac.cjs",
+    "package:win": "npm run rebuild:native && npm run stage:runtime && node scripts/package-win-installer.cjs",
+    "package:win:portable": "npm run rebuild:native && npm run stage:runtime && node scripts/package-win.cjs"
   },
   "devDependencies": {
     "@electron/packager": "^18.3.6",
-    "electron": "^43.1.1"
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "@xterm/addon-clipboard": "^0.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "adm-zip": "^0.6.0",
+    "docx": "^9.7.1",
+    "dompurify": "^3.4.12",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.12.0",
+    "marked": "^18.0.7",
+    "node-pty": "^1.1.0",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.19.1",
+    "pptxgenjs": "^4.0.1",
+    "rrule": "^2.8.1"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

@@ -1,0 +1,61 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const main = fs.readFileSync(path.join(root, "src", "main.cjs"), "utf8");
+const renderer = fs.readFileSync(path.join(root, "src", "renderer.js"), "utf8");
+const html = fs.readFileSync(path.join(root, "src", "index.html"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+
+assert.match(main, /require\("node-pty"\)/);
+assert.match(main, /resolveTerminalShell\(\)/);
+assert.match(main, /pty\.spawn\(shell\.command,\s*shell\.args/);
+assert.match(main, /TERM:\s*"xterm-256color"/);
+assert.match(main, /COLORTERM:\s*"truecolor"/);
+assert.match(main, /session\.process\.write/);
+assert.match(main, /session\.process\.resize/);
+assert.match(main, /session\.process\.kill/);
+assert.match(main, /pendingOutput:\s*\[\]/);
+assert.match(main, /ipcMain\.handle\("terminal:ready"/);
+assert.match(renderer, /await window\.workbench\.readyTerminal\(result\.processId\)/);
+
+const startHandler = main.slice(main.indexOf('ipcMain.handle("terminal:start"'), main.indexOf('ipcMain.handle("terminal:write"'));
+assert.doesNotMatch(startHandler, /appServer/);
+
+assert.match(html, /@xterm\/addon-clipboard/);
+assert.match(html, /@xterm\/addon-web-links/);
+assert.match(renderer, /ClipboardAddon\.ClipboardAddon/);
+assert.match(renderer, /WebLinksAddon\.WebLinksAddon/);
+assert.doesNotMatch(renderer, /terminalCellAt/);
+assert.match(renderer, /terminal\.textarea\?\.focus/);
+assert.doesNotMatch(renderer, /terminalCellFromPointer/);
+assert.doesNotMatch(renderer, /terminalSelectionDrag/);
+assert.match(renderer, /dataset\.selectionLength/);
+assert.match(renderer, /cursorInactiveStyle:\s*"outline"/);
+assert.match(renderer, /terminal\.selectAll\(\)/);
+assert.doesNotMatch(renderer, /terminal\.onFocus/);
+assert.match(renderer, /instance\.textarea\?\.addEventListener\("focus"/);
+assert.match(renderer, /instance\.textarea\?\.addEventListener\("blur"/);
+assert.match(main, /terminal:focus-changed/);
+assert.match(main, /terminalFocusedWebContents/);
+assert.match(main, /window\.webContents\.send\("terminal:menu-action", action\)/);
+assert.doesNotMatch(main, /function terminalInputSequence\(input\)/);
+assert.match(renderer, /const terminalSessions = new Map\(\)/);
+assert.match(renderer, /function createTerminalSession\(processId, cwd\)/);
+assert.match(renderer, /function activateTerminalSession\(processId/);
+assert.match(renderer, /async function closeTerminalSession\(processId\)/);
+assert.match(renderer, /instance\.onData\(\(data\) =>/);
+assert.match(renderer, /window\.workbench\.writeTerminal\(processId, data\)/);
+assert.match(renderer, /terminalSessions\.get\(event\.processId\)\?\.terminal\.write/);
+assert.doesNotMatch(renderer.slice(renderer.indexOf("async function startTerminal()"), renderer.indexOf("function escapeHtml")), /terminateTerminal/);
+assert.match(html, /id="terminal-tabs"/);
+assert.match(html, /id="terminal-panes"/);
+assert.doesNotMatch(html, /id="terminal-kill"/);
+assert.match(html, /style-src 'self' 'unsafe-inline'/);
+assert.equal(manifest.dependencies["node-pty"], "^1.1.0");
+assert.equal(manifest.dependencies["@xterm/xterm"], "^5.5.0");
+assert.match(renderer, /macOptionIsMeta:\s*isMacOS/);
+assert.match(renderer, /!isMacOS && event\.ctrlKey && event\.shiftKey/);
+
+console.log("Direct PTY terminal checks passed.");

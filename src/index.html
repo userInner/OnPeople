@@ -3,34 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
-    <title>Internal Agent Workbench</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+    <title>OnPeople</title>
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div id="app-shell" class="app-shell">
       <aside id="app-sidebar" class="app-sidebar" aria-label="任务侧栏">
         <div class="sidebar-brand">
-          <span class="brand-mark" aria-hidden="true">IA</span>
-          <strong>Workbench</strong>
+          <img class="brand-mark" src="../assets/onpeople-app-icon.png" alt="" aria-hidden="true" />
+          <strong>OnPeople</strong>
           <button id="sidebar-toggle" class="icon-button sidebar-hide" type="button" aria-label="收起侧栏">◧</button>
         </div>
 
-        <button id="new-task" class="new-task" type="button"><span aria-hidden="true">⌑</span>新建任务</button>
+        <div class="new-task-group">
+          <button id="new-task" class="new-task" type="button"><span aria-hidden="true">⌑</span>新建任务</button>
+          <button id="new-task-window" class="new-task-window" type="button" aria-label="在新窗口中新建任务" title="在新窗口中新建任务">▱</button>
+        </div>
+
+        <div class="task-search">
+          <input id="task-search" type="search" placeholder="搜索任务" aria-label="搜索任务" />
+          <div class="task-filter" role="tablist" aria-label="任务范围">
+            <button class="active" type="button" data-archived="false">进行中</button>
+            <button type="button" data-archived="true">已归档</button>
+          </div>
+        </div>
 
         <nav class="task-nav" aria-label="任务列表">
-          <div class="nav-section">
-            <div class="nav-label">当前任务</div>
-            <button class="task-row active" type="button">
-              <span class="task-row-title">未命名任务</span>
-              <span class="task-row-state" id="sidebar-task-state">就绪</span>
-            </button>
+          <div id="pinned-section" class="nav-section pinned-section" hidden>
+            <div class="nav-label">置顶</div>
+            <div id="pinned-task-list" class="task-list"></div>
+          </div>
+
+          <div class="nav-section task-section">
+            <div class="nav-label">任务</div>
+            <div id="task-list" class="task-list"><span class="empty-list">正在载入任务…</span></div>
           </div>
 
           <div class="nav-section project-section">
-            <div class="nav-label">项目</div>
-            <div class="project-row"><span aria-hidden="true">◇</span><span id="project-name">Workspace</span></div>
-            <div class="project-meta" id="project-path">正在读取工作目录…</div>
+            <div class="nav-heading">
+              <div class="nav-label">项目</div>
+              <button id="project-add" class="nav-add" type="button" aria-label="添加项目" title="添加项目文件夹">＋</button>
+            </div>
+            <div id="project-list" class="project-list">
+              <button class="project-row active" type="button">
+                <span aria-hidden="true">◇</span>
+                <span class="project-copy"><strong id="project-name">Workspace</strong><small id="project-path">正在读取工作目录…</small></span>
+              </button>
+            </div>
           </div>
         </nav>
 
@@ -40,20 +61,27 @@
             <label>工作目录<input id="cwd" value="" /></label>
             <label>模型提供商
               <select id="provider">
-                <option value="">当前 Codex 配置</option>
                 <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek（文本）</option>
+                <option value="minimax">MiniMax（视觉）</option>
+                <option value="kimi">Kimi（视觉）</option>
+                <option value="grok">Grok / xAI（视觉）</option>
+                <option value="sub2api">Sub2API（5.6 系列）</option>
+                <option value="compatible">自定义 Responses API</option>
                 <option value="ollama">Ollama</option>
                 <option value="lmstudio">LM Studio</option>
               </select>
             </label>
-            <label>模型名称<input id="model" placeholder="使用默认模型" /></label>
+            <label>模型名称<input id="model" list="model-options" placeholder="使用默认模型" /><datalist id="model-options"></datalist></label>
+            <label id="base-url-wrap">API Base URL<input id="base-url" placeholder="https://api.openai.com/v1" /></label>
+            <label id="api-key-wrap">API Key<input id="api-key" type="password" autocomplete="off" placeholder="留空则使用已保存密钥" /></label>
+            <div id="model-capability" class="model-capability"></div>
+            <button id="discover-models" class="settings-secondary" type="button">发现可用模型</button>
+            <button id="save-provider" class="settings-save" type="button">保存模型配置</button>
+            <small id="provider-status" class="provider-status">配置保存在本应用中</small>
           </div>
         </details>
 
-        <div class="sidebar-footer">
-          <div class="runtime-status"><i id="runtime-dot"></i><span id="runtime-label">正在连接 Agent</span></div>
-          <div id="computer-use-status" class="computer-status"><i></i><span>Computer Use 检测中</span></div>
-        </div>
       </aside>
 
       <header class="topbar">
@@ -63,13 +91,34 @@
           <span id="thread-label">NEW THREAD</span>
         </div>
         <div class="topbar-actions">
-          <span class="boundary-badge"><i></i>工作区可写</span>
-          <button id="browser-toggle" class="panel-toggle active" type="button" aria-pressed="true"><span aria-hidden="true">▱</span> 浏览器</button>
+          <div id="project-actions" class="project-actions" aria-label="项目动作" hidden></div>
+          <button id="notification-center" class="notification-center" type="button" aria-label="打开通知中心" title="计划任务通知">◔<small id="notification-count" hidden>0</small></button>
+          <button id="pet-toggle" class="pet-toggle" type="button" aria-label="显示桌面宠物" title="显示 OnPeople 宠物">
+            <img src="../assets/onpeople-app-icon.png" alt="" />
+            <span>宠物</span>
+          </button>
+          <label class="boundary-badge permission-control" title="任务执行权限">
+            <i></i>
+            <select id="permission-preset" aria-label="任务执行权限" disabled>
+              <option value="ask">请求批准</option>
+              <option value="auto_review">替我审批</option>
+              <option value="full_access">完全访问</option>
+            </select>
+          </label>
+          <div class="tool-switcher" role="tablist" aria-label="工具舱">
+            <button class="panel-toggle active" type="button" data-tool-view="browser" aria-pressed="true">浏览器</button>
+            <button class="panel-toggle" type="button" data-tool-view="terminal" aria-pressed="false">终端</button>
+            <button class="panel-toggle" type="button" data-tool-view="changes" aria-pressed="false">变更</button>
+            <button class="panel-toggle" type="button" data-tool-view="files" aria-pressed="false">文件</button>
+            <button class="panel-toggle" type="button" data-tool-view="extensions" aria-pressed="false">扩展</button>
+            <button class="panel-toggle" type="button" data-tool-view="control" aria-pressed="false">控制</button>
+          </div>
         </div>
       </header>
 
       <main id="content-area" class="content-area">
-        <section class="conversation-panel">
+        <section id="primary-workspace" class="primary-workspace">
+          <section class="conversation-panel">
           <section id="goal-panel" class="goal-panel" hidden>
             <div class="goal-rail" aria-hidden="true"></div>
             <div class="goal-copy">
@@ -86,7 +135,7 @@
 
           <div id="timeline" class="timeline">
             <div class="welcome-card">
-              <span class="welcome-mark" aria-hidden="true">IA</span>
+              <img class="welcome-mark" src="../assets/onpeople-app-icon.png" alt="" aria-hidden="true" />
               <h1>今天要完成什么？</h1>
               <p>让本机 Agent 操作代码、终端、浏览器或桌面应用。任务执行会留在可审阅的轨迹里。</p>
               <div class="capability-row" aria-label="可用能力">
@@ -97,6 +146,29 @@
 
           <div class="composer-dock">
             <form id="composer" class="composer">
+              <div id="image-attachments" class="image-attachments" hidden></div>
+              <div id="capability-selection" class="capability-selection" hidden></div>
+              <div id="capability-menu" class="capability-menu" hidden role="menu" aria-label="添加内容和能力">
+                <span class="capability-heading">添加</span>
+                <button type="button" data-capability-action="attachments"><i>⌕</i><span><strong>文件和文件夹</strong><small>作为当前任务的本地上下文</small></span></button>
+                <button type="button" data-capability-action="chrome"><i class="chrome-dot"></i><span><strong>附加 Google Chrome</strong><small>导入 Cookie 与本地加密密码</small></span></button>
+                <button type="button" data-capability-action="goal"><i>◎</i><span><strong>目标</strong><small>设置要持续追求的结果</small></span></button>
+                <button type="button" data-capability-action="plan"><i>☼</i><span><strong>计划模式</strong><small>先调查并制定实施计划</small></span></button>
+                <span class="capability-heading">内嵌能力</span>
+                <button type="button" data-capability="documents"><i class="capability-icon document">▤</i><span><strong>Documents</strong><small>创建 DOCX 文档</small></span></button>
+                <button type="button" data-capability="pdf"><i class="capability-icon pdf">PDF</i><span><strong>PDF</strong><small>创建和验证 PDF 文件</small></span></button>
+                <button type="button" data-capability="spreadsheets"><i class="capability-icon sheet">▦</i><span><strong>Spreadsheets</strong><small>创建 XLSX 工作簿</small></span></button>
+                <button type="button" data-capability="presentations"><i class="capability-icon slides">▣</i><span><strong>Presentations</strong><small>创建 PPTX 演示文稿</small></span></button>
+                <button type="button" data-capability="imagegen"><i class="capability-icon imagegen">✦</i><span><strong>Image generation</strong><small>生成图片并保存到当前项目</small></span></button>
+                <button type="button" data-capability="templates"><i class="capability-icon template">◆</i><span><strong>Template Creator</strong><small>创建和复用产物模板</small></span></button>
+                <button type="button" data-capability="sites"><i class="capability-icon sites">◫</i><span><strong>Sites</strong><small>构建可直接预览的网站</small></span></button>
+                <button type="button" data-capability="browser"><i class="capability-icon browser">⌁</i><span><strong>浏览器</strong><small>控制 OnPeople 内嵌浏览器</small></span></button>
+                <button type="button" data-capability="computer"><i class="capability-icon computer">✦</i><span><strong>电脑</strong><small id="computer-capability-copy">控制 macOS 原生应用</small></span></button>
+                <button type="button" data-capability="visualize"><i class="capability-icon visualize">✧</i><span><strong>Visualize</strong><small>生成交互式数据可视化</small></span></button>
+                <button type="button" data-capability="default-templates"><i class="capability-icon defaults">◇</i><span><strong>Default templates</strong><small>生成文档、表格、演示和网站模板</small></span></button>
+                <span class="capability-heading">应用</span>
+                <button type="button" data-capability-action="apps"><i>⊞</i><span><strong>应用与连接器</strong><small>从 Plugins 与 MCP 管理中心安装</small></span></button>
+              </div>
               <textarea id="prompt" rows="2" placeholder="描述一个任务…"></textarea>
               <div class="composer-bottom">
                 <div class="mode-row" role="radiogroup" aria-label="任务模式">
@@ -104,41 +176,413 @@
                   <button type="button" class="mode-option" data-mode="plan" aria-pressed="false">Plan</button>
                   <button type="button" class="mode-option" data-mode="goal" aria-pressed="false">Goal</button>
                   <label id="goal-budget-wrap" class="goal-budget" hidden>预算
-                    <input id="goal-budget" type="number" min="1" step="1000" placeholder="tokens" />
+                    <select id="goal-budget-mode" aria-label="Goal 预算模式"><option value="unlimited">∞ 无限</option><option value="limited">自定义</option></select>
+                    <input id="goal-budget" type="number" min="1" step="1000" placeholder="tokens" aria-label="Goal Token 预算" hidden />
                   </label>
                 </div>
                 <div class="composer-actions">
+                  <button id="attach-image" type="button" class="attach-button" aria-label="添加内容和能力" title="添加内容和能力" aria-expanded="false">＋</button>
                   <button id="stop" type="button" class="stop-button" aria-label="停止">■</button>
                   <button id="send" type="submit" class="send-button" aria-label="运行任务">↑</button>
                 </div>
               </div>
             </form>
-            <span class="composer-hint">⌘ Enter 运行 · 原生工具操作会按策略请求批准</span>
+            <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · ⌘V 粘贴图片 · 原生工具操作会按策略请求批准</span>
           </div>
+          </section>
+
+          <div id="terminal-resizer" class="panel-resizer terminal-resizer" role="separator" aria-label="调整终端高度" aria-orientation="horizontal" aria-valuemin="160" aria-valuemax="640" tabindex="0" hidden></div>
+          <section id="terminal-dock" class="terminal-dock" aria-label="终端" hidden>
+            <div class="terminal-tabbar">
+              <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="终端会话"></div>
+              <button id="terminal-new" class="terminal-icon-button" type="button" aria-label="新建终端" title="新建终端">＋</button>
+              <span id="terminal-copy-status" class="terminal-copy-status" aria-live="polite"></span>
+            </div>
+            <div id="terminal-panes" class="terminal-stage"></div>
+          </section>
         </section>
 
-        <section id="browser-panel" class="browser-panel">
-          <div class="browser-heading">
-            <div><strong>浏览器</strong><span>Agent 工具面板</span></div>
-            <button id="browser-close" class="icon-button" type="button" aria-label="收起浏览器">×</button>
+        <div id="workspace-resizer" class="panel-resizer workspace-resizer" role="separator" aria-label="调整工具舱宽度" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="900" tabindex="0"></div>
+
+        <section id="utility-panel" class="utility-panel">
+          <div class="utility-heading">
+            <div><strong id="utility-title">浏览器</strong><span id="utility-subtitle">Agent 工具舱</span></div>
+            <div class="utility-heading-actions">
+              <button id="quick-launcher-toggle" class="icon-button quick-launcher-toggle" type="button" aria-label="快速打开" aria-expanded="false">＋</button>
+              <button id="utility-close" class="icon-button" type="button" aria-label="收起工具舱">×</button>
+            </div>
+            <aside id="quick-launcher" class="quick-launcher" aria-label="快速打开" hidden>
+              <div class="quick-launcher-actions">
+                <button type="button" class="quick-launcher-row" data-quick-action="task"><span class="quick-launcher-icon">⊕</span><strong>侧边任务</strong><kbd id="task-shortcut">⌥⌘S</kbd></button>
+                <button type="button" class="quick-launcher-row" data-quick-action="browser"><span class="quick-launcher-icon">◎</span><strong>浏览器</strong><kbd id="browser-shortcut">⌘T</kbd></button>
+                <button type="button" class="quick-launcher-row" data-quick-action="terminal"><span class="quick-launcher-icon">▣</span><strong>终端</strong></button>
+              </div>
+              <div class="quick-launcher-section">
+                <span class="quick-launcher-kicker">推荐</span>
+                <div id="quick-launcher-recommendations" class="quick-launcher-recommendations"><span class="quick-launcher-empty">正在读取当前项目…</span></div>
+              </div>
+            </aside>
           </div>
-          <div class="browser-toolbar">
-            <button id="back" aria-label="后退">‹</button>
-            <button id="forward" aria-label="前进">›</button>
-            <button id="reload" aria-label="刷新">↻</button>
-            <form id="address-form"><input id="address" placeholder="输入网址并批准域名" /></form>
-          </div>
-          <div class="browser-meta">
-            <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
-            <span>独立持久化会话</span>
-          </div>
-          <div id="browser-slot" class="browser-slot">
-            <webview id="embedded-browser" partition="persist:internal-agent-browser" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%3Bmargin%3A0%7Dbody%7Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23fafaf9%3Bcolor%3A%23777772%3Bfont%3A13px%20-apple-system%2CBlinkMacSystemFont%2Csans-serif%7D.card%7Bmax-width%3A360px%3Bpadding%3A28px%3Bborder%3A1px%20solid%20%23e5e5e2%3Bborder-radius%3A14px%3Bbackground%3Awhite%3Bbox-shadow%3A0%2012px%2036px%20rgba(35%2C35%2C32%2C.06)%7Dstrong%7Bdisplay%3Ablock%3Bcolor%3A%23242422%3Bfont-size%3A16px%3Bmargin-bottom%3A9px%7Dp%7Bmargin%3A0%3Bline-height%3A1.65%7D%3C%2Fstyle%3E%3Cdiv%20class%3D%22card%22%3E%3Cstrong%3EEmbedded%20browser%20ready%3C%2Fstrong%3E%3Cp%3E%E5%9C%A8%E4%B8%8A%E6%96%B9%E8%BE%93%E5%85%A5%E7%BD%91%E5%9D%80%E3%80%82%E9%A6%96%E6%AC%A1%E6%89%8B%E5%8A%A8%E8%AE%BF%E9%97%AE%E4%BC%9A%E6%89%B9%E5%87%86%E8%AF%A5%E5%9F%9F%E5%90%8D%E4%BE%9B%E5%BD%93%E5%89%8D%20Agent%20%E4%BD%BF%E7%94%A8%E3%80%82%3C%2Fp%3E%3C%2Fdiv%3E"></webview>
-          </div>
+
+          <section class="utility-view browser-view active" data-view="browser">
+            <div class="browser-toolbar">
+              <button id="back" aria-label="后退">‹</button>
+              <button id="forward" aria-label="前进">›</button>
+              <button id="reload" aria-label="刷新">↻</button>
+              <form id="address-form" role="search"><input id="address" type="text" inputmode="url" enterkeyhint="go" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="搜索或输入网址" placeholder="搜索或输入网址" /></form>
+              <button id="browser-fill-credential" type="button" aria-label="填充已保存密码" title="填充已保存密码">⚿</button>
+              <button id="browser-account" class="browser-account-button" type="button" aria-label="浏览器账号" title="浏览器账号">◎</button>
+            </div>
+            <div class="browser-meta">
+              <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
+              <div class="browser-inspection-actions" aria-label="浏览器检查工具">
+                <button id="browser-snapshot" type="button">快照</button>
+                <button id="browser-annotate" type="button">批注 <small id="browser-annotation-count">0</small></button>
+                <button id="browser-inspect" type="button">检查</button>
+              </div>
+            </div>
+            <div id="browser-slot" class="browser-slot">
+              <aside id="browser-inspector" class="browser-inspector" aria-label="浏览器检查结果" hidden>
+                <header>
+                  <div><span id="browser-inspector-kicker">Visual snapshot</span><strong id="browser-inspector-title">页面快照</strong></div>
+                  <button id="browser-inspector-close" type="button" aria-label="关闭检查结果">×</button>
+                </header>
+                <div id="browser-inspector-body" class="browser-inspector-body"></div>
+              </aside>
+              <form id="browser-annotation-composer" class="browser-annotation-composer" hidden>
+                <div><span>PAGE NOTE</span><strong id="browser-annotation-target">选择的页面区域</strong></div>
+                <textarea id="browser-annotation-note" rows="2" maxlength="2000" placeholder="说明这里应该怎样调整…"></textarea>
+                <div class="browser-annotation-buttons">
+                  <button id="browser-annotation-cancel" type="button">取消</button>
+                  <button id="browser-annotation-save" type="submit">保存批注</button>
+                </div>
+              </form>
+              <aside id="browser-account-sheet" class="browser-account-sheet" aria-label="浏览器账号" hidden>
+                <div class="account-sheet-heading">
+                  <div><span>Browser passport</span><strong>浏览器账号</strong></div>
+                  <button id="browser-account-close" type="button" aria-label="关闭浏览器账号">×</button>
+                </div>
+                <div class="session-passport">
+                  <div class="passport-mark">OP</div>
+                  <div><span>LOCAL PROFILE</span><strong id="browser-profile-state">独立持久化</strong><small id="browser-profile-size">正在读取本地会话…</small></div>
+                </div>
+                <section class="account-section">
+                  <span class="account-eyebrow">Google account</span>
+                  <strong id="google-session-title">尚未检测到 Google 会话</strong>
+                  <p id="google-session-copy">在 OnPeople 内完成登录。账号状态只保存在这个浏览器资料中。</p>
+                  <div id="google-services" class="service-chips"><span>Gmail</span><span>Drive</span><span>Docs</span><span>Calendar</span><span>YouTube</span></div>
+                  <button id="google-sign-in" class="account-primary" type="button">在 OnPeople 登录 Google</button>
+                </section>
+                <section class="account-section import-note">
+                  <span class="account-eyebrow">Chrome import</span>
+                  <strong id="profile-import-title">从已有浏览器导入</strong>
+                  <p id="profile-import-copy">macOS 可从 Chrome 导入 Cookie，并把密码保存到系统加密的本地保险库。凭据不会发送到界面、日志或模型。</p>
+                  <button id="profile-import-open" class="account-primary" type="button">检查可导入资料</button>
+                </section>
+                <div class="account-actions">
+                  <button id="google-session-clear" type="button">清除 Google 会话</button>
+                  <button id="browser-data-clear" class="danger" type="button">清除全部浏览数据</button>
+                </div>
+                <p id="browser-account-status" class="account-status">Cookie 值不会发送到界面或模型。</p>
+              </aside>
+              <dialog id="profile-import-dialog" class="profile-import-dialog" aria-labelledby="profile-import-heading">
+                <form method="dialog" class="profile-import-card">
+                  <div class="profile-import-heading">
+                    <div><strong id="profile-import-heading">从浏览器导入</strong><p>选择要导入到内置浏览器的数据</p></div>
+                    <button value="cancel" class="profile-import-close" type="submit" aria-label="关闭">×</button>
+                  </div>
+                  <label class="profile-picker"><span>从</span><select id="profile-import-select" aria-label="浏览器资料"></select></label>
+                  <p id="profile-import-guidance" class="profile-import-guidance">导入前，请完全关闭来源浏览器。</p>
+                  <div class="profile-import-options">
+                    <label><span><i class="password-glyph">⚿</i>密码</span><input id="profile-import-passwords" type="checkbox" checked /></label>
+                    <label><span><i>◌</i>Cookie</span><input id="profile-import-cookies" type="checkbox" checked /></label>
+                  </div>
+                  <p id="profile-import-status" class="profile-import-status">敏感值只在原生导入器与目标浏览器会话之间流转。</p>
+                  <div class="profile-import-actions">
+                    <button value="cancel" type="submit">取消</button>
+                    <button id="profile-import-run" value="default" type="button">导入</button>
+                  </div>
+                </form>
+              </dialog>
+              <webview id="embedded-browser" partition="persist:internal-agent-browser" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%3Bmargin%3A0%7Dbody%7Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23fafaf9%3Bcolor%3A%23777772%3Bfont%3A13px%20-apple-system%2CBlinkMacSystemFont%2Csans-serif%7D.card%7Bmax-width%3A360px%3Bpadding%3A28px%3Bborder%3A1px%20solid%20%23e5e5e2%3Bborder-radius%3A14px%3Bbackground%3Awhite%3Bbox-shadow%3A0%2012px%2036px%20rgba(35%2C35%2C32%2C.06)%7Dstrong%7Bdisplay%3Ablock%3Bcolor%3A%23242422%3Bfont-size%3A16px%3Bmargin-bottom%3A9px%7Dp%7Bmargin%3A0%3Bline-height%3A1.65%7D%3C%2Fstyle%3E%3Cdiv%20class%3D%22card%22%3E%3Cstrong%3EEmbedded%20browser%20ready%3C%2Fstrong%3E%3Cp%3E%E5%9C%A8%E4%B8%8A%E6%96%B9%E8%BE%93%E5%85%A5%E7%BD%91%E5%9D%80%E3%80%82%E9%A6%96%E6%AC%A1%E6%89%8B%E5%8A%A8%E8%AE%BF%E9%97%AE%E4%BC%9A%E6%89%B9%E5%87%86%E8%AF%A5%E5%9F%9F%E5%90%8D%E4%BE%9B%E5%BD%93%E5%89%8D%20Agent%20%E4%BD%BF%E7%94%A8%E3%80%82%3C%2Fp%3E%3C%2Fdiv%3E"></webview>
+            </div>
+          </section>
+
+          <section class="utility-view files-view" data-view="files">
+            <div class="file-toolbar">
+              <button id="files-back" type="button" aria-label="上一级">‹</button>
+              <div class="file-location"><strong id="files-root-name">Workspace</strong><span id="files-current-path">/</span></div>
+              <input id="files-search" type="search" placeholder="搜索项目文件…" aria-label="搜索项目文件" />
+              <button id="files-refresh" type="button">刷新</button>
+            </div>
+            <div class="file-browser-heading"><span>名称</span><span>大小</span></div>
+            <div id="project-file-list" class="project-file-list"><span class="file-empty">正在读取项目…</span></div>
+          </section>
+
+          <section class="utility-view changes-view" data-view="changes">
+            <div class="utility-toolbar changes-toolbar">
+              <div><strong id="git-branch">Git</strong><span id="git-root">等待读取工作区</span></div>
+              <button id="git-refresh" type="button">刷新</button>
+            </div>
+            <section id="git-empty-state" class="git-empty-state" aria-live="polite" hidden>
+              <div class="git-empty-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="img">
+                  <circle cx="6" cy="5" r="2.1"></circle>
+                  <circle cx="18" cy="6" r="2.1"></circle>
+                  <circle cx="7" cy="18" r="2.1"></circle>
+                  <path d="M7.8 6.4 16.2 5.6M6.2 7.1l.6 8.8M8.9 17.1c4.2-1 6.6-3.9 8-8.9"></path>
+                </svg>
+              </div>
+              <div class="git-empty-copy">
+                <strong id="git-empty-title">这个项目还没有 Git 仓库</strong>
+                <p id="git-empty-description">选择另一个 Git 项目，或在当前目录初始化仓库。</p>
+              </div>
+              <div class="git-empty-actions">
+                <button id="git-choose-project" type="button">选择 Git 项目</button>
+                <button id="git-init-repository" class="primary" type="button">初始化 Git 仓库</button>
+              </div>
+              <details class="git-error-details">
+                <summary>技术详情</summary>
+                <pre id="git-error-detail"></pre>
+              </details>
+            </section>
+            <div class="review-controls">
+              <select id="review-target">
+                <option value="uncommittedChanges">未提交变更</option>
+                <option value="baseBranch">与基础分支比较</option>
+                <option value="commit">指定 Commit</option>
+                <option value="custom">自定义审阅</option>
+              </select>
+              <input id="review-value" placeholder="main / commit / 审阅说明" />
+              <button id="review-start" type="button">开始审阅</button>
+              <button id="review-comments-submit" type="button" disabled>提交评论 <span id="review-comments-count">0</span></button>
+              <button id="review-comments-clear" type="button" disabled>清除</button>
+            </div>
+            <div class="git-commandbar">
+              <button id="git-stage-all" type="button">全部暂存</button>
+              <button id="git-unstage-all" type="button">取消全部</button>
+              <input id="git-commit-message" type="text" maxlength="500" placeholder="提交说明" aria-label="Git 提交说明" />
+              <button id="git-commit" class="primary" type="button">提交</button>
+              <button id="git-push" type="button">推送</button>
+              <button id="git-prepare-pr" type="button">准备 PR</button>
+            </div>
+            <section class="git-ledger" aria-label="Git 变更文件">
+              <header><strong id="git-summary">尚未读取 Git 状态</strong><span id="git-upstream">—</span></header>
+              <div id="git-files" class="git-files"><span class="git-empty">选择“刷新”读取工作区变更。</span></div>
+            </section>
+            <div id="git-diff" class="git-diff">选择“刷新”查看工作区差异。</div>
+          </section>
+
+          <section class="utility-view extensions-view" data-view="extensions">
+            <div class="extension-tabs" role="tablist">
+              <button class="active" type="button" data-extension-view="skills">Skills</button>
+              <button type="button" data-extension-view="plugins">Plugins</button>
+              <button type="button" data-extension-view="mcp">MCP</button>
+              <button id="extensions-refresh" type="button" class="refresh-extension">刷新</button>
+            </div>
+            <div id="extension-errors" class="extension-errors" hidden></div>
+            <div id="skills-list" class="extension-list active" data-extension-list="skills"></div>
+            <div id="plugins-list" class="extension-list" data-extension-list="plugins"></div>
+            <div id="mcp-list" class="extension-list" data-extension-list="mcp"></div>
+          </section>
+
+          <section class="utility-view control-view" data-view="control">
+            <div class="control-tabs" role="tablist" aria-label="P0 控制中心">
+              <button class="active" type="button" data-control-view="agents">Agents</button>
+              <button type="button" data-control-view="scheduled">Scheduled</button>
+              <button type="button" data-control-view="diagnostics">Diagnostics</button>
+              <button id="control-advanced-toggle" type="button" aria-expanded="false">高级设置⌄</button>
+              <select id="control-advanced-select" class="advanced-control-item" aria-label="高级控制面板" hidden>
+                <option value="">选择高级面板…</option><option value="worktrees">Worktrees</option><option value="context">Context</option><option value="policy">Policy</option><option value="config">Config</option><option value="memory">Memory</option><option value="usage">Usage</option><option value="secrets">Secrets</option><option value="hooks">Hooks</option>
+              </select>
+              <button id="control-refresh" type="button" class="control-refresh">刷新</button>
+            </div>
+
+            <div class="control-panel active" data-control-panel="agents">
+              <div class="agent-overview">
+                <div><strong>子 Agent</strong><span id="agent-capacity">0 / 4 ACTIVE</span><p>直接在对话中说明如何分工。运行中的任务和结果会出现在这里。</p></div>
+                <button id="agent-advanced-open" type="button">高级派发</button>
+              </div>
+              <form id="agent-create" class="control-form agent-form" hidden>
+                <div class="control-form-heading"><strong>高级派发</strong><button id="agent-advanced-close" type="button">收起</button></div>
+                <label>Agent 配置<select id="agent-profile"><option value="default">Default</option></select></label>
+                <div class="form-pair"><input id="agent-name" placeholder="名称，如 Security" /><select id="agent-role"><option value="worker">Worker</option><option value="reviewer">Reviewer</option><option value="researcher">Researcher</option><option value="tester">Tester</option></select></div>
+                <div class="form-pair"><input id="agent-model" placeholder="模型；留空继承" /><select id="agent-effort"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="xhigh">XHigh</option><option value="max">Max</option></select></div>
+                <textarea id="agent-prompt" rows="3" placeholder="描述这个 Agent 独立负责的任务…"></textarea>
+                <button type="submit" class="primary-control">开始并行任务</button>
+              </form>
+              <details class="control-disclosure">
+                <summary>管理自定义 Agent</summary>
+                <form id="agent-profile-form" class="control-form compact-control-form">
+                  <input id="profile-agent-id" type="hidden" />
+                  <div class="form-pair"><input id="profile-agent-name" placeholder="Agent 名称" /><input id="profile-agent-role" placeholder="角色，如 Security" /></div>
+                  <div class="form-pair"><input id="profile-agent-model" placeholder="模型；留空继承" /><select id="profile-agent-effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div>
+                  <label>默认权限<select id="profile-agent-sandbox"><option value="inherit">继承父任务</option><option value="read-only">只读</option><option value="workspace-write">工作区可写</option><option value="danger-full-access">完全访问</option></select></label>
+                  <textarea id="profile-agent-instructions" rows="3" placeholder="这个 Agent 的长期职责和边界…"></textarea>
+                  <div class="control-actions"><button type="submit" class="primary-control">保存 Agent</button><button id="profile-agent-new" type="button">新建</button><button id="profile-agent-delete" type="button" class="danger-outline">删除</button></div>
+                </form>
+                <div id="agent-profile-list" class="control-list compact-list"></div>
+              </details>
+              <div id="agent-list" class="control-list"><span class="control-empty">还没有派发子 Agent。</span></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="worktrees">
+              <form id="worktree-create" class="control-form">
+                <div class="control-form-heading"><strong>隔离工作区</strong><span>每个任务独立分支</span></div>
+                <div class="form-pair"><input id="worktree-name" placeholder="任务名称" /><input id="worktree-ref" value="HEAD" placeholder="起点：HEAD" /></div>
+                <button type="submit" class="primary-control">创建 Worktree</button>
+              </form>
+              <div id="worktree-root" class="control-note">正在读取 Git Worktree…</div>
+              <div id="worktree-list" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="context">
+              <div class="context-gauge">
+                <div class="context-gauge-copy"><strong id="context-percent">0%</strong><span>CONTEXT WINDOW</span></div>
+                <div class="context-track"><i id="context-fill"></i></div>
+                <div id="context-breakdown" class="context-breakdown">尚未收到 Token 使用信息。</div>
+              </div>
+              <div class="control-form">
+                <textarea id="context-message" rows="3" placeholder="在运行中转向，或排队到下一轮…"></textarea>
+                <div class="control-actions"><button id="context-steer" type="button">立即转向</button><button id="context-queue" type="button">排队下一轮</button><button id="context-compact" type="button" class="danger-outline">压缩上下文</button></div>
+              </div>
+              <div id="context-queue-list" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="policy">
+              <form id="policy-form" class="control-form">
+                <div class="control-form-heading"><strong>执行边界</strong><span>变更立即作用于当前任务</span></div>
+                <label>沙箱<select id="policy-sandbox"><option value="read-only">只读</option><option value="workspace-write">工作区可写</option><option value="danger-full-access">完全访问</option></select></label>
+                <label>审批策略<select id="policy-approval"><option value="untrusted">非可信命令审批</option><option value="on-request">按需审批</option><option value="never">从不询问</option></select></label>
+                <label>审批人<select id="policy-reviewer"><option value="user">用户</option><option value="auto_review">审阅 Agent</option></select></label>
+                <small class="policy-explainer">请求批准由你确认；替我审批只更换审批人；完全访问移除执行沙箱，但不会替你授权公开发布、购买或删除外部数据。</small>
+                <label>子 Agent 策略<select id="policy-multi-agent"><option value="explicitRequestOnly">仅明确请求</option><option value="proactive">允许主动委派</option></select></label>
+                <div class="form-pair"><label class="inline-toggle"><input id="policy-network" type="checkbox" />允许 Shell 网络</label><label>并行上限<input id="policy-max-agents" type="number" min="1" max="16" value="4" /></label></div>
+                <button type="submit" class="primary-control">保存策略</button>
+              </form>
+              <div class="audit-heading"><strong>审计轨迹</strong><span>本机 JSONL</span></div>
+              <div id="audit-list" class="audit-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="config">
+              <div class="diagnostic-hero config-hero"><div><span>EFFECTIVE CONFIG</span><strong>当前任务实际配置</strong><small id="effective-config-time">尚未读取</small></div><button id="effective-config-refresh" type="button">重新解析</button></div>
+              <div id="effective-config-summary" class="config-summary"></div>
+              <div id="effective-config-sources" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="memory">
+              <form id="memory-settings" class="control-form">
+                <div class="control-form-heading"><strong>本地记忆</strong><span>可审阅、可关闭</span></div>
+                <div class="form-pair"><label class="inline-toggle"><input id="memory-enabled" type="checkbox" />任务读取记忆</label><label class="inline-toggle"><input id="memory-generate" type="checkbox" />允许生成候选记忆</label></div>
+                <textarea id="memory-content" rows="3" placeholder="记录一个稳定偏好、项目约定或长期决策…"></textarea>
+                <div class="form-pair"><select id="memory-scope"><option value="project">当前项目</option><option value="global">所有项目</option></select><button type="submit" class="primary-control">保存记忆</button></div>
+              </form>
+              <div id="memory-list" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="usage">
+              <div class="diagnostic-hero usage-hero"><div><span>LOCAL LEDGER</span><strong id="usage-total">0 tokens</strong><small>按供应商与模型聚合，不上传账本</small></div></div>
+              <form id="usage-price-form" class="control-form compact-control-form"><div class="control-form-heading"><strong>价格覆盖</strong><span>每百万 Token，USD</span></div><input id="usage-price-key" placeholder="provider|model" /><div class="form-triple"><input id="usage-price-input" type="number" step="0.0001" min="0" placeholder="Input" /><input id="usage-price-cached" type="number" step="0.0001" min="0" placeholder="Cached" /><input id="usage-price-output" type="number" step="0.0001" min="0" placeholder="Output" /></div><button type="submit" class="primary-control">保存价格</button></form>
+              <div id="usage-list" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="secrets">
+              <form id="secret-form" class="control-form">
+                <div class="control-form-heading"><strong>安全环境变量</strong><span id="secret-storage-copy">macOS Keychain 加密</span></div>
+                <input id="secret-id" type="hidden" />
+                <div class="form-pair"><input id="secret-name" placeholder="变量名，如 SENTRY_TOKEN" /><input id="secret-value" type="password" placeholder="密钥值；编辑时留空表示不变" /></div>
+                <div class="form-pair"><select id="secret-scope"><option value="project">当前项目</option><option value="global">所有项目</option></select><input id="secret-hosts" placeholder="允许域名，逗号分隔" /></div>
+                <button type="submit" class="primary-control">保存安全变量</button>
+                <small class="policy-explainer">模型和任务日志只看到变量名。值不会返回渲染进程；对外使用必须匹配允许域名。</small>
+              </form>
+              <div id="secret-list" class="control-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="hooks">
+              <form id="hook-create" class="control-form">
+                <div class="control-form-heading"><strong>项目 Hook</strong><span>写入 .codex/hooks.json</span></div>
+                <div class="form-pair"><select id="hook-event"><option>PreToolUse</option><option>PermissionRequest</option><option>PostToolUse</option><option>PreCompact</option><option>PostCompact</option><option>SessionStart</option><option>UserPromptSubmit</option><option>SubagentStart</option><option>SubagentStop</option><option>Stop</option></select><input id="hook-matcher" placeholder="Matcher，可留空" /></div>
+                <textarea id="hook-command" rows="3" placeholder="要执行的绝对路径命令；保存前请审阅…"></textarea>
+                <div class="form-pair"><input id="hook-status" placeholder="运行时提示" /><input id="hook-timeout" type="number" min="1" max="600" value="30" aria-label="超时秒数" /></div>
+                <button type="submit" class="primary-control">保存 Hook</button>
+                <span class="trust-warning">非托管命令 Hook 必须按当前哈希审阅并信任；修改后会重新变为待审阅。</span>
+              </form>
+              <div id="hook-errors" class="extension-errors" hidden></div>
+              <div id="hook-list" class="control-list"></div>
+              <div class="audit-heading"><strong>最近运行</strong><span>START / COMPLETE</span></div>
+              <div id="hook-runs" class="audit-list"></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="scheduled">
+              <form id="scheduled-create" class="control-form scheduled-form">
+                <div class="control-form-heading"><strong>新建计划任务</strong><span>应用运行期间自动执行</span></div>
+                <input id="scheduled-name" maxlength="100" placeholder="名称，如 每日项目巡检" />
+                <textarea id="scheduled-prompt" rows="3" maxlength="20000" placeholder="描述需要自动完成的任务…"></textarea>
+                <div class="scheduled-grid">
+                  <label>频率<select id="scheduled-kind"><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">间隔</option><option value="rrule">RRULE</option></select></label>
+                  <label id="scheduled-time-wrap">时间<input id="scheduled-time" type="time" value="09:00" /></label>
+                  <label id="scheduled-day-wrap" hidden>星期<select id="scheduled-day"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="0">周日</option></select></label>
+                  <label id="scheduled-interval-wrap" hidden>分钟<input id="scheduled-interval" type="number" min="1" max="43200" value="60" /></label>
+                  <label id="scheduled-rrule-wrap" class="scheduled-wide" hidden>RRULE<input id="scheduled-rrule" value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" /></label>
+                  <label>会话<select id="scheduled-destination"><option value="standalone">新建后台会话</option><option value="thread">续跑当前会话</option></select></label>
+                  <label>执行目录<select id="scheduled-execution"><option value="local">当前工作区</option><option value="worktree">专用 Worktree</option></select></label>
+                </div>
+                <button type="submit" class="primary-control">创建计划</button>
+                <small class="policy-explainer">可在新会话或当前会话续跑；Worktree 模式为任务保留独立分支。无人值守时不弹出审批，越界操作会失败并进入通知中心。</small>
+              </form>
+              <div class="scheduled-section-heading"><strong>计划</strong><span id="scheduled-count">0 ACTIVE</span></div>
+              <div id="scheduled-task-list" class="control-list"><span class="control-empty">还没有计划任务。</span></div>
+              <div class="scheduled-section-heading"><strong>通知中心</strong><button id="scheduled-mark-read" type="button">全部已读</button></div>
+              <div id="scheduled-run-list" class="scheduled-run-list"><span class="control-empty">还没有运行记录。</span></div>
+            </div>
+
+            <div class="control-panel" data-control-panel="diagnostics">
+              <div class="diagnostic-hero">
+                <div><span id="diagnostic-kicker">RUNTIME HEALTH</span><strong id="diagnostic-status">正在检查…</strong><small id="diagnostic-version">—</small></div>
+                <button id="runtime-restart" type="button">重启运行时</button>
+              </div>
+              <div id="diagnostic-components" class="diagnostic-components"></div>
+              <div class="scheduled-section-heading"><strong>恢复与事件</strong><span id="diagnostic-retry">NO RETRY</span></div>
+              <div id="diagnostic-events" class="diagnostic-events"><span class="control-empty">尚无诊断事件。</span></div>
+            </div>
+          </section>
         </section>
       </main>
     </div>
 
+    <div id="command-palette" class="command-palette-backdrop" hidden>
+      <section class="command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
+        <input id="command-palette-search" type="search" placeholder="搜索任务、工具和设置…" autocomplete="off" />
+        <div id="command-palette-list" class="command-palette-list"></div>
+        <footer><span>↑↓ 选择</span><span>Enter 打开</span><span>Esc 关闭</span></footer>
+      </section>
+    </div>
+
+    <dialog id="text-input-dialog" class="text-input-dialog" aria-labelledby="text-input-dialog-title">
+      <form id="text-input-form" class="text-input-card">
+        <header>
+          <div>
+            <span>ONPEOPLE</span>
+            <strong id="text-input-dialog-title">编辑名称</strong>
+          </div>
+          <button id="text-input-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <p id="text-input-dialog-description">输入新的名称。</p>
+        <input id="text-input-value" type="text" maxlength="120" autocomplete="off" />
+        <footer>
+          <button id="text-input-cancel" type="button">取消</button>
+          <button id="text-input-submit" type="submit">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
+    <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+    <script src="../node_modules/dompurify/dist/purify.min.js"></script>
+    <script src="../node_modules/marked/lib/marked.umd.js"></script>
+    <script src="task-trace.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

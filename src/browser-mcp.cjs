@@ -11,7 +11,7 @@ if (!bridgeUrl || !bridgeToken) {
 const tools = [
   {
     name: "browser_navigate",
-    description: "Navigate the embedded browser to an HTTP(S) URL. The user must approve a host by visiting it manually first.",
+    description: "Open a URL in OnPeople's embedded browser. Public HTTPS sites can be opened directly; local, private, or plain-HTTP hosts must first be approved from the address bar.",
     inputSchema: {
       type: "object",
       properties: { url: { type: "string", description: "Absolute HTTP(S) URL" } },
@@ -22,6 +22,21 @@ const tools = [
   {
     name: "browser_snapshot",
     description: "Read the embedded browser's current URL, title, visible text, and interactive elements.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "browser_visual_snapshot",
+    description: "Capture the embedded browser viewport as a PNG together with URL, title, visible text, and interactive elements. Use it to verify rendered layout or visual state after navigation and actions.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "browser_annotations",
+    description: "Read the user's saved visual comments for the page currently open in OnPeople's embedded browser.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "browser_developer_inspect",
+    description: "Inspect the current page's DOM summary, recent console messages, sanitized network request outcomes, and navigation performance. This controlled developer inspection never returns request headers, cookies, storage, or response bodies.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -36,7 +51,7 @@ const tools = [
   },
   {
     name: "browser_fill",
-    description: "Fill an input or textarea returned by browser_snapshot and dispatch input/change events.",
+    description: "Fill an input, textarea, ARIA textbox, or contenteditable rich-text field returned by browser_snapshot and dispatch compatible editing events.",
     inputSchema: {
       type: "object",
       properties: {
@@ -44,6 +59,75 @@ const tools = [
         text: { type: "string" },
       },
       required: ["elementId", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_press_key",
+    description: "Press a keyboard key in the page, optionally focusing a snapshot element first. Returns post-action verification state.",
+    inputSchema: {
+      type: "object",
+      properties: { key: { type: "string" }, elementId: { type: "string" } },
+      required: ["key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_select",
+    description: "Select an option by value from a select element returned by browser_snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: { elementId: { type: "string" }, value: { type: "string" } },
+      required: ["elementId", "value"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_scroll",
+    description: "Scroll the page or a snapshot element and verify the resulting scroll state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        elementId: { type: "string" },
+        deltaX: { type: "number" },
+        deltaY: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_hover",
+    description: "Move the pointer over a snapshot element.",
+    inputSchema: {
+      type: "object",
+      properties: { elementId: { type: "string" } },
+      required: ["elementId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_wait",
+    description: "Wait for a duration or until visible page text appears.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        milliseconds: { type: "number" },
+        text: { type: "string" },
+        timeout: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "browser_upload",
+    description: "Set one or more existing local files on a file input returned by browser_snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        elementId: { type: "string" },
+        paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20 },
+      },
+      required: ["elementId", "paths"],
       additionalProperties: false,
     },
   },
@@ -80,7 +164,7 @@ async function handle(message) {
         result: {
           protocolVersion: message.params?.protocolVersion || "2025-03-26",
           capabilities: { tools: {} },
-          serverInfo: { name: "internal-embedded-browser", version: "0.1.0" },
+          serverInfo: { name: "internal-embedded-browser", version: "0.3.0" },
         },
       });
       return;
@@ -97,11 +181,34 @@ async function handle(message) {
       const actions = {
         browser_navigate: "navigate",
         browser_snapshot: "snapshot",
+        browser_visual_snapshot: "visual_snapshot",
+        browser_annotations: "annotations",
+        browser_developer_inspect: "developer_inspect",
         browser_click: "click",
         browser_fill: "fill",
+        browser_press_key: "press_key",
+        browser_select: "select",
+        browser_scroll: "scroll",
+        browser_hover: "hover",
+        browser_wait: "wait",
+        browser_upload: "upload",
       };
       if (!actions[name]) throw new Error(`Unknown browser tool: ${name}`);
       const value = await callBridge(actions[name], args);
+      if (name === "browser_visual_snapshot") {
+        const { imageBase64, mimeType, ...metadata } = value;
+        write({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            content: [
+              { type: "text", text: JSON.stringify(metadata, null, 2) },
+              { type: "image", data: imageBase64, mimeType: mimeType || "image/png" },
+            ],
+          },
+        });
+        return;
+      }
       write({
         jsonrpc: "2.0",
         id: message.id,

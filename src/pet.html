@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self'; script-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OnPeople Pet</title>
+  <link rel="stylesheet" href="./pet.css" />
+</head>
+<body>
+  <main id="pet-shell" class="pet-shell" data-status="idle">
+    <div class="pet-grip" aria-label="拖动宠物"><i></i><i></i><i></i></div>
+    <button id="pet-character" class="pet-character" type="button" aria-label="查看宠物活动">
+      <span class="pet-halo"></span>
+      <img id="pet-image" src="../assets/onpeople-app-icon.png" alt="OnPeople 水獭" draggable="false" />
+      <span id="pet-status-dot" class="pet-status-dot"></span>
+    </button>
+    <button id="pet-active" class="pet-active" type="button">
+      <span id="pet-status-label">休息中</span>
+      <strong id="pet-active-title">OnPeople</strong>
+    </button>
+    <section id="pet-tray" class="pet-tray" hidden>
+      <header>
+        <div><span id="pet-tray-kicker">ACTIVITY</span><strong id="pet-tray-title">任务动态</strong></div>
+        <nav>
+          <button id="pet-skins" type="button">皮肤</button>
+          <button id="pet-tuck" type="button">收起</button>
+        </nav>
+      </header>
+      <div id="pet-task-list" class="pet-task-list"></div>
+      <section id="pet-skin-library" class="pet-skin-library" hidden>
+        <div id="pet-skin-grid" class="pet-skin-grid"></div>
+        <button id="pet-skin-import" class="pet-skin-import" type="button"><i>＋</i><span><strong>导入自己的皮肤</strong><small>透明 PNG / WebP，最大 20 MiB</small></span></button>
+        <small class="pet-skin-notice">Cosplay 皮肤为非官方同人灵感素材，与相关游戏厂商无官方关联。</small>
+      </section>
+    </section>
+  </main>
+  <script src="./pet.js"></script>
+</body>
+</html>
