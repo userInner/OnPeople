@@ -3,6 +3,7 @@ name: Cross-platform checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
@@ -22,3 +23,75 @@ jobs:
       - run: npm ci
       - run: npm run rebuild:native
       - run: npm run check
+
+  package-windows:
+    name: Package Windows installer
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: windows-2022
+    env:
+      CODEX_VERSION: "0.145.0"
+      CUA_DRIVER_VERSION: "0.12.4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run rebuild:native
+      - name: Stage public Windows runtimes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cache = Join-Path $env:RUNNER_TEMP "onpeople-runtime"
+          $codexExtract = Join-Path $cache "codex"
+          $cuaExtract = Join-Path $cache "cua"
+          New-Item -ItemType Directory -Force $cache, $codexExtract, $cuaExtract, ".embedded-runtime\bin" | Out-Null
+
+          $codexSpec = "@openai/codex@$env:CODEX_VERSION-win32-x64"
+          $codexArchiveName = (npm pack $codexSpec --silent --pack-destination $cache | Select-Object -Last 1).Trim()
+          $codexArchive = Join-Path $cache $codexArchiveName
+          tar -xzf $codexArchive -C $codexExtract
+          if ($LASTEXITCODE -ne 0) { throw "Failed to extract $codexArchiveName" }
+          $codexVendor = Join-Path $codexExtract "package\vendor\x86_64-pc-windows-msvc"
+          Copy-Item "$codexVendor\*" -Destination ".embedded-runtime" -Recurse -Force
+
+          $cuaAsset = "cua-driver-rs-$env:CUA_DRIVER_VERSION-windows-x86_64-binary.zip"
+          $cuaRelease = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v$env:CUA_DRIVER_VERSION"
+          $cuaArchive = Join-Path $cache $cuaAsset
+          $checksums = Join-Path $cache "cua-checksums.txt"
+          Invoke-WebRequest "$cuaRelease/$cuaAsset" -OutFile $cuaArchive
+          Invoke-WebRequest "$cuaRelease/checksums.txt" -OutFile $checksums
+          $checksumLine = Get-Content $checksums | Where-Object { $_ -match [regex]::Escape($cuaAsset) } | Select-Object -First 1
+          if (-not $checksumLine) { throw "Checksum for $cuaAsset was not published" }
+          $expectedChecksum = ($checksumLine -split "\s+")[0].ToLowerInvariant()
+          $actualChecksum = (Get-FileHash $cuaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualChecksum -ne $expectedChecksum) { throw "Checksum mismatch for $cuaAsset" }
+          Expand-Archive $cuaArchive -DestinationPath $cuaExtract -Force
+          Copy-Item "$cuaExtract\*" -Destination ".embedded-runtime\bin" -Recurse -Force
+
+          $codexBinary = ".embedded-runtime\bin\codex.exe"
+          $cuaBinary = ".embedded-runtime\bin\cua-driver.exe"
+          if (-not (Test-Path $codexBinary)) { throw "Codex executable was not staged" }
+          if (-not (Test-Path $cuaBinary)) { throw "Cua Driver executable was not staged" }
+          $manifest = @{
+            createdAt = (Get-Date).ToUniversalTime().ToString("o")
+            target = @{ platform = "win32"; arch = "x64" }
+            components = @{
+              codex = @{ version = $env:CODEX_VERSION; source = $codexSpec; target = "bin/codex.exe"; sha256 = (Get-FileHash $codexBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
+              cuaDriver = @{ version = $env:CUA_DRIVER_VERSION; source = "$cuaRelease/$cuaAsset"; target = "bin/cua-driver.exe"; sha256 = (Get-FileHash $cuaBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
+            }
+            notice = "Public release runtimes downloaded from their official distributions during the build."
+          }
+          $manifestPath = Join-Path (Get-Location) ".embedded-runtime\manifest.json"
+          [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+      - name: Build and verify NSIS installer
+        run: node scripts/package-win-installer.cjs
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: OnPeople-Windows-x64
+          path: release/windows/OnPeople-Setup-*-win-x64.exe
+          if-no-files-found: error
+          retention-days: 7
