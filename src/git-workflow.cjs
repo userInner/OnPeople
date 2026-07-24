@@ -38,7 +38,7 @@ function safeRepoPath(root, filePath) {
   const resolved = path.resolve(resolvedRoot, value);
   const relative = path.relative(resolvedRoot, resolved);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("只能操作当前 Git 仓库中的文件");
-  return relative;
+  return relative.split(path.sep).join("/");
 }
 
 function normalizeCommitMessage(message) {
