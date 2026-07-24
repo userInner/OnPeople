@@ -19,7 +19,7 @@ assert.equal(runtimeManifest.target?.platform, "win32", "Staged Codex/Cua Driver
 assert.equal(runtimeManifest.target?.arch, "x64", "Staged Codex/Cua Driver runtimes must target x64");
 
 function runBuilder(args) {
-  execFileSync(process.execPath, [builderCli, "--config", "electron-builder.yml", ...args], {
+  execFileSync(process.execPath, [builderCli, "--config", "electron-builder.yml", ...args, "--publish", "never"], {
     cwd: root,
     env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: process.env.CSC_IDENTITY_AUTO_DISCOVERY || "false" },
     stdio: "inherit",
