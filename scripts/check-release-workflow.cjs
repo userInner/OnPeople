@@ -20,6 +20,9 @@ assert.match(workflow, /^  publish-release:/m);
 assert.match(workflow, /- package-windows\s+      - package-macos/);
 assert.match(workflow, /actions\/download-artifact@v5/);
 assert.match(workflow, /gh release (create|upload)/);
+assert.match(workflow, /OnPeople-Setup-\*-win-x64\.exe/);
+assert.doesNotMatch(workflow, /release\/OnPeople-\*-win-x64\.zip/);
+assert.doesNotMatch(workflow, /release\/windows\/win-unpacked/);
 assert.match(packageMac, /OnPeople-\$\{version\}-macos-arm64\.zip/);
 
 console.log("release workflow checks passed");

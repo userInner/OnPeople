@@ -402,13 +402,15 @@
 
           <section class="utility-view extensions-view" data-view="extensions">
             <div class="extension-tabs" role="tablist">
-              <button class="active" type="button" data-extension-view="skills">Skills</button>
+              <button class="active" type="button" data-extension-view="skills">OnPeople Skills</button>
               <button type="button" data-extension-view="plugins">Plugins</button>
               <button type="button" data-extension-view="mcp">MCP</button>
               <button id="extensions-refresh" type="button" class="refresh-extension">刷新</button>
             </div>
             <div id="extension-errors" class="extension-errors" hidden></div>
-            <div id="skills-list" class="extension-list active" data-extension-list="skills"></div>
+            <div id="skills-list" class="extension-list active" data-extension-list="skills">
+              <div class="skills-scope-note"><strong>OnPeople 独立 Skills</strong><span>与本机 Codex 的个人 Skills 分开保存。</span></div>
+            </div>
             <div id="plugins-list" class="extension-list" data-extension-list="plugins"></div>
             <div id="mcp-list" class="extension-list" data-extension-list="mcp"></div>
           </section>

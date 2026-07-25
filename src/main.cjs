@@ -36,6 +36,8 @@ const { SecretStore } = require("./secret-store.cjs");
 const { PetStateStore } = require("./pet-state.cjs");
 const { CloudAccountClient } = require("./cloud-account.cjs");
 const { imageGenerationCapability } = require("./provider-capabilities.cjs");
+const { buildSkillInputItems, flattenSkillsResponse } = require("./skill-runtime.cjs");
+const { watchSkillRoot } = require("./skill-watcher.cjs");
 const {
   computerUseMcpArgs,
   editorCandidates,
@@ -47,6 +49,12 @@ const {
   workbenchWindowOptions,
 } = require("./platform-runtime.cjs");
 const { version: APP_VERSION } = require("../package.json");
+
+// Keep the original data directory as a compatibility invariant. Electron
+// derives userData from package.json name by default, which made dev builds and
+// renamed packages appear to lose sessions after an upgrade.
+const STABLE_USER_DATA_PATH = path.join(app.getPath("appData"), "internal-agent-workbench");
+if (app.getPath("userData") !== STABLE_USER_DATA_PATH) app.setPath("userData", STABLE_USER_DATA_PATH);
 
 const EMBEDDED_BROWSER_PARTITION = "persist:internal-agent-browser";
 
@@ -226,11 +234,19 @@ class AppServerClient extends EventEmitter {
     this.ready = false;
     this.intentionalStop = false;
     this.serverRequests = new Map();
+    this.skillWatcher = null;
   }
 
   async start() {
     const codexHome = path.join(app.getPath("userData"), "codex-home");
+    const onPeopleSkillsHome = path.join(codexHome, "skills");
     fs.mkdirSync(codexHome, { recursive: true });
+    fs.mkdirSync(onPeopleSkillsHome, { recursive: true });
+    this.skillWatcher = watchSkillRoot(onPeopleSkillsHome, () => {
+      this.emit("notification", { method: "skills/changed", params: { source: "onpeople-filesystem" } });
+    }, {
+      onError: (error) => this.emit("event", { type: "server-log", text: `OnPeople Skills watcher: ${error.message}` }),
+    });
     fs.mkdirSync(DEFAULT_CWD, { recursive: true });
     const providerSettings = readProviderSettings();
     this.process = spawn(this.binary, ["app-server", "--listen", "stdio://"], {
@@ -238,6 +254,10 @@ class AppServerClient extends EventEmitter {
       env: {
         ...process.env,
         CODEX_HOME: codexHome,
+        ONPEOPLE_SKILLS_HOME: onPeopleSkillsHome,
+        ONPEOPLE_RUNTIME_NAME: "OnPeople",
+        ONPEOPLE_NODE_RUNTIME: process.execPath,
+        ONPEOPLE_SKILL_VALIDATOR: path.join(__dirname, "onpeople-skill-validator.cjs"),
         // OnPeople intentionally does not expose Codex device remote control.
         // Avoid an auth preference retry loop when using API-key providers.
         CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED: "1",
@@ -248,6 +268,8 @@ class AppServerClient extends EventEmitter {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.process.on("exit", (code, signal) => {
+      this.skillWatcher?.close();
+      this.skillWatcher = null;
       this.ready = false;
       if (!this.intentionalStop) this.emit("event", { type: "server-exit", code, signal });
       for (const pending of this.pending.values()) {
@@ -376,6 +398,8 @@ class AppServerClient extends EventEmitter {
 
   stop() {
     this.intentionalStop = true;
+    this.skillWatcher?.close();
+    this.skillWatcher = null;
     if (this.process && !this.process.killed) this.process.kill("SIGTERM");
   }
 }
@@ -975,6 +999,43 @@ let runtimeStatus = "stopped";
 let runtimeLastError = null;
 let runtimeStartedAt = null;
 let quitting = false;
+let skillCatalogRevision = 1;
+let skillCatalogRefreshedAt = null;
+const skillCatalogByCwd = new Map();
+const skillCatalogRefreshPromises = new Map();
+
+function invalidateSkillCatalog() {
+  skillCatalogRevision += 1;
+  sendToRenderer("agent:event", { type: "skills-changed", revision: skillCatalogRevision });
+}
+
+async function refreshSkillCatalog(cwd, options = {}) {
+  if (!appServer?.ready) throw new Error("Agent 运行时尚未就绪");
+  const workdir = path.resolve(cwd || DEFAULT_CWD);
+  const cached = skillCatalogByCwd.get(workdir);
+  const forceReload = Boolean(options.forceReload) || !cached || cached.revision !== skillCatalogRevision;
+  if (!forceReload) return cached.skills;
+  if (skillCatalogRefreshPromises.has(workdir)) return skillCatalogRefreshPromises.get(workdir);
+  const refresh = appServer.request("skills/list", { cwds: [workdir], forceReload: true })
+    .then((result) => {
+      const skills = flattenSkillsResponse(result);
+      skillCatalogRefreshedAt = new Date().toISOString();
+      skillCatalogByCwd.set(workdir, { revision: skillCatalogRevision, skills, refreshedAt: skillCatalogRefreshedAt });
+      return skills;
+    })
+    .finally(() => skillCatalogRefreshPromises.delete(workdir));
+  skillCatalogRefreshPromises.set(workdir, refresh);
+  return refresh;
+}
+
+async function skillInputItemsForPrompt(cwd, prompt) {
+  try {
+    return buildSkillInputItems(prompt, await refreshSkillCatalog(cwd));
+  } catch (error) {
+    recordRuntimeEvent("warning", "Skills 动态刷新失败", error.message);
+    return [];
+  }
+}
 
 function threadIdForWindowContents(webContentsId) {
   return threadContexts.threadIdForWindow(webContentsId);
@@ -1124,6 +1185,9 @@ async function restartAppServer(reason = "manual") {
   const threadId = mainWindowThreadId();
   appServer?.stop();
   appServer = null;
+  skillCatalogRevision += 1;
+  skillCatalogByCwd.clear();
+  skillCatalogRefreshPromises.clear();
   runtimeLoadedThreadIds.clear();
   runtimeThreadLoadPromises.clear();
   for (const waiter of runtimeThreadReadyWaiters.values()) {
@@ -1394,9 +1458,10 @@ async function runScheduledTask(task) {
     run.threadId = threadId;
     scheduledRunsByThread.set(threadId, { taskId: task.id, runId: run.id, summary: "" });
     updatePowerBlocker();
+    const skillInputs = await skillInputItemsForPrompt(taskCwd, task.prompt);
     const turn = await appServer.request("turn/start", {
       threadId,
-      input: [{ type: "text", text: task.prompt, text_elements: [] }],
+      input: [{ type: "text", text: task.prompt, text_elements: [] }, ...skillInputs],
       cwd: taskCwd,
       model,
     });
@@ -1929,11 +1994,13 @@ async function startAgentTurn(payload) {
   const turnText = [capabilityInstruction, payload.prompt, attachmentLines.length ? `<onpeople_attachments>\n${attachmentLines.join("\n")}\n</onpeople_attachments>` : ""].filter(Boolean).join("\n\n");
   const mode = payload.mode === "plan" ? "plan" : "default";
   await setCollaborationMode(mode, threadId, payload.model || thread.model, thread.reasoningEffort);
+  const skillInputs = await skillInputItemsForPrompt(cwd, turnText);
   const result = await appServer.request("turn/start", {
     threadId,
     input: [
       ...images.map((imagePath) => ({ type: "localImage", path: imagePath, detail: "auto" })),
       { type: "text", text: turnText, text_elements: [] },
+      ...skillInputs,
     ],
     cwd,
     model: payload.model || null,
@@ -1957,10 +2024,11 @@ async function dispatchAgentPrompt(payload) {
   const prompt = String(payload?.prompt || "").trim();
   if (!prompt) throw new Error("补充指令不能为空");
   try {
+    const skillInputs = await skillInputItemsForPrompt(payload?.cwd || knownThreadCwd(threadId), prompt);
     await appServer.request("turn/steer", {
       threadId,
       expectedTurnId: activeTurnId,
-      input: [{ type: "text", text: prompt, text_elements: [] }],
+      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
     }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
     appendAudit("context.steer", { threadId, turnId: activeTurnId, source: "composer" });
     return { threadId, turnId: activeTurnId, steered: true };
@@ -2007,7 +2075,7 @@ function deferPromptUntilThreadReady(senderId, payload, restorePromise) {
 
 async function setGoal(payload) {
   const thread = await ensureThread(payload);
-  const { threadId } = thread;
+  const { cwd, threadId } = thread;
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 20) : [];
   const attachmentLines = attachments.map((entry) => {
     const candidate = path.resolve(String(entry?.path || entry || ""));
@@ -2017,6 +2085,7 @@ async function setGoal(payload) {
   const objective = [CAPABILITY_INSTRUCTIONS[payload.capability] || "", String(payload.objective || "").trim(), attachmentLines.length ? `<onpeople_attachments>\n${attachmentLines.join("\n")}\n</onpeople_attachments>` : ""].filter(Boolean).join("\n\n");
   if (!objective) throw new Error("目标不能为空");
   if (objective.length > 4_000) throw new Error("目标不能超过 4,000 个字符；请把详细要求写入文件后引用它");
+  await refreshSkillCatalog(cwd);
   await setCollaborationMode("default", threadId, payload.model || thread.model, thread.reasoningEffort);
   const params = { threadId, objective, status: "active" };
   if (payload.tokenBudget !== null && payload.tokenBudget !== undefined && payload.tokenBudget !== "") {
@@ -2047,6 +2116,7 @@ async function updateGoal(threadId, action, value) {
   else if (action === "edit") {
     const objective = String(value || "").trim();
     if (!objective || objective.length > 4_000) throw new Error("目标必须为 1–4,000 个字符");
+    await refreshSkillCatalog(knownThreadCwd(id));
     params.objective = objective;
   } else throw new Error(`Unknown goal action: ${action}`);
   const result = await appServer.request("thread/goal/set", params);
@@ -2696,11 +2766,12 @@ async function spawnManagedAgent(payload = {}) {
     await appServer.request("thread/settings/update", { threadId: agent.threadId, cwd, model, effort });
     await appServer.request("thread/name/set", { threadId: agent.threadId, name: `${name} · ${role}` });
     publishAgents();
+    const skillInputs = await skillInputItemsForPrompt(cwd, prompt);
     const turn = await appServer.request("turn/start", {
       threadId: agent.threadId,
       cwd,
       model,
-      input: [{ type: "text", text: prompt, text_elements: [] }],
+      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
     });
     agent.turnId = turn.turn?.id || turn.turnId || null;
     agent.status = "running";
@@ -2721,19 +2792,20 @@ async function sendManagedAgentMessage(agentId, text) {
   if (!agent?.threadId) throw new Error("找不到子 Agent");
   const prompt = String(text || "").trim();
   if (!prompt) throw new Error("追加指令不能为空");
+  const skillInputs = await skillInputItemsForPrompt(agent.cwd, prompt);
   let result;
   if (agent.turnId && new Set(["running", "waitingOnApproval", "waitingOnUserInput"]).has(agent.status)) {
     result = await appServer.request("turn/steer", {
       threadId: agent.threadId,
       expectedTurnId: agent.turnId,
-      input: [{ type: "text", text: prompt, text_elements: [] }],
+      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
     });
   } else {
     result = await appServer.request("turn/start", {
       threadId: agent.threadId,
       cwd: agent.cwd,
       model: agent.model,
-      input: [{ type: "text", text: prompt, text_elements: [] }],
+      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
     });
     agent.turnId = result.turn?.id || result.turnId || null;
     agent.status = "running";
@@ -2924,10 +2996,11 @@ async function steerTurn(threadId, text) {
   if (!id || !turnId) throw new Error("当前没有可转向的运行任务");
   const prompt = String(text || "").trim();
   if (!prompt) throw new Error("转向指令不能为空");
+  const skillInputs = await skillInputItemsForPrompt(knownThreadCwd(id), prompt);
   const result = await appServer.request("turn/steer", {
     threadId: id,
     expectedTurnId: turnId,
-    input: [{ type: "text", text: prompt, text_elements: [] }],
+    input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
   });
   appendAudit("context.steer", { threadId: id, turnId });
   return result;
@@ -3002,9 +3075,10 @@ async function startNextQueuedMessage(threadId) {
   const next = queue.shift();
   queuedMessages.set(threadId, queue);
   try {
+    const skillInputs = await skillInputItemsForPrompt(knownThreadCwd(threadId), next.text);
     const result = await appServer.request("turn/start", {
       threadId,
-      input: [{ type: "text", text: next.text, text_elements: [] }],
+      input: [{ type: "text", text: next.text, text_elements: [] }, ...skillInputs],
     });
     const turnId = result.turn?.id || result.turnId || null;
     if (turnId) setActiveTurn(threadId, turnId);
@@ -3190,20 +3264,39 @@ async function startReview({ threadId = null, cwd, targetType, value }) {
 
 async function listExtensions(cwd, threadId = null) {
   const workdir = cwd || DEFAULT_CWD;
+  const skillsHome = path.join(app.getPath("userData"), "codex-home", "skills");
   const [skillsResult, pluginsResult, mcpResult] = await Promise.allSettled([
-    appServer.request("skills/list", { cwds: [workdir], forceReload: true }),
+    refreshSkillCatalog(workdir, { forceReload: true }),
     appServer.request("plugin/list", { cwds: [workdir] }),
     threadId
       ? appServer.request("mcpServerStatus/list", { threadId, detail: "full", limit: 100 })
       : Promise.resolve({ data: [] }),
   ]);
   const skills = skillsResult.status === "fulfilled"
-    ? (skillsResult.value.data || []).flatMap((entry) => (entry.skills || []).map((skill) => ({ ...skill, cwd: entry.cwd })))
+    ? skillsResult.value.map((skill) => {
+      const rawPath = String(skill.path || "");
+      const skillFile = path.basename(rawPath) === "SKILL.md" ? rawPath : path.join(rawPath, "SKILL.md");
+      const relative = path.relative(skillsHome, skillFile);
+      const isOnPeopleSkill = Boolean(relative)
+        && relative !== ".."
+        && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative);
+      return {
+        ...skill,
+        cwd: entry.cwd,
+        origin: isOnPeopleSkill ? "onpeople" : (skill.scope || "project"),
+        originLabel: isOnPeopleSkill ? "OnPeople 独立 Skills" : (skill.scope || "项目"),
+        hasUiMetadata: fs.existsSync(path.join(path.dirname(skillFile), "agents", "openai.yaml")),
+      };
+    })
     : [];
   const marketplaces = pluginsResult.status === "fulfilled" ? pluginsResult.value.marketplaces || [] : [];
   const plugins = marketplaces.flatMap((marketplace) => (marketplace.plugins || []).map((plugin) => ({ ...plugin, marketplace: marketplace.name, marketplacePath: marketplace.path || null })));
   return {
     skills,
+    skillsHome,
+    skillsUpdatedAt: skillCatalogRefreshedAt,
+    skillsRevision: skillCatalogRevision,
     plugins,
     mcpServers: mcpResult.status === "fulfilled" ? mcpResult.value.data || [] : [],
     errors: [skillsResult, pluginsResult, mcpResult].filter((item) => item.status === "rejected").map((item) => item.reason?.message || String(item.reason)),
@@ -3296,6 +3389,9 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     else sendToRenderer("agent:event", event);
   });
   client.on("notification", (message) => {
+    if (message.method === "skills/changed") {
+      invalidateSkillCatalog();
+    }
     if (message.method === "command/exec/outputDelta") {
       const params = message.params || {};
       sendToRenderer("agent:event", {
@@ -3423,6 +3519,7 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
   try {
     await client.start();
   } catch (error) {
+    client.stop();
     if (appServer === client) appServer = null;
     runtimeStatus = "failed";
     runtimeLastError = error.message;
@@ -4047,7 +4144,8 @@ ipcMain.handle("git:review", async (event, payload) => startReview({
 ipcMain.handle("extensions:list", async (event, cwd) => listExtensions(cwd, windowThreadIds.get(event.sender.id) || null));
 ipcMain.handle("skills:set-enabled", async (_event, skillPath, enabled) => {
   await appServer.request("skills/config/write", { path: skillPath, enabled: Boolean(enabled) });
-  return { updated: true };
+  invalidateSkillCatalog();
+  return { updated: true, revision: skillCatalogRevision };
 });
 ipcMain.handle("plugins:install", async (_event, plugin) => {
   const params = { pluginName: plugin.name };

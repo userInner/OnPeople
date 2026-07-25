@@ -167,6 +167,8 @@ let terminalSequence = 0;
 let terminalMenuBound = false;
 let terminalCopyStatusTimer = null;
 let activeToolView = "browser";
+let extensionRefreshTimer = null;
+let extensionsRefreshing = false;
 let terminalDockOpen = false;
 const activeToolMessages = new Map();
 const traceCards = new Map();
@@ -1616,7 +1618,7 @@ function setCloudAuthMode(mode = "login", { focus = false } = {}) {
 
 function cloudErrorMessage(error) {
   return String(error?.message || error || "Sub2API 请求失败")
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/, "")
+    .replace(/^Error invoking remote method '[^']+':\s*(?:[A-Za-z]+Error:\s*)?/, "")
     .replace(/Sub2API/g, "OnPeople 服务");
 }
 
@@ -1679,7 +1681,11 @@ async function refreshCloudAccount({ quiet = false } = {}) {
     const state = await window.workbench.getCloudAccount();
     renderCloudAccount(state);
     if (state.signedIn) {
-      if (!quiet) setCloudStatus(`已同步余额与 ${state.models?.length || 0} 个模型。`);
+      if (!quiet) {
+        setCloudStatus(state.offline
+          ? "当前网络不可用，已保留登录状态和上次同步的模型。"
+          : `已同步余额与 ${state.models?.length || 0} 个模型。`);
+      }
     } else if (!quiet) {
       setCloudStatus("登录是可选的；自定义 Router 和本地模型保持独立可用。");
     }
@@ -2443,11 +2449,17 @@ function extensionCard(title, description, meta, action, status = null) {
 }
 
 async function refreshExtensions() {
+  if (extensionsRefreshing) return;
+  extensionsRefreshing = true;
+  const refreshButton = $("#extensions-refresh");
+  refreshButton.disabled = true;
+  refreshButton.classList.remove("attention");
+  refreshButton.textContent = "刷新中…";
   const activeList = $(".extension-list.active");
   if (activeList) activeList.innerHTML = '<span class="empty-list">正在刷新扩展…</span>';
   try {
     const data = await window.workbench.listExtensions(cwdInput.value.trim());
-    renderSkills(data.skills || []);
+    renderSkills(data.skills || [], data.skillsHome || "", data.skillsUpdatedAt || null);
     renderPlugins(data.plugins || []);
     renderMcp(data.mcpServers || []);
     const errors = $("#extension-errors");
@@ -2456,13 +2468,33 @@ async function refreshExtensions() {
   } catch (error) {
     $("#extension-errors").hidden = false;
     $("#extension-errors").textContent = error.message;
+  } finally {
+    extensionsRefreshing = false;
+    refreshButton.disabled = false;
+    refreshButton.textContent = "已是最新";
+    setTimeout(() => {
+      if (!extensionsRefreshing && !refreshButton.classList.contains("attention")) refreshButton.textContent = "刷新";
+    }, 1_200);
   }
 }
 
-function renderSkills(skills) {
+function renderSkills(skills, skillsHome = "", updatedAt = null) {
   const list = $("#skills-list");
   list.replaceChildren();
-  if (!skills.length) list.innerHTML = '<span class="empty-list">当前目录没有发现 Skills</span>';
+  const notice = document.createElement("div");
+  notice.className = "skills-scope-note";
+  const noticeTitle = document.createElement("strong");
+  noticeTitle.textContent = "OnPeople 独立 Skills";
+  const noticeCopy = document.createElement("span");
+  const updatedLabel = updatedAt
+    ? new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : "等待首次同步";
+  noticeCopy.textContent = skillsHome
+    ? `实时监控 · ${updatedLabel} · 默认安装到 ${skillsHome}，不会写入本机 Codex 的个人 Skills。`
+    : "与本机 Codex 的个人 Skills 分开保存。";
+  notice.append(noticeTitle, noticeCopy);
+  list.append(notice);
+  if (!skills.length) list.insertAdjacentHTML("beforeend", '<span class="empty-list">当前目录没有发现 OnPeople Skills</span>');
   for (const skill of skills) {
     const button = document.createElement("button");
     button.type = "button";
@@ -2478,7 +2510,7 @@ function renderSkills(skills) {
     list.append(extensionCard(
       skill.name,
       skill.description,
-      `${skill.scope} · ${skill.path}`,
+      `${skill.originLabel || skill.scope} · ${skill.hasUiMetadata ? "Skill UI 元数据完整" : "缺少 Skill UI 元数据"} · ${skill.path}`,
       button,
       { label: skill.enabled ? "启用" : "停用", tone: skill.enabled ? "healthy" : "muted" },
     ));
@@ -4249,6 +4281,17 @@ stopButton.addEventListener("click", async () => {
 });
 
 window.workbench.onAgentEvent((event) => {
+  if (event.type === "skills-changed") {
+    const refreshButton = $("#extensions-refresh");
+    refreshButton.classList.add("attention");
+    refreshButton.textContent = "检测到更新";
+    if (extensionRefreshTimer) clearTimeout(extensionRefreshTimer);
+    extensionRefreshTimer = setTimeout(() => {
+      extensionRefreshTimer = null;
+      if (activeToolView === "extensions") void refreshExtensions();
+    }, 180);
+    return;
+  }
   if (event.type === "thread-lifecycle") {
     const phase = event.state?.phase || "idle";
     const presentation = phase === "running" ? "working" : phase;

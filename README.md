@@ -137,11 +137,13 @@ release/windows/OnPeople-Setup-<version>-win-x64.exe
 
 The tester downloads and runs only that installer. It installs OnPeople for the current user, creates Start Menu and desktop shortcuts, registers `onpeople://`, provides an uninstaller, and keeps user data during uninstall unless it is removed explicitly. The installed application contains Electron, `codex.exe`, `cua-driver.exe`, and `node-pty`; no external runtime download is required.
 
-For diagnostic use, a portable ZIP remains available:
+For local engineering diagnostics only, a portable ZIP can still be built:
 
 ```powershell
 npm run package:win:portable
 ```
+
+Do not distribute that portable archive or the unpacked `OnPeople.exe`. Public downloads and GitHub Releases must contain only the NSIS `OnPeople-Setup-<version>-win-x64.exe` installer.
 
 The build stages runtimes under `.embedded-runtime/`, which is gitignored. Packaged apps prefer these embedded copies and start the matching Cua Driver daemon. A provenance manifest records the target platform, architecture, public npm package and integrity fields (or an explicit file override), target path, and SHA-256 binary digest. Local packaging no longer silently copies Codex out of ChatGPT.app.
 

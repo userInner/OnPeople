@@ -38,6 +38,39 @@ async function main() {
   const customClient = new CloudAccountClient({ filePath: customFile, safeStorage });
   assert.equal(customClient.serviceUrl(), "https://router.example.com");
 
+  const credentialMigrationFile = path.join(root, "credential-migration-account.json");
+  fs.writeFileSync(credentialMigrationFile, JSON.stringify({
+    schemaVersion: 2,
+    serviceUrl: "https://sub2api.aibro.vip",
+    encryptedAccessToken: Buffer.from("encrypted:legacy-access").toString("base64"),
+    encryptedRefreshToken: Buffer.from("encrypted:legacy-refresh").toString("base64"),
+    encryptedApiKey: Buffer.from("encrypted:legacy-api-key").toString("base64"),
+    apiKeyId: 9,
+    group: { id: 3, name: "统一模型" },
+  }));
+  const credentialMigrationClient = new CloudAccountClient({
+    filePath: credentialMigrationFile,
+    safeStorage,
+  });
+  assert.equal(credentialMigrationClient.accessToken(), "legacy-access");
+  assert.equal(credentialMigrationClient.refreshToken(), "legacy-refresh");
+  assert.equal(credentialMigrationClient.apiKey(), "legacy-api-key");
+  const migratedCredentials = JSON.parse(fs.readFileSync(credentialMigrationFile, "utf8"));
+  assert.equal(migratedCredentials.schemaVersion, 3);
+  assert.ok(migratedCredentials.encryptedAccessToken);
+
+  const unreachableClient = new CloudAccountClient({
+    filePath: path.join(root, "unreachable-account.json"),
+    safeStorage,
+    defaultServiceUrl: "http://127.0.0.1:1",
+  });
+  await assert.rejects(
+    unreachableClient.fetchJson("http://127.0.0.1:1/health", { timeoutMs: 1_000 }),
+    (error) => error.code === "CLOUD_NETWORK_ERROR"
+      && error.message.includes("无法连接 OnPeople 服务")
+      && error.message.includes("http://127.0.0.1:1"),
+  );
+
   let createdKey = false;
   let redeemed = false;
   const server = http.createServer(async (request, response) => {
@@ -158,12 +191,26 @@ async function main() {
     assert.equal(registered.signedIn, true);
 
     assert.equal((await client.logout()).signedIn, false);
+    await client.login({
+      email: "user@example.com",
+      password: "secret123",
+      serviceUrl,
+    });
+    await new Promise((resolve) => server.close(resolve));
+    const offline = await client.status();
+    assert.equal(offline.signedIn, true);
+    assert.equal(offline.offline, true);
+    assert.equal(offline.account.email, "user@example.com");
+    assert.equal(offline.models[0].id, "gpt-5.6-sol");
+
+    client.clearCredentials();
+    assert.equal((await client.status()).signedIn, false);
     const stored = fs.readFileSync(path.join(root, "account.json"), "utf8");
     assert.doesNotMatch(stored, /jwt-access|jwt-refresh|sk-onpeople-desktop/);
     assert.doesNotMatch(stored, /encrypted:jwt-access/);
     process.stdout.write("Sub2API account integration checks passed\n");
   } finally {
-    server.close();
+    if (server.listening) server.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

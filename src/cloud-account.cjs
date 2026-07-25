@@ -47,6 +47,59 @@ function groupPriority(group = {}) {
   return 3;
 }
 
+function emptyAccountRecord(serviceUrl) {
+  return {
+    schemaVersion: ACCOUNT_SCHEMA_VERSION,
+    serviceUrl,
+    encryptedAccessToken: "",
+    encryptedRefreshToken: "",
+    encryptedApiKey: "",
+    apiKeyId: null,
+    group: null,
+    cachedAccount: null,
+    cachedModels: [],
+  };
+}
+
+function normalizeCachedAccount(account) {
+  if (!account || typeof account !== "object") return null;
+  return {
+    id: account.id ?? null,
+    email: String(account.email || ""),
+    username: String(account.username || ""),
+    balanceUSD: Number(account.balanceUSD || 0),
+    frozenBalanceUSD: Number(account.frozenBalanceUSD || 0),
+    concurrency: Number(account.concurrency || 0),
+    status: String(account.status || ""),
+    apiKeyId: Number(account.apiKeyId || 0) || null,
+    group: account.group && typeof account.group === "object" ? account.group : null,
+  };
+}
+
+function normalizeCachedModels(models) {
+  return (Array.isArray(models) ? models : [])
+    .map((model) => ({
+      id: String(model?.id || ""),
+      name: String(model?.name || model?.id || ""),
+      ownedBy: model?.ownedBy || null,
+    }))
+    .filter((model) => model.id);
+}
+
+function jwtAccount(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8"));
+    return normalizeCachedAccount({
+      id: payload.user_id || payload.uid || payload.sub || null,
+      email: payload.email || payload.username || "",
+      username: payload.username || "",
+      status: "cached",
+    });
+  } catch {
+    return null;
+  }
+}
+
 class CloudAccountClient {
   constructor({ filePath, safeStorage, defaultServiceUrl = DEFAULT_SERVICE_URL }) {
     this.filePath = filePath;
@@ -57,37 +110,27 @@ class CloudAccountClient {
   read() {
     try {
       const stored = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      if (Number(stored.schemaVersion || 0) !== ACCOUNT_SCHEMA_VERSION) {
-        const legacyUrl = normalizeServiceUrl(stored.serviceUrl || this.defaultServiceUrl);
-        return {
-          schemaVersion: ACCOUNT_SCHEMA_VERSION,
-          serviceUrl: LEGACY_LOCAL_SERVICE_URLS.has(legacyUrl) ? this.defaultServiceUrl : legacyUrl,
-          encryptedAccessToken: "",
-          encryptedRefreshToken: "",
-          encryptedApiKey: "",
-          apiKeyId: null,
-          group: null,
-        };
-      }
-      return {
+      const storedVersion = Number(stored.schemaVersion || 0);
+      const legacyUrl = normalizeServiceUrl(stored.serviceUrl || this.defaultServiceUrl);
+      const normalized = {
         schemaVersion: ACCOUNT_SCHEMA_VERSION,
-        serviceUrl: normalizeServiceUrl(stored.serviceUrl || this.defaultServiceUrl),
+        serviceUrl: LEGACY_LOCAL_SERVICE_URLS.has(legacyUrl) ? this.defaultServiceUrl : legacyUrl,
         encryptedAccessToken: String(stored.encryptedAccessToken || ""),
         encryptedRefreshToken: String(stored.encryptedRefreshToken || ""),
         encryptedApiKey: String(stored.encryptedApiKey || ""),
         apiKeyId: Number(stored.apiKeyId || 0) || null,
         group: stored.group && typeof stored.group === "object" ? stored.group : null,
+        cachedAccount: normalizeCachedAccount(stored.cachedAccount),
+        cachedModels: normalizeCachedModels(stored.cachedModels),
       };
+      // Account schema upgrades must never discard encrypted credentials. Older
+      // builds wrote compatible encrypted fields, so normalize and persist them.
+      if (storedVersion > 0 && storedVersion < ACCOUNT_SCHEMA_VERSION) {
+        try { this.write(normalized); } catch {}
+      }
+      return normalized;
     } catch {
-      return {
-        schemaVersion: ACCOUNT_SCHEMA_VERSION,
-        serviceUrl: this.defaultServiceUrl,
-        encryptedAccessToken: "",
-        encryptedRefreshToken: "",
-        encryptedApiKey: "",
-        apiKeyId: null,
-        group: null,
-      };
+      return emptyAccountRecord(this.defaultServiceUrl);
     }
   }
 
@@ -147,6 +190,8 @@ class CloudAccountClient {
         encryptedApiKey: "",
         apiKeyId: null,
         group: null,
+        cachedAccount: null,
+        cachedModels: [],
       } : previous),
       schemaVersion: ACCOUNT_SCHEMA_VERSION,
       serviceUrl: normalizedServiceUrl,
@@ -156,6 +201,8 @@ class CloudAccountClient {
     if (Object.hasOwn(changes, "apiKey")) next.encryptedApiKey = this.encrypt(changes.apiKey);
     if (Object.hasOwn(changes, "apiKeyId")) next.apiKeyId = changes.apiKeyId || null;
     if (Object.hasOwn(changes, "group")) next.group = changes.group || null;
+    if (Object.hasOwn(changes, "cachedAccount")) next.cachedAccount = normalizeCachedAccount(changes.cachedAccount);
+    if (Object.hasOwn(changes, "cachedModels")) next.cachedModels = normalizeCachedModels(changes.cachedModels);
     this.write(next);
     return next;
   }
@@ -167,21 +214,34 @@ class CloudAccountClient {
       apiKey: "",
       apiKeyId: null,
       group: null,
+      cachedAccount: null,
+      cachedModels: [],
     });
   }
 
   async fetchJson(url, { method = "GET", body = null, token = "", headers = {}, timeoutMs = 15_000 } = {}) {
-    const response = await fetch(url, {
-      method,
-      headers: {
-        accept: "application/json",
-        ...(body ? { "content-type": "application/json" } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...headers,
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: {
+          accept: "application/json",
+          ...(body ? { "content-type": "application/json" } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...headers,
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (cause) {
+      const target = new URL(url).origin;
+      const detail = cause?.cause?.code
+        || (cause?.name === "TimeoutError" ? "连接超时" : "");
+      const error = new Error(`无法连接 OnPeople 服务（${target}）${detail ? `：${detail}` : ""}`);
+      error.code = cause?.name === "TimeoutError" ? "CLOUD_TIMEOUT" : "CLOUD_NETWORK_ERROR";
+      error.cause = cause;
+      throw error;
+    }
     const raw = await response.text();
     let result;
     try {
@@ -200,20 +260,23 @@ class CloudAccountClient {
 
   async refreshSession() {
     const refreshToken = this.refreshToken();
-    if (!refreshToken) return false;
+    if (!refreshToken) return { refreshed: false, transientFailure: false };
     try {
       const result = unwrapManagementResponse(await this.fetchJson(`${this.managementBaseUrl()}/auth/refresh`, {
         method: "POST",
         body: { refresh_token: refreshToken },
       }));
-      if (!result?.access_token) return false;
+      if (!result?.access_token) return { refreshed: false, transientFailure: false };
       this.saveCredentials(this.serviceUrl(), {
         accessToken: result.access_token,
         refreshToken: result.refresh_token || refreshToken,
       });
-      return true;
-    } catch {
-      return false;
+      return { refreshed: true, transientFailure: false };
+    } catch (error) {
+      return {
+        refreshed: false,
+        transientFailure: new Set(["CLOUD_NETWORK_ERROR", "CLOUD_TIMEOUT"]).has(error.code),
+      };
     }
   }
 
@@ -230,10 +293,14 @@ class CloudAccountClient {
       const result = await this.fetchJson(`${this.managementBaseUrl()}${pathname}`, { method, body, token, headers });
       return unwrapManagementResponse(result);
     } catch (error) {
-      if (authenticated && retry && error.statusCode === 401 && await this.refreshSession()) {
-        return this.managementRequest(pathname, { method, body, authenticated, retry: false, headers });
+      let refresh = { refreshed: false, transientFailure: false };
+      if (authenticated && retry && error.statusCode === 401) {
+        refresh = await this.refreshSession();
+        if (refresh.refreshed) {
+          return this.managementRequest(pathname, { method, body, authenticated, retry: false, headers });
+        }
       }
-      if (authenticated && error.statusCode === 401) this.clearCredentials();
+      if (authenticated && error.statusCode === 401 && !refresh.transientFailure) this.clearCredentials();
       throw error;
     }
   }
@@ -293,17 +360,15 @@ class CloudAccountClient {
 
   async status() {
     const serviceUrl = this.serviceUrl();
-    if (!this.accessToken()) {
+    const accessToken = this.accessToken();
+    if (!accessToken) {
       return { signedIn: false, serviceUrl, apiBaseUrl: `${serviceUrl}/v1`, account: null, models: [] };
     }
-    const user = await this.managementRequest("/auth/me");
-    if (!this.apiKey()) await this.ensureDesktopApiKey();
-    const stored = this.read();
-    return {
-      signedIn: true,
-      serviceUrl,
-      apiBaseUrl: `${serviceUrl}/v1`,
-      account: {
+    try {
+      const user = await this.managementRequest("/auth/me");
+      if (!this.apiKey()) await this.ensureDesktopApiKey();
+      const stored = this.read();
+      const account = {
         id: user.id,
         email: user.email,
         username: user.username,
@@ -313,9 +378,30 @@ class CloudAccountClient {
         status: user.status,
         apiKeyId: stored.apiKeyId,
         group: stored.group,
-      },
-      models: await this.models(),
-    };
+      };
+      const models = await this.models();
+      this.saveCredentials(serviceUrl, { cachedAccount: account, cachedModels: models });
+      return {
+        signedIn: true,
+        serviceUrl,
+        apiBaseUrl: `${serviceUrl}/v1`,
+        account,
+        models,
+      };
+    } catch (error) {
+      if (!new Set(["CLOUD_NETWORK_ERROR", "CLOUD_TIMEOUT"]).has(error.code)) throw error;
+      const stored = this.read();
+      const cachedAccount = stored.cachedAccount || jwtAccount(accessToken);
+      if (!cachedAccount || !this.apiKey()) throw error;
+      return {
+        signedIn: true,
+        offline: true,
+        serviceUrl,
+        apiBaseUrl: `${serviceUrl}/v1`,
+        account: { ...cachedAccount, apiKeyId: stored.apiKeyId, group: stored.group },
+        models: stored.cachedModels,
+      };
+    }
   }
 
   async login({ email, password, serviceUrl }) {
