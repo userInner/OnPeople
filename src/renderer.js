@@ -40,6 +40,10 @@ const baseUrlInput = $("#base-url");
 const apiKeyInput = $("#api-key");
 const providerStatus = $("#provider-status");
 const modelCapability = $("#model-capability");
+const appUpdateVersion = $("#app-update-version");
+const appUpdateStatus = $("#app-update-status");
+const appUpdateAction = $("#app-update-action");
+const appUpdateProgress = $("#app-update-progress");
 const cloudAccountDialog = $("#cloud-account-dialog");
 const cloudAccountStatus = $("#cloud-account-status");
 const attachImageButton = $("#attach-image");
@@ -198,6 +202,26 @@ let pendingTextInputResolve = null;
 let activeProcessFlow = null;
 let activeAgentMessagePhase = null;
 let currentTurnStartedAt = null;
+let appUpdateState = null;
+
+function renderAppUpdate(state = {}) {
+  appUpdateState = state;
+  appUpdateVersion.textContent = `OnPeople ${state.currentVersion ? `v${state.currentVersion}` : ""}`.trim();
+  appUpdateStatus.textContent = state.message || "更新状态不可用";
+  const downloading = state.status === "downloading";
+  appUpdateProgress.hidden = !downloading;
+  if (downloading) appUpdateProgress.value = Number(state.percent) || 0;
+
+  appUpdateAction.disabled = ["checking", "downloading", "installing"].includes(state.status);
+  if (!state.supported) appUpdateAction.textContent = "下载最新版";
+  else if (state.status === "checking") appUpdateAction.textContent = "检查中…";
+  else if (state.status === "available") appUpdateAction.textContent = "下载更新";
+  else if (state.status === "downloading") appUpdateAction.textContent = `${Math.round(Number(state.percent) || 0)}%`;
+  else if (state.status === "downloaded") appUpdateAction.textContent = "重启安装";
+  else if (state.status === "installing") appUpdateAction.textContent = "正在重启…";
+  else if (state.status === "error") appUpdateAction.textContent = "重试";
+  else appUpdateAction.textContent = "检查更新";
+}
 
 function finishTextInput(value = null) {
   const resolve = pendingTextInputResolve;
@@ -3223,6 +3247,20 @@ $("#save-provider").addEventListener("click", async () => {
   finally { button.disabled = false; }
 });
 
+appUpdateAction.addEventListener("click", async () => {
+  appUpdateAction.disabled = true;
+  try {
+    if (!appUpdateState?.supported) await window.workbench.openAppDownload();
+    else if (appUpdateState.status === "available") await window.workbench.downloadAppUpdate();
+    else if (appUpdateState.status === "downloaded") await window.workbench.installAppUpdate();
+    else await window.workbench.checkForAppUpdate();
+  } catch (error) {
+    renderAppUpdate({ ...appUpdateState, status: "error", message: error.message });
+  } finally {
+    if (!["checking", "downloading", "installing"].includes(appUpdateState?.status)) appUpdateAction.disabled = false;
+  }
+});
+
 function setCapabilityMenu(open) {
   capabilityMenu.hidden = !open;
   attachImageButton.setAttribute("aria-expanded", String(open));
@@ -4454,6 +4492,7 @@ window.workbench.onPetState((state) => {
 window.workbench.onCloudAccountUpdated((state) => {
   renderCloudAccount(state);
 });
+window.workbench.onAppUpdateState(renderAppUpdate);
 
 window.workbench.onDeepLink((target) => {
   if (target?.type === "control" && target.view) void selectControlPanel(target.view);
@@ -4495,6 +4534,9 @@ window.workbench.getPetState().then((state) => {
   $("#pet-toggle").classList.toggle("active", Boolean(state?.visible));
 }).catch(() => {});
 void refreshCloudAccount({ quiet: true }).catch(() => {});
+window.workbench.getAppUpdateState().then(renderAppUpdate).catch((error) => {
+  renderAppUpdate({ supported: false, status: "error", message: error.message });
+});
 
 cwdInput.addEventListener("change", (event) => { updateProject(event.target.value); void refreshProjectActions(); currentFilePath = ""; if (activeToolView === "changes") refreshGit(); if (activeToolView === "files") refreshProjectFiles(); });
 selectMode("default");

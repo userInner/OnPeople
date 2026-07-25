@@ -35,6 +35,8 @@ const { UsageLedger } = require("./usage-ledger.cjs");
 const { SecretStore } = require("./secret-store.cjs");
 const { PetStateStore } = require("./pet-state.cjs");
 const { CloudAccountClient } = require("./cloud-account.cjs");
+const { AppUpdateService } = require("./app-updater.cjs");
+const { autoUpdater } = require("electron-updater");
 const { imageGenerationCapability } = require("./provider-capabilities.cjs");
 const { buildSkillInputItems, flattenSkillsResponse } = require("./skill-runtime.cjs");
 const { watchSkillRoot } = require("./skill-watcher.cjs");
@@ -965,6 +967,7 @@ let usageLedger;
 let secretStore;
 let cloudAccount;
 let agentRuntime;
+let appUpdateService;
 let schedulerTimer;
 let activePowerBlockerId = null;
 const scheduledRunsByThread = new Map();
@@ -3628,6 +3631,12 @@ function installApplicationMenu() {
     { role: "appMenu", submenu: [
       { role: "about" }, { type: "separator" },
       { label: "命令面板…", accelerator: "CmdOrCtrl+K", click: sendPalette },
+      {
+        label: process.platform === "win32" ? "检查更新…" : "下载最新版…",
+        click: () => process.platform === "win32"
+          ? appUpdateService?.check()
+          : shell.openExternal("https://aibro.vip/onpeople/#download"),
+      },
       { label: "显示 / 收起宠物", click: () => togglePet() },
       { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" },
     ] },
@@ -3686,6 +3695,22 @@ async function createWindow() {
   await modelGateway.start();
 
   await mainWindow.loadFile(path.join(__dirname, "index.html"));
+  appUpdateService = new AppUpdateService({
+    updater: autoUpdater,
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    currentVersion: APP_VERSION,
+  });
+  appUpdateService.on("state", (state) => {
+    sendToRenderer("app-update:state", state);
+    if (state.status === "downloaded" && Notification.isSupported()) {
+      new Notification({
+        title: "OnPeople 更新已就绪",
+        body: `${state.availableVersion ? `版本 ${state.availableVersion} ` : ""}已下载，回到 OnPeople 重启安装。`,
+      }).show();
+    }
+  });
+  appUpdateService.start();
   if (petStateStore.snapshot().visible) showPet();
 
   try {
@@ -4383,6 +4408,20 @@ ipcMain.handle("agent:approval", async (_event, requestId, decision) => {
   return result;
 });
 
+ipcMain.handle("app-update:state", async () => appUpdateService?.snapshot() || {
+  supported: false,
+  status: "unsupported",
+  currentVersion: APP_VERSION,
+  message: "更新服务尚未初始化",
+});
+ipcMain.handle("app-update:check", async () => appUpdateService?.check());
+ipcMain.handle("app-update:download", async () => appUpdateService?.download());
+ipcMain.handle("app-update:install", async () => appUpdateService?.install());
+ipcMain.handle("app-update:open-download", async () => {
+  await shell.openExternal("https://aibro.vip/onpeople/#download");
+  return { opened: true };
+});
+
 app.on("open-url", (event, url) => { event.preventDefault(); handleOnPeopleUrl(url); });
 app.whenReady().then(async () => {
   if (process.platform === "win32") app.setAppUserModelId("com.userinner.onpeople");
@@ -4405,6 +4444,7 @@ app.on("before-quit", () => {
   terminalProcesses.clear();
   cancelRuntimeRestart();
   clearInterval(schedulerTimer);
+  appUpdateService?.dispose();
   if (activePowerBlockerId != null && powerSaveBlocker.isStarted(activePowerBlockerId)) {
     powerSaveBlocker.stop(activePowerBlockerId);
     activePowerBlockerId = null;

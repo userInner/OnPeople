@@ -43,7 +43,11 @@ for (const file of ["bin\\codex.exe", "bin\\cua-driver.exe", "manifest.json"]) {
 runBuilder(["--win", "nsis", "--x64"]);
 const installerName = `OnPeople-Setup-${version}-win-x64.exe`;
 const installerPath = path.join(releaseRoot, installerName);
+const blockmapPath = `${installerPath}.blockmap`;
+const updateManifestPath = path.join(releaseRoot, "latest.yml");
 assert.ok(fs.existsSync(installerPath), `NSIS installer was not produced: ${installerPath}`);
 assert.ok(fs.statSync(installerPath).size > 1_000_000, "NSIS installer is unexpectedly small");
+assert.ok(fs.existsSync(blockmapPath), `Differential update blockmap was not produced: ${blockmapPath}`);
+assert.ok(fs.existsSync(updateManifestPath), `Update manifest was not produced: ${updateManifestPath}`);
 
-console.log(`Packaged Windows installer: ${installerPath}`);
+console.log(`Packaged Windows installer and update metadata: ${installerPath}`);

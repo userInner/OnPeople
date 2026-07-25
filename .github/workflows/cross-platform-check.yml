@@ -94,7 +94,10 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: OnPeople-Windows-x64
-          path: release/windows/OnPeople-Setup-*-win-x64.exe
+          path: |
+            release/windows/OnPeople-Setup-*-win-x64.exe
+            release/windows/OnPeople-Setup-*-win-x64.exe.blockmap
+            release/windows/latest.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -175,13 +178,17 @@ jobs:
           expected_tag="v$package_version"
           test "$TAG_NAME" = "$expected_tag"
           windows_installer="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe' -print -quit)"
+          windows_blockmap="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe.blockmap' -print -quit)"
+          windows_latest="release-assets/latest.yml"
           macos_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.zip' -print -quit)"
           test -f "$windows_installer"
+          test -f "$windows_blockmap"
+          test -f "$windows_latest"
           test -f "$macos_archive"
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$windows_installer" "$macos_archive" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_archive" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG_NAME" "$windows_installer" "$macos_archive" \
+            gh release create "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_archive" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --generate-notes \
