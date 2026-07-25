@@ -20,13 +20,43 @@ function directoryTree(root) {
   return directories;
 }
 
+function treeSignature(root) {
+  const records = [];
+  for (const directory of directoryTree(root)) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      let stats;
+      try {
+        stats = fs.statSync(target);
+      } catch {
+        continue;
+      }
+      records.push([
+        path.relative(root, target),
+        entry.isDirectory() ? "d" : "f",
+        stats.mtimeMs,
+        stats.size,
+      ].join(":"));
+    }
+  }
+  return records.sort().join("|");
+}
+
 function watchSkillRoot(root, onChange, options = {}) {
   const debounceMs = Math.max(20, Number(options.debounceMs) || 160);
   const onError = typeof options.onError === "function" ? options.onError : () => {};
   let timer = null;
   let closed = false;
   let rescanTimer = null;
+  let pollTimer = null;
   const watchers = new Map();
+  const platform = options.platform || process.platform;
   const changed = (_eventType, filename) => {
     if (closed) return;
     if (timer) clearTimeout(timer);
@@ -67,9 +97,18 @@ function watchSkillRoot(root, onChange, options = {}) {
     }
   };
 
-  // Node's recursive Windows watcher can abort inside libuv before JavaScript
-  // gets an exception. A directory tree watcher is also the Linux fallback.
-  if (process.platform === "darwin") {
+  // Node's Windows watcher can abort inside libuv before JavaScript gets an
+  // exception. Polling a small Skills tree is reliable and remains inexpensive.
+  if (platform === "win32") {
+    let signature = treeSignature(root);
+    pollTimer = setInterval(() => {
+      const nextSignature = treeSignature(root);
+      if (nextSignature === signature) return;
+      signature = nextSignature;
+      changed("change", null);
+    }, Math.max(100, Number(options.pollMs) || 400));
+    pollTimer.unref?.();
+  } else if (platform === "darwin") {
     try {
       const watcher = fs.watch(root, { recursive: true }, changed);
       watcher.on("error", reportError);
@@ -85,8 +124,10 @@ function watchSkillRoot(root, onChange, options = {}) {
       closed = true;
       if (timer) clearTimeout(timer);
       if (rescanTimer) clearTimeout(rescanTimer);
+      if (pollTimer) clearInterval(pollTimer);
       timer = null;
       rescanTimer = null;
+      pollTimer = null;
       for (const watcher of watchers.values()) watcher.close();
       watchers.clear();
     },

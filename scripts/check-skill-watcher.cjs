@@ -42,3 +42,28 @@ let watcher;
   watcher?.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+const pollingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-skill-polling-"));
+let pollingWatcher;
+(async () => {
+  const changed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Windows Skill polling did not detect a change")), 5_000);
+    pollingWatcher = watchSkillRoot(pollingRoot, (event) => {
+      clearTimeout(timer);
+      resolve(event);
+    }, { debounceMs: 40, platform: "win32", pollMs: 100 });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  const skillDir = path.join(pollingRoot, "frontend-design");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\nname: frontend-design\ndescription: Test\n---\n");
+  const event = await changed;
+  assert.equal(event.root, pollingRoot);
+  process.stdout.write("OnPeople Windows Skill polling checks passed.\n");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+}).finally(() => {
+  pollingWatcher?.close();
+  fs.rmSync(pollingRoot, { recursive: true, force: true });
+});
