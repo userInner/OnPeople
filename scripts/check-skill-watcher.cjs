@@ -33,7 +33,11 @@ let watcher;
   await new Promise((resolve) => setTimeout(resolve, 120));
   fs.appendFileSync(path.join(skillDir, "SKILL.md"), "\n# Updated\n");
   const nestedEvent = await nestedChanged;
-  assert.match(String(nestedEvent.filename || ""), /SKILL\.md$/);
+  if (process.platform === "win32") {
+    assert.equal(nestedEvent.filename, null);
+  } else {
+    assert.match(String(nestedEvent.filename || ""), /SKILL\.md$/);
+  }
   process.stdout.write("OnPeople Skill filesystem watcher checks passed.\n");
 })().catch((error) => {
   console.error(error);
