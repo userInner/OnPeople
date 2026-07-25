@@ -103,11 +103,11 @@ CUA_DRIVER_PATH=/absolute/path/to/cua-driver npm start
 
 ## Build a self-contained internal app
 
-The build machine supplies separately licensed, platform-matching runtimes; testers receive only the finished app. The staging script checks explicit environment variables, then platform install locations and `PATH`.
+The build machine supplies separately licensed, platform-matching runtimes; testers receive only the finished app. By default the staging script downloads the pinned public `@openai/codex` platform package from npm and records its package version, integrity, shasum, and copied binary digest.
 
-The preferred open-source build input is a Codex CLI binary built from or distributed by the public `openai/codex` project.
+OnPeople currently pins Codex CLI `0.146.0-alpha.3.1`, matching the locally installed Codex runtime while retaining public and reproducible provenance. Set `CODEX_NPM_VERSION` to select another published Codex version.
 
-Override those authorized sources when needed:
+An explicitly authorized internal build can override the public package with a local file:
 
 ```bash
 CODEX_BUNDLE_SOURCE=/absolute/path/to/codex \
@@ -143,7 +143,7 @@ For diagnostic use, a portable ZIP remains available:
 npm run package:win:portable
 ```
 
-The build stages runtimes under `.embedded-runtime/`, which is gitignored. Packaged apps prefer these embedded copies and start the matching Cua Driver daemon. A SHA-256 provenance manifest records the target platform, architecture, component source, target path, and digest.
+The build stages runtimes under `.embedded-runtime/`, which is gitignored. Packaged apps prefer these embedded copies and start the matching Cua Driver daemon. A provenance manifest records the target platform, architecture, public npm package and integrity fields (or an explicit file override), target path, and SHA-256 binary digest. Local packaging no longer silently copies Codex out of ChatGPT.app.
 
 ### Browser-profile importer
 

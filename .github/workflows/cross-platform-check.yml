@@ -32,7 +32,7 @@ jobs:
     permissions:
       contents: write
     env:
-      CODEX_VERSION: "0.145.0"
+      CODEX_VERSION: "0.146.0-alpha.3.1"
       CUA_DRIVER_VERSION: "0.12.4"
     steps:
       - uses: actions/checkout@v5
@@ -81,7 +81,7 @@ jobs:
             createdAt = (Get-Date).ToUniversalTime().ToString("o")
             target = @{ platform = "win32"; arch = "x64" }
             components = @{
-              codex = @{ version = $env:CODEX_VERSION; source = $codexSpec; target = "bin/codex.exe"; sha256 = (Get-FileHash $codexBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
+              codex = @{ kind = "npm"; version = $env:CODEX_VERSION; source = "npm:$codexSpec"; target = "bin/codex.exe"; sha256 = (Get-FileHash $codexBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
               cuaDriver = @{ version = $env:CUA_DRIVER_VERSION; source = "$cuaRelease/$cuaAsset"; target = "bin/cua-driver.exe"; sha256 = (Get-FileHash $cuaBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
             }
             notice = "Public release runtimes downloaded from their official distributions during the build."
@@ -104,7 +104,7 @@ jobs:
     needs: check
     runs-on: macos-15
     env:
-      CODEX_VERSION: "0.145.0"
+      CODEX_NPM_VERSION: "0.146.0-alpha.3.1"
       CUA_DRIVER_VERSION: "0.12.4"
     steps:
       - uses: actions/checkout@v5
@@ -114,21 +114,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run rebuild:native
-      - name: Download and verify public macOS runtimes
+      - name: Download and verify public macOS Cua Driver
         shell: bash
         run: |
           set -euo pipefail
           test "$(uname -m)" = "arm64"
           runtime_cache="$RUNNER_TEMP/onpeople-runtime"
-          codex_extract="$runtime_cache/codex"
           cua_extract="$runtime_cache/cua"
-          mkdir -p "$runtime_cache" "$codex_extract" "$cua_extract"
-
-          codex_spec="@openai/codex@$CODEX_VERSION-darwin-arm64"
-          codex_archive_name="$(npm pack "$codex_spec" --silent --pack-destination "$runtime_cache" | tail -n 1)"
-          tar -xzf "$runtime_cache/$codex_archive_name" -C "$codex_extract"
-          codex_source="$codex_extract/package/vendor/aarch64-apple-darwin/bin/codex"
-          test -x "$codex_source"
+          mkdir -p "$runtime_cache" "$cua_extract"
 
           cua_asset="cua-driver-rs-$CUA_DRIVER_VERSION-darwin-arm64.tar.gz"
           cua_release="https://github.com/trycua/cua/releases/download/cua-driver-rs-v$CUA_DRIVER_VERSION"
@@ -144,7 +137,6 @@ jobs:
           cua_app="$(find "$cua_extract" -type d -name CuaDriver.app -print -quit)"
           test -x "$cua_app/Contents/MacOS/cua-driver"
 
-          echo "CODEX_BUNDLE_SOURCE=$codex_source" >> "$GITHUB_ENV"
           echo "CUA_DRIVER_APP_SOURCE=$cua_app" >> "$GITHUB_ENV"
       - name: Build, sign, and verify macOS archive
         run: npm run package:mac

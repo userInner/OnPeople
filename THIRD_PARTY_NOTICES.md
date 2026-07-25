@@ -1,6 +1,6 @@
 # Third-party notices
 
-This internal prototype invokes the Codex CLI/App Server. Codex CLI is distributed under the Apache License 2.0. See <https://github.com/openai/codex>. Its binary is not committed to this source repository; authorized internal release builds may stage it inside the application bundle.
+This internal prototype invokes the Codex CLI/App Server. Codex CLI is distributed under the Apache License 2.0. See <https://github.com/openai/codex>. Its binary is not committed to this source repository; release builds stage the pinned public `@openai/codex` platform package from npm. An authorized internal build may explicitly override that source.
 
 The OnPeople desktop-pet state priority, animation timing model, and optional 1536×1872 sprite-atlas compatibility contract are adapted from the public OpenAI Codex terminal-pet implementation under the Apache License 2.0. See <https://github.com/openai/codex/tree/main/codex-rs/tui/src/pets>. No Codex desktop pet artwork or proprietary application code is included.
 
