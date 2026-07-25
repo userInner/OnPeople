@@ -1,8 +1,9 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { AppUpdateService } = require("../src/app-updater.cjs");
+const { AppUpdateService, WINDOWS_UPDATE_FEED_URL, normalizeUpdateFeedUrl } = require("../src/app-updater.cjs");
 
 class FakeUpdater extends EventEmitter {
+  setFeedURL(config) { this.feedConfig = config; }
   async checkForUpdates() { this.emit("update-available", { version: "0.30.0" }); }
   async downloadUpdate() {
     this.emit("download-progress", { percent: 42.4, transferred: 424, total: 1000 });
@@ -22,6 +23,7 @@ async function run() {
     checkIntervalMs: 60_000,
   });
   service.start();
+  assert.deepEqual(fake.feedConfig, { provider: "generic", url: WINDOWS_UPDATE_FEED_URL });
   assert.equal(fake.autoDownload, false);
   assert.equal(fake.autoInstallOnAppQuit, true);
   assert.equal(service.snapshot().status, "idle");
@@ -42,6 +44,8 @@ async function run() {
   const unsupported = new AppUpdateService({ updater: new FakeUpdater(), platform: "darwin", isPackaged: true, currentVersion: "0.29.12" });
   assert.equal(unsupported.start().supported, false);
   assert.equal((await unsupported.check()).status, "unsupported");
+  assert.equal(normalizeUpdateFeedUrl("https://updates.example.test/windows"), "https://updates.example.test/windows/");
+  assert.throws(() => normalizeUpdateFeedUrl("http://updates.example.test/windows"), /HTTPS/);
   console.log("App updater checks passed.");
 }
 

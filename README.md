@@ -137,6 +137,8 @@ release/windows/OnPeople-Setup-<version>-win-x64.exe
 
 The tester downloads and runs only that installer. It installs OnPeople for the current user, creates Start Menu and desktop shortcuts, registers `onpeople://`, provides an uninstaller, and keeps user data during uninstall unless it is removed explicitly. The installed application contains Electron, `codex.exe`, `cua-driver.exe`, and `node-pty`; no external runtime download is required.
 
+Packaged Windows builds check `https://aibro.vip/onpeople/update/windows/` for updates. The public Generic Feed must publish `latest.yml`, the versioned NSIS installer, and its blockmap together. `latest.yml` must use `no-store`; versioned installer and blockmap files may use long-lived immutable caching.
+
 For local engineering diagnostics only, a portable ZIP can still be built:
 
 ```powershell

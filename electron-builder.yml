@@ -7,9 +7,8 @@ npmRebuild: false
 directories:
   output: release/windows
 publish:
-  provider: github
-  owner: userInner
-  repo: OnPeople
+  provider: generic
+  url: https://aibro.vip/onpeople/update/windows/
 files:
   - src/**/*
   - assets/**/*

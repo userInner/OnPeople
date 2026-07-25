@@ -2,19 +2,30 @@ const { EventEmitter } = require("node:events");
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY_MS = 15 * 1000;
+const WINDOWS_UPDATE_FEED_URL = "https://aibro.vip/onpeople/update/windows/";
+
+function normalizeUpdateFeedUrl(value) {
+  const url = new URL(String(value || ""));
+  if (url.protocol !== "https:") throw new Error("更新地址必须使用 HTTPS");
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error || "更新失败");
 }
 
 class AppUpdateService extends EventEmitter {
-  constructor({ updater, platform, isPackaged, currentVersion, checkIntervalMs = CHECK_INTERVAL_MS, startupDelayMs = STARTUP_CHECK_DELAY_MS }) {
+  constructor({ updater, platform, isPackaged, currentVersion, updateFeedUrl = WINDOWS_UPDATE_FEED_URL, checkIntervalMs = CHECK_INTERVAL_MS, startupDelayMs = STARTUP_CHECK_DELAY_MS }) {
     super();
     this.updater = updater;
     this.platform = platform;
     this.isPackaged = Boolean(isPackaged);
     this.checkIntervalMs = checkIntervalMs;
     this.startupDelayMs = startupDelayMs;
+    this.updateFeedUrl = normalizeUpdateFeedUrl(updateFeedUrl);
     this.started = false;
     this.startupTimer = null;
     this.intervalTimer = null;
@@ -45,6 +56,7 @@ class AppUpdateService extends EventEmitter {
 
   start() {
     if (this.started || !this.state.supported) return this.snapshot();
+    this.updater.setFeedURL({ provider: "generic", url: this.updateFeedUrl });
     this.started = true;
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = true;
@@ -132,4 +144,4 @@ class AppUpdateService extends EventEmitter {
   }
 }
 
-module.exports = { AppUpdateService, CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS };
+module.exports = { AppUpdateService, CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS, WINDOWS_UPDATE_FEED_URL, normalizeUpdateFeedUrl };
