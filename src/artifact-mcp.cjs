@@ -145,10 +145,20 @@ function createSite(input) {
 function createVisualization(input) {
   const output = safeOutput(input.output || "visualization.html", ".html");
   const data = (Array.isArray(input.data) ? input.data : []).slice(0, 100).map((item) => ({ label: String(item.label || ""), value: Number(item.value) || 0 }));
-  const max = Math.max(1, ...data.map((item) => Math.abs(item.value)));
-  const bars = data.map((item) => `<div class="row"><span>${html(item.label)}</span><div class="track"><i style="width:${Math.max(1, Math.abs(item.value) / max * 100)}%"></i></div><strong>${html(item.value)}</strong></div>`).join("");
-  fs.writeFileSync(output, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(input.title || "Visualization")}</title><style>body{margin:0;background:#f7f6f2;color:#20201e;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(940px,calc(100% - 40px));margin:48px auto;padding:32px;border:1px solid #deddd8;border-radius:18px;background:#fff;box-shadow:0 18px 50px #2b2b2412}h1{margin:0 0 28px;font-size:30px;letter-spacing:-.035em}.row{display:grid;grid-template-columns:150px 1fr 70px;align-items:center;gap:14px;padding:10px 0}.track{height:20px;border-radius:6px;background:#f0efeb;overflow:hidden}.track i{display:block;height:100%;border-radius:6px;background:#e76f3c}.row strong{text-align:right}@media(max-width:620px){.row{grid-template-columns:90px 1fr 50px}.card{padding:20px}}</style></head><body><main class="card"><h1>${html(input.title || "Visualization")}</h1>${bars || "<p>暂无数据</p>"}</main></body></html>`);
-  return { output, format: "html", previewUrl: `file://${output}` };
+  const serialized = JSON.stringify(data).replaceAll("<", "\\u003c");
+  fs.writeFileSync(output, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(input.title || "Visualization")}</title><style>body{margin:0;background:#f7f6f2;color:#20201e;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(940px,calc(100% - 40px));margin:48px auto;padding:32px;border:1px solid #deddd8;border-radius:8px;background:#fff;box-shadow:0 18px 50px #2b2b2412}header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:24px}h1{margin:0;font-size:30px}.controls{display:flex;gap:8px;flex-wrap:wrap}.controls input,.controls button{height:34px;border:1px solid #d6d5cf;border-radius:6px;background:#fff;color:#20201e;padding:0 10px;font:inherit}.controls button{cursor:pointer}.controls button:hover,.controls button:focus-visible{background:#f0efeb}.row{display:grid;grid-template-columns:150px 1fr 70px;align-items:center;gap:14px;padding:10px 0}.track{height:20px;border-radius:5px;background:#f0efeb;overflow:hidden}.track i{display:block;height:100%;border-radius:5px;background:#e76f3c;transition:width .18s ease}.row:hover .track i{background:#c95327}.row strong{text-align:right}.empty{color:#777771}@media(max-width:620px){.card{padding:20px}header{align-items:flex-start;flex-direction:column}.row{grid-template-columns:90px 1fr 50px}}</style></head><body><main class="card"><header><h1>${html(input.title || "Visualization")}</h1><div class="controls"><input id="filter" type="search" placeholder="筛选标签" aria-label="筛选标签"><button id="sort" type="button">数值降序</button><button id="reset" type="button">重置</button></div></header><div id="chart" aria-live="polite"></div></main><script>const source=${serialized};const chart=document.querySelector('#chart');const filter=document.querySelector('#filter');const sort=document.querySelector('#sort');let descending=true;const escapeHtml=value=>String(value).replace(/[&<>\"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]));function render(){const query=filter.value.trim().toLocaleLowerCase();const values=source.filter(item=>item.label.toLocaleLowerCase().includes(query)).sort((a,b)=>(b.value-a.value)*(descending?1:-1));const max=Math.max(1,...values.map(item=>Math.abs(item.value)));chart.innerHTML=values.length?values.map(item=>'<div class="row" title="'+escapeHtml(item.label)+': '+item.value+'"><span>'+escapeHtml(item.label)+'</span><div class="track"><i style="width:'+Math.max(1,Math.abs(item.value)/max*100)+'%"></i></div><strong>'+item.value+'</strong></div>').join(''):'<p class="empty">没有匹配的数据</p>';}filter.addEventListener('input',render);sort.addEventListener('click',()=>{descending=!descending;sort.textContent=descending?'数值降序':'数值升序';render()});document.querySelector('#reset').addEventListener('click',()=>{filter.value='';descending=true;sort.textContent='数值降序';render()});render();</script></body></html>`);
+  return { output, format: "html", interactive: true, records: data.length, previewUrl: `file://${output}` };
+}
+
+function mergeTemplate(base, overrides) {
+  if (Array.isArray(overrides)) return overrides.map((value) => mergeTemplate(undefined, value));
+  if (!overrides || typeof overrides !== "object") return overrides === undefined ? base : overrides;
+  const result = base && typeof base === "object" && !Array.isArray(base) ? { ...base } : {};
+  for (const [key, value] of Object.entries(overrides)) {
+    if (new Set(["__proto__", "prototype", "constructor"]).has(key)) continue;
+    result[key] = mergeTemplate(result[key], value);
+  }
+  return result;
 }
 
 function createTemplate(input) {
@@ -161,8 +171,29 @@ function createTemplate(input) {
     site: { title: "网站标题", subtitle: "一句清晰的价值主张", sections: [{ heading: "介绍", text: "填写内容" }] },
     visualization: { title: "数据可视化", data: [{ label: "示例", value: 1 }] },
   };
-  fs.writeFileSync(output, `${JSON.stringify({ kind, ...presets[kind] }, null, 2)}\n`);
+  const blueprint = mergeTemplate(presets[kind], input.template);
+  fs.writeFileSync(output, `${JSON.stringify({ kind, ...blueprint }, null, 2)}\n`);
   return { output, kind, format: "json" };
+}
+
+async function applyTemplate(input) {
+  const templatePath = safeInput(input.template);
+  if (path.extname(templatePath).toLowerCase() !== ".json") throw new Error("template must be a JSON file");
+  const template = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+  const kind = String(template.kind || "");
+  const creators = {
+    document: createDocument,
+    spreadsheet: createSpreadsheet,
+    presentation: createPresentation,
+    site: createSite,
+    visualization: createVisualization,
+  };
+  if (!creators[kind]) throw new Error(`unsupported template kind: ${kind || "unknown"}`);
+  const values = mergeTemplate(template, input.values);
+  delete values.kind;
+  values.output = input.output;
+  const result = await creators[kind](values);
+  return { ...result, template: templatePath, kind };
 }
 
 function decodeXml(value) {
@@ -217,15 +248,17 @@ const definitions = [
   ["artifact_create_pdf", "Create a PDF document in the active workspace.", { output: { type: "string" }, title: { type: "string" }, sections: { type: "array" } }],
   ["artifact_create_spreadsheet", "Create an XLSX workbook in the active workspace.", { output: { type: "string" }, sheets: { type: "array" } }],
   ["artifact_create_presentation", "Create a PPTX presentation in the active workspace.", { output: { type: "string" }, title: { type: "string" }, subtitle: { type: "string" }, slides: { type: "array" } }],
-  ["artifact_create_template", "Create a reusable JSON template for an OnPeople artifact.", { output: { type: "string" }, kind: { type: "string", enum: ["document", "spreadsheet", "presentation", "site", "visualization"] } }],
+  ["artifact_create_template", "Create a reusable JSON template for an OnPeople artifact. Pass template to customize the reusable blueprint.", { output: { type: "string" }, kind: { type: "string", enum: ["document", "spreadsheet", "presentation", "site", "visualization"] }, template: { type: "object" } }],
+  ["artifact_apply_template", "Apply a previously created JSON artifact template and produce a real DOCX, XLSX, PPTX, site, or visualization file.", { template: { type: "string" }, output: { type: "string" }, values: { type: "object" } }],
   ["artifact_create_site", "Create a responsive standalone website in the active workspace.", { output: { type: "string" }, title: { type: "string" }, subtitle: { type: "string" }, sections: { type: "array" } }],
   ["artifact_create_visualization", "Create a responsive standalone HTML bar visualization.", { output: { type: "string" }, title: { type: "string" }, data: { type: "array" } }],
   ["artifact_inspect", "Read and verify text, metadata, and structure from DOCX, PDF, XLSX, PPTX, HTML, JSON, Markdown, or delimited-text artifacts in the active workspace.", { input: { type: "string" }, maxCharacters: { type: "integer", minimum: 1000, maximum: 100000 } }],
 ].map(([name, description, properties]) => ({ name, description, inputSchema: { type: "object", properties, required: ["output"], additionalProperties: false } }));
 
 definitions.find((tool) => tool.name === "artifact_inspect").inputSchema.required = ["input"];
+definitions.find((tool) => tool.name === "artifact_apply_template").inputSchema.required = ["template", "output"];
 
-const handlers = { artifact_create_document: createDocument, artifact_create_pdf: createPdf, artifact_create_spreadsheet: createSpreadsheet, artifact_create_presentation: createPresentation, artifact_create_template: createTemplate, artifact_create_site: createSite, artifact_create_visualization: createVisualization, artifact_inspect: inspectArtifact };
+const handlers = { artifact_create_document: createDocument, artifact_create_pdf: createPdf, artifact_create_spreadsheet: createSpreadsheet, artifact_create_presentation: createPresentation, artifact_create_template: createTemplate, artifact_apply_template: applyTemplate, artifact_create_site: createSite, artifact_create_visualization: createVisualization, artifact_inspect: inspectArtifact };
 
 async function callTool(name, args) {
   if (!handlers[name]) throw new Error(`Unknown artifact tool: ${name}`);
@@ -241,7 +274,7 @@ async function handle(message) {
     if (message.method === "tools/list") return write({ jsonrpc: "2.0", id: message.id, result: { tools: definitions } });
     if (message.method === "tools/call") {
       const value = await callTool(message.params?.name, message.params?.arguments || {});
-      return write({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] } });
+      return write({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], structuredContent: value } });
     }
     throw new Error(`Unsupported MCP method: ${message.method}`);
   } catch (error) { write({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error.message || String(error) } }); }
@@ -252,4 +285,4 @@ if (require.main === module) {
   input.on("line", (line) => { if (line.trim()) void handle(JSON.parse(line)); });
 }
 
-module.exports = { callTool, createDocument, createPdf, createPresentation, createSite, createSpreadsheet, createTemplate, createVisualization, inspectArtifact, safeInput, safeOutput };
+module.exports = { applyTemplate, callTool, createDocument, createPdf, createPresentation, createSite, createSpreadsheet, createTemplate, createVisualization, definitions, inspectArtifact, mergeTemplate, safeInput, safeOutput };

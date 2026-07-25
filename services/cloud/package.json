@@ -1,0 +1,12 @@
+{
+  "name": "@onpeople/sub2api-integration",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Compatibility marker for the direct OnPeople to Sub2API integration.",
+  "scripts": {
+    "check": "node --check ../../src/cloud-account.cjs && node ../../scripts/check-cloud-account.cjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -55,12 +55,32 @@
           </div>
         </nav>
 
+        <button id="cloud-account-open" class="cloud-account-summary" type="button" aria-label="打开 OnPeople 账号">
+          <span class="cloud-account-mark" aria-hidden="true">O</span>
+          <span><strong id="cloud-account-label">OnPeople 账号</strong><small id="cloud-account-balance">未登录</small></span>
+          <i aria-hidden="true">›</i>
+        </button>
+
         <details class="runtime-settings">
           <summary><span>运行设置</span><span aria-hidden="true">⌄</span></summary>
           <div class="settings-fields">
             <label>工作目录<input id="cwd" value="" /></label>
-            <label>模型提供商
+            <div class="model-source-field">
+              <span>模型来源</span>
+              <div id="model-source-switch" class="model-source-switch" role="group" aria-label="模型来源">
+                <button type="button" data-model-source="onpeople" aria-pressed="false">OnPeople</button>
+                <button type="button" data-model-source="router" aria-pressed="false">Router</button>
+                <button type="button" data-model-source="local" aria-pressed="false">本地</button>
+              </div>
+              <div class="model-source-summary">
+                <span id="model-source-indicator" aria-hidden="true"></span>
+                <small id="model-source-copy">按当前任务单独保存</small>
+                <button id="model-source-account" type="button" hidden>登录</button>
+              </div>
+            </div>
+            <label id="provider-wrap"><span id="provider-label">模型提供商</span>
               <select id="provider">
+                <option value="onpeople">OnPeople</option>
                 <option value="openai">OpenAI</option>
                 <option value="deepseek">DeepSeek（文本）</option>
                 <option value="minimax">MiniMax（视觉）</option>
@@ -77,7 +97,7 @@
             <label id="api-key-wrap">API Key<input id="api-key" type="password" autocomplete="off" placeholder="留空则使用已保存密钥" /></label>
             <div id="model-capability" class="model-capability"></div>
             <button id="discover-models" class="settings-secondary" type="button">发现可用模型</button>
-            <button id="save-provider" class="settings-save" type="button">保存模型配置</button>
+            <button id="save-provider" class="settings-save" type="button">应用到当前任务</button>
             <small id="provider-status" class="provider-status">配置保存在本应用中</small>
           </div>
         </details>
@@ -226,12 +246,19 @@
 
           <section class="utility-view browser-view active" data-view="browser">
             <div class="browser-toolbar">
-              <button id="back" aria-label="后退">‹</button>
-              <button id="forward" aria-label="前进">›</button>
-              <button id="reload" aria-label="刷新">↻</button>
-              <form id="address-form" role="search"><input id="address" type="text" inputmode="url" enterkeyhint="go" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="搜索或输入网址" placeholder="搜索或输入网址" /></form>
-              <button id="browser-fill-credential" type="button" aria-label="填充已保存密码" title="填充已保存密码">⚿</button>
-              <button id="browser-account" class="browser-account-button" type="button" aria-label="浏览器账号" title="浏览器账号">◎</button>
+              <div class="browser-navigation" aria-label="页面导航">
+                <button id="back" type="button" aria-label="后退" title="后退">‹</button>
+                <button id="forward" type="button" aria-label="前进" title="前进">›</button>
+                <button id="reload" type="button" aria-label="刷新" title="刷新">↻</button>
+              </div>
+              <form id="address-form" role="search">
+                <span aria-hidden="true">⌕</span>
+                <input id="address" type="text" inputmode="url" enterkeyhint="go" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="搜索或输入网址" placeholder="搜索或输入网址" />
+              </form>
+              <div class="browser-session-actions" aria-label="浏览器会话">
+                <button id="browser-fill-credential" type="button" aria-label="填充已保存密码" title="填充已保存密码">⚿</button>
+                <button id="browser-account" class="browser-account-button" type="button" aria-label="浏览器账号" title="浏览器账号">◎</button>
+              </div>
             </div>
             <div class="browser-meta">
               <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
@@ -304,7 +331,7 @@
                   </div>
                 </form>
               </dialog>
-              <webview id="embedded-browser" partition="persist:internal-agent-browser" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%3Bmargin%3A0%7Dbody%7Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23fafaf9%3Bcolor%3A%23777772%3Bfont%3A13px%20-apple-system%2CBlinkMacSystemFont%2Csans-serif%7D.card%7Bmax-width%3A360px%3Bpadding%3A28px%3Bborder%3A1px%20solid%20%23e5e5e2%3Bborder-radius%3A14px%3Bbackground%3Awhite%3Bbox-shadow%3A0%2012px%2036px%20rgba(35%2C35%2C32%2C.06)%7Dstrong%7Bdisplay%3Ablock%3Bcolor%3A%23242422%3Bfont-size%3A16px%3Bmargin-bottom%3A9px%7Dp%7Bmargin%3A0%3Bline-height%3A1.65%7D%3C%2Fstyle%3E%3Cdiv%20class%3D%22card%22%3E%3Cstrong%3EEmbedded%20browser%20ready%3C%2Fstrong%3E%3Cp%3E%E5%9C%A8%E4%B8%8A%E6%96%B9%E8%BE%93%E5%85%A5%E7%BD%91%E5%9D%80%E3%80%82%E9%A6%96%E6%AC%A1%E6%89%8B%E5%8A%A8%E8%AE%BF%E9%97%AE%E4%BC%9A%E6%89%B9%E5%87%86%E8%AF%A5%E5%9F%9F%E5%90%8D%E4%BE%9B%E5%BD%93%E5%89%8D%20Agent%20%E4%BD%BF%E7%94%A8%E3%80%82%3C%2Fp%3E%3C%2Fdiv%3E"></webview>
+              <webview id="embedded-browser" partition="persist:internal-agent-browser" src="data:text/html;charset=utf-8;base64,PCFkb2N0eXBlIGh0bWw+CjxodG1sIGxhbmc9InpoLUNOIj4KICA8aGVhZD4KICAgIDxtZXRhIGNoYXJzZXQ9InV0Zi04IiAvPgogICAgPG1ldGEgbmFtZT0iY29sb3Itc2NoZW1lIiBjb250ZW50PSJsaWdodCIgLz4KICAgIDxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSIgLz4KICAgIDx0aXRsZT5PblBlb3BsZSDmtY/op4jlmag8L3RpdGxlPgogICAgPHN0eWxlPgogICAgICA6cm9vdCB7CiAgICAgICAgY29sb3I6ICMyNDI1MjI7CiAgICAgICAgYmFja2dyb3VuZDogI2ZmZjsKICAgICAgICBmb250LWZhbWlseTogLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAiU2Vnb2UgVUkiLCBzYW5zLXNlcmlmOwogICAgICB9CiAgICAgICogeyBib3gtc2l6aW5nOiBib3JkZXItYm94OyB9CiAgICAgIGh0bWwsIGJvZHkgeyB3aWR0aDogMTAwJTsgaGVpZ2h0OiAxMDAlOyBtYXJnaW46IDA7IH0KICAgICAgYm9keSB7IGRpc3BsYXk6IGdyaWQ7IHBsYWNlLWl0ZW1zOiBjZW50ZXI7IG92ZXJmbG93OiBoaWRkZW47IH0KICAgICAgbWFpbiB7CiAgICAgICAgd2lkdGg6IG1pbigzNDBweCwgY2FsYygxMDAlIC0gNDhweCkpOwogICAgICAgIG1hcmdpbi10b3A6IC05dmg7CiAgICAgICAgdGV4dC1hbGlnbjogY2VudGVyOwogICAgICB9CiAgICAgIC5tYXJrIHsKICAgICAgICB3aWR0aDogMzhweDsKICAgICAgICBoZWlnaHQ6IDM4cHg7CiAgICAgICAgZGlzcGxheTogZ3JpZDsKICAgICAgICBwbGFjZS1pdGVtczogY2VudGVyOwogICAgICAgIG1hcmdpbjogMCBhdXRvIDE1cHg7CiAgICAgICAgYm9yZGVyOiAxcHggc29saWQgI2U3ZTVlMDsKICAgICAgICBib3JkZXItcmFkaXVzOiAxMXB4OwogICAgICAgIGJhY2tncm91bmQ6ICNmYWY4ZjQ7CiAgICAgICAgY29sb3I6ICM0ZDcyNWY7CiAgICAgICAgZm9udC1zaXplOiAxM3B4OwogICAgICAgIGZvbnQtd2VpZ2h0OiA3MDA7CiAgICAgICAgbGV0dGVyLXNwYWNpbmc6IC0uMDRlbTsKICAgICAgfQogICAgICBoMSB7CiAgICAgICAgbWFyZ2luOiAwOwogICAgICAgIGNvbG9yOiAjMjcyODI0OwogICAgICAgIGZvbnQtc2l6ZTogMTZweDsKICAgICAgICBmb250LXdlaWdodDogNjIwOwogICAgICAgIGxldHRlci1zcGFjaW5nOiAtLjAyNWVtOwogICAgICB9CiAgICAgIHAgewogICAgICAgIG1heC13aWR0aDogMzEwcHg7CiAgICAgICAgbWFyZ2luOiA5cHggYXV0byAwOwogICAgICAgIGNvbG9yOiAjN2Y4MTdiOwogICAgICAgIGZvbnQtc2l6ZTogMTFweDsKICAgICAgICBsaW5lLWhlaWdodDogMS42NTsKICAgICAgfQogICAgICAuc2Vzc2lvbiB7CiAgICAgICAgZGlzcGxheTogaW5saW5lLWZsZXg7CiAgICAgICAgYWxpZ24taXRlbXM6IGNlbnRlcjsKICAgICAgICBnYXA6IDdweDsKICAgICAgICBtYXJnaW4tdG9wOiAxNnB4OwogICAgICAgIHBhZGRpbmc6IDZweCA5cHg7CiAgICAgICAgYm9yZGVyOiAxcHggc29saWQgI2U4ZTllNTsKICAgICAgICBib3JkZXItcmFkaXVzOiA4cHg7CiAgICAgICAgYmFja2dyb3VuZDogI2ZhZmJmOTsKICAgICAgICBjb2xvcjogIzhhOGQ4NjsKICAgICAgICBmb250LXNpemU6IDlweDsKICAgICAgfQogICAgICAuc2Vzc2lvbjo6YmVmb3JlIHsKICAgICAgICB3aWR0aDogNnB4OwogICAgICAgIGhlaWdodDogNnB4OwogICAgICAgIGNvbnRlbnQ6ICIiOwogICAgICAgIGJvcmRlci1yYWRpdXM6IDUwJTsKICAgICAgICBiYWNrZ3JvdW5kOiAjNjY5NDdmOwogICAgICB9CiAgICA8L3N0eWxlPgogIDwvaGVhZD4KICA8Ym9keT4KICAgIDxtYWluPgogICAgICA8ZGl2IGNsYXNzPSJtYXJrIiBhcmlhLWhpZGRlbj0idHJ1ZSI+T1A8L2Rpdj4KICAgICAgPGgxPuWGheW1jOa1j+iniOWZqOW3suWwsee7qjwvaDE+CiAgICAgIDxwPuWcqOWcsOWdgOagj+i+k+WFpee9keWdgOaIluaQnOe0ouWGheWuueOAgueZu+W9leeKtuaAgeS8muS/neWtmOWcqCBPblBlb3BsZSDnmoTni6znq4vmtY/op4jlmajotYTmlpnkuK3jgII8L3A+CiAgICAgIDxzcGFuIGNsYXNzPSJzZXNzaW9uIj7lvZPliY3ku7vliqHlj6/nm7TmjqXkvb/nlKg8L3NwYW4+CiAgICA8L21haW4+CiAgPC9ib2R5Pgo8L2h0bWw+Cg=="></webview>
             </div>
           </section>
 
@@ -574,6 +601,67 @@
           <button id="text-input-submit" type="submit">保存</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog id="cloud-account-dialog" class="cloud-account-dialog" aria-labelledby="cloud-account-title">
+      <section class="cloud-account-panel">
+        <header>
+          <div class="cloud-account-identity">
+            <img src="../assets/onpeople-app-icon-256.png" alt="" />
+            <div>
+              <span>ONPEOPLE ACCOUNT</span>
+              <strong id="cloud-account-title">登录 OnPeople</strong>
+              <p id="cloud-account-description">登录后即可使用内置模型，自己的 Router 仍可随时切换。</p>
+            </div>
+          </div>
+          <button id="cloud-account-close" type="button" aria-label="关闭">×</button>
+        </header>
+
+        <div class="cloud-routing-rail" aria-label="模型来源状态">
+          <div class="connected"><i></i><span><strong>OnPeople</strong><small>内置模型与额度</small></span></div>
+          <b aria-hidden="true"></b>
+          <div><i></i><span><strong>自带 Router</strong><small>始终独立可用</small></span></div>
+        </div>
+
+        <div id="cloud-signed-out" class="cloud-auth-view">
+          <div class="cloud-auth-tabs" role="tablist" aria-label="账号操作">
+            <button class="active" type="button" role="tab" data-cloud-auth-mode="login" aria-selected="true">登录</button>
+            <button type="button" role="tab" data-cloud-auth-mode="register" aria-selected="false">注册</button>
+          </div>
+          <p id="cloud-auth-intro" class="cloud-auth-intro">使用你的 OnPeople 账号继续。</p>
+          <label>邮箱<input id="cloud-email" type="email" autocomplete="email" placeholder="name@example.com" /></label>
+          <label>密码<input id="cloud-password" type="password" autocomplete="current-password" minlength="6" placeholder="输入密码" /></label>
+          <button id="cloud-login" class="cloud-primary" type="button">登录 OnPeople</button>
+          <div id="cloud-register-fields" class="cloud-register-fields" hidden>
+            <div class="cloud-code-row">
+              <label>邮箱验证码<input id="cloud-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="验证码" /></label>
+              <button id="cloud-register-code" class="cloud-secondary" type="button">发送验证码</button>
+            </div>
+            <button id="cloud-register-submit" class="cloud-primary" type="button">注册 OnPeople</button>
+          </div>
+          <details class="cloud-advanced">
+            <summary>连接设置</summary>
+            <label>模型服务地址<input id="cloud-service-url" type="url" spellcheck="false" value="https://sub2api.aibro.vip" /></label>
+          </details>
+        </div>
+
+        <div id="cloud-signed-in" class="cloud-auth-view" hidden>
+          <div class="cloud-wallet">
+            <div><span id="cloud-account-email">—</span><strong id="cloud-wallet-balance">$0.00</strong><small>可用余额</small></div>
+            <button id="cloud-account-refresh" type="button" aria-label="刷新余额" title="刷新余额">↻</button>
+          </div>
+          <div class="cloud-source-line"><i></i><span id="cloud-route-label">OnPeople 模型</span><b>按任务选择</b></div>
+          <div class="cloud-package-heading"><strong>兑换额度</strong><span>充值到当前账户</span></div>
+          <div class="cloud-redeem-row">
+            <input id="cloud-redeem-code" autocomplete="off" placeholder="输入兑换码" />
+            <button id="cloud-redeem-submit" class="cloud-primary" type="button">兑换</button>
+          </div>
+          <button id="cloud-open-console" class="cloud-secondary" type="button">账户管理</button>
+          <button id="cloud-account-logout" class="cloud-secondary" type="button">退出登录</button>
+        </div>
+
+        <p id="cloud-account-status" class="cloud-account-status"><i></i><span>登录是可选的；自定义 Router 和本地模型保持独立可用。</span></p>
+      </section>
     </dialog>
 
     <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>

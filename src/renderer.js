@@ -28,12 +28,20 @@ const pinnedTaskList = $("#pinned-task-list");
 const pinnedSection = $("#pinned-section");
 const taskSearch = $("#task-search");
 const providerSelect = $("#provider");
+const providerWrap = $("#provider-wrap");
+const providerLabel = $("#provider-label");
+const modelSourceSwitch = $("#model-source-switch");
+const modelSourceCopy = $("#model-source-copy");
+const modelSourceIndicator = $("#model-source-indicator");
+const modelSourceAccount = $("#model-source-account");
 const modelInput = $("#model");
 const modelOptions = $("#model-options");
 const baseUrlInput = $("#base-url");
 const apiKeyInput = $("#api-key");
 const providerStatus = $("#provider-status");
 const modelCapability = $("#model-capability");
+const cloudAccountDialog = $("#cloud-account-dialog");
+const cloudAccountStatus = $("#cloud-account-status");
 const attachImageButton = $("#attach-image");
 const imageAttachments = $("#image-attachments");
 const capabilityMenu = $("#capability-menu");
@@ -73,6 +81,7 @@ const initialTimeline = timeline.innerHTML;
 const traceFormatter = window.OnPeopleTrace;
 
 const PROVIDER_PRESETS = {
+  onpeople: { model: "", baseUrl: "https://sub2api.aibro.vip/v1", vision: true, protocol: "Sub2API Responses API", models: [] },
   openai: { model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1", vision: true, protocol: "Responses API" },
   deepseek: { model: "deepseek-v4-pro", baseUrl: "https://api.deepseek.com", vision: false, protocol: "内嵌 Chat 适配" },
   minimax: { model: "MiniMax-M2.7", baseUrl: "https://api.minimaxi.com/v1", vision: true, protocol: "内嵌 Chat 适配" },
@@ -93,6 +102,13 @@ const PROVIDER_PRESETS = {
   ollama: { model: "", baseUrl: "", vision: false, protocol: "本地运行时" },
   lmstudio: { model: "", baseUrl: "", vision: false, protocol: "本地运行时" },
 };
+
+const MODEL_SOURCE_PROVIDERS = {
+  onpeople: ["onpeople"],
+  router: ["openai", "deepseek", "minimax", "kimi", "grok", "sub2api", "compatible"],
+  local: ["ollama", "lmstudio"],
+};
+const lastProviderBySource = { router: "openai", local: "ollama" };
 
 const TOOL_COPY = {
   browser: ["浏览器", "隔离会话与 Agent 导航"],
@@ -118,6 +134,9 @@ const CAPABILITY_COPY = {
 };
 
 let currentThreadId = null;
+let cloudAccountState = { signedIn: false, serviceUrl: "https://sub2api.aibro.vip", account: null, models: [] };
+let providerDraftSequence = 0;
+let pendingCloudSourceSelection = false;
 let selectedProjectPath = null;
 let loadedThreads = [];
 let loadedProjects = [];
@@ -128,6 +147,8 @@ let selectedMode = "default";
 let selectedImages = [];
 let selectedAttachments = [];
 let selectedCapability = null;
+let providerImageGeneration = { available: false, reason: "当前 Provider 未声明兼容的 Images API" };
+let computerCapability = { available: false, reason: "Computer Use 尚未就绪" };
 const imagePreviewUrls = new Map();
 let selectedModelVision = null;
 let activeAgentMessage = null;
@@ -260,6 +281,7 @@ function setThreadHeader(thread = null) {
     updateProject(thread.cwd);
     void refreshProjectActions();
   }
+  renderModelSource(modelSourceForProvider(providerSelect.value));
 }
 
 function updateToolButtonStates(utilityVisible = !contentArea.classList.contains("utility-collapsed")) {
@@ -1404,22 +1426,64 @@ function activateThread(result) {
   else if (result.restoring) setThreadRuntimeState(thread.id, "restoring");
   renderThreadHistory(thread);
   renderGoal(result.goal);
+  if (result.provider) renderProvider(result.provider);
   loadThreads();
   promptInput.focus();
+}
+
+function modelSourceForProvider(type) {
+  return Object.entries(MODEL_SOURCE_PROVIDERS).find(([, providers]) => providers.includes(type))?.[0] || "router";
+}
+
+function renderModelSource(source = modelSourceForProvider(providerSelect.value)) {
+  for (const button of modelSourceSwitch.querySelectorAll("[data-model-source]")) {
+    const active = button.dataset.modelSource === source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  for (const option of providerSelect.options) {
+    const visible = MODEL_SOURCE_PROVIDERS[source]?.includes(option.value);
+    option.hidden = !visible;
+    option.disabled = !visible;
+  }
+  providerWrap.hidden = source === "onpeople";
+  providerLabel.textContent = source === "local" ? "本地运行时" : "Router 服务";
+  modelSourceIndicator.className = source;
+  modelSourceAccount.hidden = source !== "onpeople";
+  modelSourceAccount.textContent = cloudAccountState.signedIn ? "管理" : "登录";
+  if (source === "onpeople") {
+    modelSourceCopy.textContent = cloudAccountState.signedIn
+      ? `$${Number(cloudAccountState.account?.balanceUSD || 0).toFixed(2)} · OnPeople · 仅当前任务使用`
+      : "登录 OnPeople 使用内置额度，不影响 Router";
+  } else if (source === "local") {
+    modelSourceCopy.textContent = "使用本机模型，不消耗 OnPeople 额度";
+  } else {
+    modelSourceCopy.textContent = "使用自己的 API Key，不消耗 OnPeople 额度";
+  }
+  $("#save-provider").textContent = currentThreadId ? "应用到当前任务" : "设为新任务默认";
 }
 
 function updateProviderFields() {
   const preset = PROVIDER_PRESETS[providerSelect.value];
   const remote = !new Set(["ollama", "lmstudio"]).has(providerSelect.value);
-  $("#base-url-wrap").hidden = !remote;
-  $("#api-key-wrap").hidden = !remote;
+  const cloud = providerSelect.value === "onpeople";
+  $("#base-url-wrap").hidden = !remote || cloud;
+  $("#api-key-wrap").hidden = !remote || cloud;
+  $("#discover-models").hidden = cloud;
   const vision = selectedModelVision ?? preset.vision;
   const imageGenerationButton = capabilityMenu.querySelector('[data-capability="imagegen"]');
   if (imageGenerationButton) {
-    imageGenerationButton.disabled = !remote;
-    imageGenerationButton.title = remote ? "" : "本地模型提供商尚未配置图片生成接口";
+    imageGenerationButton.disabled = !providerImageGeneration.available;
+    imageGenerationButton.title = providerImageGeneration.available
+      ? "使用当前 Router 的 /images/generations 接口"
+      : (providerImageGeneration.reason || (cloud ? "当前 OnPeople 账户未提供图片生成模型" : (!remote ? "本地模型提供商尚未配置图片生成接口" : "当前 Router 未声明图片生成能力")));
   }
-  if (!remote && selectedCapability === "imagegen") {
+  const computerButton = capabilityMenu.querySelector('[data-capability="computer"]');
+  if (computerButton) {
+    computerButton.disabled = !computerCapability.available;
+    computerButton.title = computerCapability.available ? "" : (computerCapability.reason || "Computer Use 尚未就绪");
+  }
+  if (!providerImageGeneration.available && selectedCapability === "imagegen") {
     selectedCapability = null;
     renderSelectedCapability();
   }
@@ -1458,14 +1522,172 @@ async function validateSelectedModel() {
 
 function renderProvider(settings = {}) {
   providerSelect.value = settings.type || "openai";
-  renderPresetModelOptions(PROVIDER_PRESETS[providerSelect.value]);
+  const source = modelSourceForProvider(providerSelect.value);
+  if (source !== "onpeople") lastProviderBySource[source] = providerSelect.value;
+  renderModelSource(source);
+  const preset = PROVIDER_PRESETS[providerSelect.value] || PROVIDER_PRESETS.openai;
+  renderPresetModelOptions(preset);
   modelInput.value = settings.model || "";
   baseUrlInput.value = settings.baseUrl || "https://api.openai.com/v1";
   apiKeyInput.value = "";
+  providerImageGeneration = {
+    available: Boolean(settings.imageGeneration),
+    reason: settings.imageGenerationReason || (settings.hasApiKey ? "当前 Provider 未声明兼容的 Images API" : "请先保存 Router API Key"),
+  };
   apiKeyInput.placeholder = settings.hasApiKey ? "已加密保存；留空保持不变" : "可选，取决于服务端";
-  providerStatus.textContent = settings.hasApiKey ? "API Key 已按提供商加密保存" : "未保存 API Key";
+  providerStatus.textContent = settings.type === "onpeople"
+    ? (settings.accountSignedIn ? "正在使用 OnPeople 模型与额度；第三方 Router 仍可随时切换" : "需要先登录 OnPeople")
+    : (settings.hasApiKey ? "API Key 已按提供商加密保存" : "未保存 API Key");
   selectedModelVision = settings.vision ?? null;
   void validateSelectedModel();
+}
+
+async function selectProviderType(type) {
+  const requestedType = Object.hasOwn(PROVIDER_PRESETS, type) ? type : "openai";
+  const sequence = ++providerDraftSequence;
+  providerSelect.value = requestedType;
+  const preset = PROVIDER_PRESETS[requestedType];
+  renderModelSource(modelSourceForProvider(requestedType));
+  renderPresetModelOptions(preset);
+  modelInput.value = preset.model;
+  baseUrlInput.value = preset.baseUrl;
+  apiKeyInput.value = "";
+  providerImageGeneration = { available: false, reason: "正在读取当前 Provider 的图片生成能力" };
+  providerStatus.textContent = "正在读取此任务的模型配置…";
+  selectedModelVision = null;
+  updateProviderFields();
+  try {
+    const settings = await window.workbench.getProviderSettings(requestedType, currentThreadId);
+    if (sequence !== providerDraftSequence || providerSelect.value !== requestedType) return;
+    renderProvider(settings);
+  } catch (error) {
+    if (sequence !== providerDraftSequence || providerSelect.value !== requestedType) return;
+    providerStatus.textContent = cloudErrorMessage(error);
+    void validateSelectedModel();
+  }
+}
+
+async function selectModelSource(source) {
+  if (!Object.hasOwn(MODEL_SOURCE_PROVIDERS, source)) return;
+  if (source === "onpeople" && !cloudAccountState.signedIn) {
+    pendingCloudSourceSelection = true;
+    setCloudStatus("登录后会继续选择 OnPeople 模型；原 Router 配置不会改变。");
+    if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
+    return;
+  }
+  pendingCloudSourceSelection = false;
+  const currentType = providerSelect.value;
+  const type = MODEL_SOURCE_PROVIDERS[source].includes(currentType)
+    ? currentType
+    : (source === "onpeople" ? "onpeople" : lastProviderBySource[source]);
+  await selectProviderType(type);
+}
+
+function setCloudStatus(message, error = false) {
+  const indicator = document.createElement("i");
+  const copy = document.createElement("span");
+  copy.textContent = message;
+  cloudAccountStatus.replaceChildren(indicator, copy);
+  cloudAccountStatus.classList.toggle("error", error);
+}
+
+let cloudAuthMode = "login";
+function setCloudAuthMode(mode = "login", { focus = false } = {}) {
+  cloudAuthMode = mode === "register" ? "register" : "login";
+  const registering = cloudAuthMode === "register";
+  for (const button of $$("[data-cloud-auth-mode]")) {
+    const active = button.dataset.cloudAuthMode === cloudAuthMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  $("#cloud-login").hidden = registering;
+  $("#cloud-register-fields").hidden = !registering;
+  $("#cloud-password").autocomplete = registering ? "new-password" : "current-password";
+  $("#cloud-password").placeholder = registering ? "设置登录密码" : "输入密码";
+  $("#cloud-auth-intro").textContent = registering
+    ? "填写邮箱和密码，再验证邮箱即可完成注册。"
+    : "使用你的 OnPeople 账号继续。";
+  $("#cloud-account-title").textContent = registering ? "注册 OnPeople" : "登录 OnPeople";
+  $("#cloud-account-description").textContent = registering
+    ? "创建账号后即可使用内置模型，自己的 Router 仍保持独立。"
+    : "登录后即可使用内置模型，自己的 Router 仍可随时切换。";
+  if (focus) $("#cloud-email").focus();
+}
+
+function cloudErrorMessage(error) {
+  return String(error?.message || error || "Sub2API 请求失败")
+    .replace(/^Error invoking remote method '[^']+': Error:\s*/, "")
+    .replace(/Sub2API/g, "OnPeople 服务");
+}
+
+function formatSub2APIBalance(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(Number(value || 0));
+}
+
+function renderCloudAccount(state = cloudAccountState) {
+  cloudAccountState = { ...cloudAccountState, ...state };
+  const signedIn = Boolean(cloudAccountState.signedIn && cloudAccountState.account);
+  $("#cloud-signed-out").hidden = signedIn;
+  $("#cloud-signed-in").hidden = !signedIn;
+  if (!signedIn) {
+    $("#cloud-code").value = "";
+    $("#cloud-password").value = "";
+    setCloudAuthMode(cloudAuthMode);
+  } else {
+    $("#cloud-account-title").textContent = "OnPeople 账号";
+    $("#cloud-account-description").textContent = "管理内置模型、余额与账户连接。";
+  }
+  $("#cloud-service-url").value = cloudAccountState.serviceUrl || "https://sub2api.aibro.vip";
+  $("#cloud-account-label").textContent = signedIn ? cloudAccountState.account.email : "OnPeople 账号";
+  $("#cloud-account-balance").textContent = signedIn
+    ? `${formatSub2APIBalance(cloudAccountState.account.balanceUSD)} · OnPeople`
+    : "未登录 · Router 可用";
+  if (signedIn) {
+    $("#cloud-account-email").textContent = cloudAccountState.account.email;
+    $("#cloud-wallet-balance").textContent = formatSub2APIBalance(cloudAccountState.account.balanceUSD);
+    const group = cloudAccountState.account.group;
+    $("#cloud-route-label").textContent = group?.name
+      ? group.name
+      : "OnPeople 模型";
+  }
+  const models = (cloudAccountState.models || []).map((model) => ({ id: model.id, name: model.name || model.id }));
+  PROVIDER_PRESETS.onpeople.baseUrl = cloudAccountState.apiBaseUrl || `${cloudAccountState.serviceUrl}/v1`;
+  PROVIDER_PRESETS.onpeople.models = models;
+  if (models.length && !models.some((model) => model.id === PROVIDER_PRESETS.onpeople.model)) {
+    PROVIDER_PRESETS.onpeople.model = models[0].id;
+  }
+  if (providerSelect.value === "onpeople") {
+    baseUrlInput.value = PROVIDER_PRESETS.onpeople.baseUrl;
+    renderPresetModelOptions(PROVIDER_PRESETS.onpeople);
+    if (!modelInput.value || !models.some((model) => model.id === modelInput.value)) modelInput.value = PROVIDER_PRESETS.onpeople.model;
+    providerStatus.textContent = signedIn
+      ? "正在使用 OnPeople 模型与额度；第三方 Router 仍可随时切换"
+      : "需要先登录 OnPeople";
+    updateProviderFields();
+  }
+  renderModelSource(modelSourceForProvider(providerSelect.value));
+}
+
+async function refreshCloudAccount({ quiet = false } = {}) {
+  if (!quiet) setCloudStatus("正在同步账号…");
+  try {
+    const state = await window.workbench.getCloudAccount();
+    renderCloudAccount(state);
+    if (state.signedIn) {
+      if (!quiet) setCloudStatus(`已同步余额与 ${state.models?.length || 0} 个模型。`);
+    } else if (!quiet) {
+      setCloudStatus("登录是可选的；自定义 Router 和本地模型保持独立可用。");
+    }
+    return state;
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+    throw error;
+  }
 }
 
 function renderImages() {
@@ -2776,15 +2998,166 @@ async function refreshControl() {
   else if (activeControlView === "secrets") await refreshSecrets();
 }
 
+modelSourceSwitch.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-model-source]");
+  if (button) void selectModelSource(button.dataset.modelSource);
+});
+modelSourceAccount.addEventListener("click", () => {
+  if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
+  void refreshCloudAccount().catch(() => {});
+});
 providerSelect.addEventListener("change", () => {
-  const preset = PROVIDER_PRESETS[providerSelect.value];
-  modelInput.value = preset.model;
-  baseUrlInput.value = preset.baseUrl;
-  selectedModelVision = null;
-  renderPresetModelOptions(preset);
-  void validateSelectedModel();
+  const source = modelSourceForProvider(providerSelect.value);
+  if (source !== "onpeople") lastProviderBySource[source] = providerSelect.value;
+  void selectProviderType(providerSelect.value);
 });
 modelInput.addEventListener("change", validateSelectedModel);
+
+$("#cloud-account-open").addEventListener("click", () => {
+  if (!cloudAccountState.signedIn) setCloudAuthMode("login");
+  if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
+  void refreshCloudAccount().catch(() => {});
+});
+$("#cloud-account-close").addEventListener("click", () => {
+  pendingCloudSourceSelection = false;
+  cloudAccountDialog.close();
+});
+cloudAccountDialog.addEventListener("click", (event) => {
+  if (event.target === cloudAccountDialog) {
+    pendingCloudSourceSelection = false;
+    cloudAccountDialog.close();
+  }
+});
+for (const button of $$("[data-cloud-auth-mode]")) {
+  button.addEventListener("click", () => {
+    setCloudAuthMode(button.dataset.cloudAuthMode, { focus: true });
+    setCloudStatus(button.dataset.cloudAuthMode === "register"
+      ? "填写邮箱、密码并验证邮箱即可注册。"
+      : "输入 OnPeople 账号和密码登录。");
+  });
+}
+async function finishCloudSignIn(state) {
+  renderCloudAccount(state);
+  if (pendingCloudSourceSelection) {
+    cloudAccountDialog.close();
+    await selectModelSource("onpeople");
+    if (state.models?.length && !state.models.some((model) => model.id === modelInput.value)) {
+      modelInput.value = state.models[0].id;
+    }
+    providerStatus.textContent = "已登录 OnPeople；点击“应用到当前任务”后启用";
+  }
+  setCloudStatus(`登录成功，已发现 ${state.models?.length || 0} 个模型。`);
+}
+
+$("#cloud-login").addEventListener("click", async () => {
+  const button = $("#cloud-login");
+  const email = $("#cloud-email").value.trim();
+  const password = $("#cloud-password").value;
+  button.disabled = true;
+  setCloudStatus("正在登录 OnPeople…");
+  try {
+    const state = await window.workbench.loginCloudAccount({
+      email,
+      password,
+      serviceUrl: $("#cloud-service-url").value.trim(),
+    });
+    await finishCloudSignIn(state);
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#cloud-password").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.isComposing) {
+    event.preventDefault();
+    $("#cloud-login").click();
+  }
+});
+
+$("#cloud-register-code").addEventListener("click", async () => {
+  const button = $("#cloud-register-code");
+  button.disabled = true;
+  setCloudStatus("正在发送注册验证码…");
+  try {
+    const result = await window.workbench.sendCloudRegistrationCode({
+      email: $("#cloud-email").value.trim(),
+      serviceUrl: $("#cloud-service-url").value.trim(),
+    });
+    $("#cloud-code").focus();
+    setCloudStatus(result?.countdown ? `验证码已发送，${result.countdown} 秒后可重发。` : "验证码已发送，请检查邮箱。");
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#cloud-register-submit").addEventListener("click", async () => {
+  const button = $("#cloud-register-submit");
+  button.disabled = true;
+  setCloudStatus("正在注册 OnPeople…");
+  try {
+    const state = await window.workbench.registerCloudAccount({
+      email: $("#cloud-email").value.trim(),
+      password: $("#cloud-password").value,
+      verifyCode: $("#cloud-code").value.trim(),
+    });
+    await finishCloudSignIn(state);
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#cloud-code").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.isComposing) {
+    event.preventDefault();
+    $("#cloud-register-submit").click();
+  }
+});
+
+$("#cloud-account-refresh").addEventListener("click", () => void refreshCloudAccount().catch(() => {}));
+$("#cloud-redeem-submit").addEventListener("click", async () => {
+  const button = $("#cloud-redeem-submit");
+  const code = $("#cloud-redeem-code").value.trim();
+  button.disabled = true;
+  setCloudStatus("正在兑换额度…");
+  try {
+    const result = await window.workbench.redeemCloudCode(code);
+    renderCloudAccount(result.state);
+    $("#cloud-redeem-code").value = "";
+    setCloudStatus(result.redemption?.message || "兑换成功，余额已刷新。");
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#cloud-open-console").addEventListener("click", async () => {
+  try {
+    await window.workbench.openCloudConsole();
+    setCloudStatus("已在浏览器打开账户管理。");
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  }
+});
+$("#cloud-account-logout").addEventListener("click", async () => {
+  const button = $("#cloud-account-logout");
+  button.disabled = true;
+  try {
+    renderCloudAccount(await window.workbench.logoutCloudAccount());
+    pendingCloudSourceSelection = false;
+    setCloudStatus("已退出登录，第三方 Router 配置未改变。");
+    if (providerSelect.value === "onpeople") {
+      providerStatus.textContent = "OnPeople 已退出；请切换 Router 或重新登录";
+    }
+  } catch (error) {
+    setCloudStatus(cloudErrorMessage(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 $("#discover-models").addEventListener("click", async () => {
   const button = $("#discover-models");
@@ -2809,11 +3182,11 @@ $("#save-provider").addEventListener("click", async () => {
   button.disabled = true;
   providerStatus.textContent = "正在保存…";
   try {
-    const result = await window.workbench.saveProvider({ type: providerSelect.value, model: modelInput.value.trim(), baseUrl: baseUrlInput.value.trim(), apiKey: apiKeyInput.value });
+    const result = await window.workbench.saveProvider({ threadId: currentThreadId, type: providerSelect.value, model: modelInput.value.trim(), baseUrl: baseUrlInput.value.trim(), apiKey: apiKeyInput.value });
     renderProvider(result.settings);
-    providerStatus.textContent = result.reconnected
-      ? `已切换至 ${result.settings.model}；当前任务已重新连接`
-      : (result.changed ? `已切换至 ${result.settings.model}` : "模型配置已保存");
+    providerStatus.textContent = result.pending
+      ? `当前轮结束后切换至 ${result.settings.model}`
+      : (result.changed ? `当前任务已切换至 ${result.settings.model}` : "当前任务模型配置已保存");
   } catch (error) { providerStatus.textContent = error.message; }
   finally { button.disabled = false; }
 });
@@ -2942,6 +3315,7 @@ async function startFreshTask() {
     setThreadHeader(null);
     resetTimeline();
     renderGoal(null);
+    renderProvider(await window.workbench.getProviderSettings(null, null));
     selectedImages = [];
     selectedAttachments = [];
     selectedCapability = null;
@@ -3808,9 +4182,12 @@ $("#hook-create").addEventListener("submit", async (event) => {
 });
 
 window.workbench.onBrowserState((state) => {
-  if (!address.matches(":focus")) address.value = state.url?.startsWith("data:") ? "" : (state.url || "");
+  const browserHome = !state.url || state.url.startsWith("data:") || state.url.endsWith("/browser-home.html");
+  if (!address.matches(":focus")) address.value = browserHome ? "" : (state.url || "");
   permission.className = `site-permission ${state.approved ? "approved" : ""}`;
-  permission.querySelector("span").textContent = state.approved ? `${state.host} 已批准` : "域名未批准";
+  permission.querySelector("span").textContent = browserHome
+    ? "等待访问"
+    : (state.approved ? `${state.host} 已批准` : "域名未批准");
   $("#back").disabled = !state.canGoBack;
   $("#forward").disabled = !state.canGoForward;
   void refreshBrowserAnnotations().catch(() => {});
@@ -4031,9 +4408,16 @@ window.workbench.onPetState((state) => {
   $("#pet-toggle").classList.toggle("active", Boolean(state?.visible));
   $("#pet-toggle").title = state?.visible ? "收起 OnPeople 宠物" : "显示 OnPeople 宠物";
 });
+window.workbench.onCloudAccountUpdated((state) => {
+  renderCloudAccount(state);
+});
 
 window.workbench.onDeepLink((target) => {
   if (target?.type === "control" && target.view) void selectControlPanel(target.view);
+  if (target?.type === "account") {
+    if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
+    void refreshCloudAccount().catch(() => {});
+  }
 });
 window.workbench.onCommandPalette(openCommandPalette);
 document.addEventListener("click", closeProjectMenus);
@@ -4050,6 +4434,8 @@ window.workbench.agentStatus().then((status) => {
   if (currentThreadId) threadLabel.textContent = currentThreadId.slice(0, 13).toUpperCase();
   renderGoal(status.goal);
   renderProvider(status.provider);
+  computerCapability = status.capabilities?.computer || { available: Boolean(status.computerUse?.running), reason: status.computerUse?.message };
+  updateProviderFields();
   if (status.policy) {
     renderPolicy({ policy: status.policy, audit: [] });
   }
@@ -4065,6 +4451,7 @@ window.workbench.agentStatus().then((status) => {
 window.workbench.getPetState().then((state) => {
   $("#pet-toggle").classList.toggle("active", Boolean(state?.visible));
 }).catch(() => {});
+void refreshCloudAccount({ quiet: true }).catch(() => {});
 
 cwdInput.addEventListener("change", (event) => { updateProject(event.target.value); void refreshProjectActions(); currentFilePath = ""; if (activeToolView === "changes") refreshGit(); if (activeToolView === "files") refreshProjectFiles(); });
 selectMode("default");

@@ -34,7 +34,7 @@ const packagerArgs = [
   "--icon=assets/OnPeople.icns",
   "--protocol=onpeople",
   "--protocol-name=OnPeople",
-  "--ignore=^/(dist[^/]*|release[^/]*|\\.git|work)(/|$)",
+  "--ignore=^/(dist[^/]*|release[^/]*|services|\\.git|work)(/|$)",
 ];
 const electronZipDirectory = findElectronZipDirectory();
 if (electronZipDirectory) packagerArgs.push(`--electron-zip-dir=${electronZipDirectory}`);
@@ -44,7 +44,7 @@ const appPath = path.join(temporaryRoot, "OnPeople-darwin-arm64", "OnPeople.app"
 execFileSync(process.execPath, [path.join(__dirname, "sign-mac.cjs"), appPath], { cwd: root, stdio: "inherit" });
 execFileSync(process.execPath, [path.join(__dirname, "check-packaged-app.cjs"), appPath], { cwd: root, stdio: "inherit" });
 
-const archive = path.join(releaseRoot, `OnPeople-${version}-arm64.zip`);
+const archive = path.join(releaseRoot, `OnPeople-${version}-macos-arm64.zip`);
 fs.rmSync(archive, { force: true });
 execFileSync("/usr/bin/ditto", ["-c", "-k", "--keepParent", appPath, archive], { stdio: "inherit" });
 console.log(`Packaged release: ${archive}`);

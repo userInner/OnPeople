@@ -1,12 +1,13 @@
 # OnPeople
 
-Partially open-source cross-platform agent workbench for OpenAI, DeepSeek, MiniMax, Kimi, Grok, custom Responses-compatible services, and local models. It combines an embedded open-source Codex execution runtime, a persistent Chromium browser, Plan/Goal workflows, and native Computer Use. The macOS arm64 release is production-packaged for internal testing; the Windows x64 port has a platform-isolated runtime and packaging foundation and still requires validation on a Windows build machine.
+Partially open-source cross-platform agent workbench for Sub2API, OpenAI, DeepSeek, MiniMax, Kimi, Grok, custom Responses-compatible services, and local models. It combines an embedded open-source Codex execution runtime, a persistent Chromium browser, Plan/Goal workflows, and native Computer Use. The macOS arm64 release is production-packaged for internal testing; the Windows x64 port has a platform-isolated runtime and packaging foundation and still requires validation on a Windows build machine.
 
 ## What works
 
 - Release builds carry platform-specific Codex App Server and Cua Driver runtimes; testers do not install Node.js, Codex CLI, ChatGPT, or Cua Driver separately.
 - Development builds can still use `CODEX_BIN`, `CUA_DRIVER_PATH`, or locally installed fallbacks.
-- Does not use ChatGPT or Codex account login. Model access is configured directly in the app.
+- Does not require ChatGPT, Codex, or OnPeople account login. Model access can be configured directly in the app.
+- Adds optional Sub2API account integration. Sub2API remains the single source of truth for balances, API keys, model routing, usage, and redemption; users can select it per task without changing or disabling third-party Router, direct API-key, Ollama, or LM Studio configurations.
 - Includes presets for OpenAI, DeepSeek, MiniMax, Kimi, and Grok/xAI, plus custom Responses API, Ollama, and LM Studio options.
 - Connects OpenAI and Grok directly through Responses API. An original localhost-only adapter translates Codex Responses requests to Chat Completions for DeepSeek, MiniMax, and Kimi, including function-tool round trips.
 - Enables image attachments for MiniMax, Kimi, OpenAI, and Grok presets and blocks them for DeepSeek. The selected model must itself support image understanding; image-generation-only models are not interchangeable with vision chat models.
@@ -117,7 +118,7 @@ npm run package:mac
 The resulting macOS archive is at:
 
 ```text
-release/OnPeople-<version>-arm64.zip
+release/OnPeople-<version>-macos-arm64.zip
 ```
 
 Build the single-file Windows x64 installer on Windows after installing dependencies:
@@ -161,6 +162,7 @@ Testers do not need Node.js, npm, Codex CLI, ChatGPT, or Cua Driver. They still 
 
 | Provider | Default API/model | Protocol used by OnPeople | Image input |
 | --- | --- | --- | --- |
+| OnPeople · Sub2API | User deployment / discovered model | Sub2API API Key; Responses or compatible gateway route | Model and group dependent |
 | OpenAI | `https://api.openai.com/v1` / `gpt-5.6-terra` | Responses API | Yes |
 | DeepSeek | `https://api.deepseek.com` / `deepseek-v4-pro` | Embedded Chat Completions adapter | No |
 | MiniMax | `https://api.minimaxi.com/v1` / `MiniMax-M2.7` | Embedded Chat Completions adapter | Enabled; choose a vision-capable model for understanding attachments |
@@ -171,6 +173,16 @@ Testers do not need Node.js, npm, Codex CLI, ChatGPT, or Cua Driver. They still 
 Base URLs and model IDs remain editable because enterprise gateways, regional endpoints, and model availability can differ.
 The Sub2API preset includes `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` as initial selectable models.
 Provider and model settings can be changed while a task is open. OnPeople restarts the embedded agent runtime with the new credentials and resumes the same task and history. Switching is blocked only while a response is actively running.
+
+### Optional Sub2API account
+
+The sidebar account button connects directly to a separately deployed Sub2API service. OnPeople encrypts the Sub2API access token, refresh token, and dedicated `OnPeople Desktop` API Key with Electron `safeStorage`; these credentials are not exposed to renderer JavaScript, task traces, or the model.
+
+After login, OnPeople creates or reuses its dedicated API Key, prefers an available Composite group, discovers models through `/v1/models`, and sends model traffic directly to Sub2API. Balance, concurrency, rate limits, redemption, usage, and upstream billing therefore have one source of truth. There is no OnPeople wallet, Stripe checkout, package table, or second usage deduction.
+
+Registration uses Sub2API's own email verification API. Existing users sign in with their Sub2API email and password. The account panel can redeem a Sub2API code or open the full Sub2API console; every task can still independently switch to a third-party Router or local model.
+
+The desktop app defaults to `https://sub2api.aibro.vip`; users can change this in the login panel. Set `SUB2API_URL` to override the packaged/runtime default. See [`services/cloud/README.md`](services/cloud/README.md) for the required routes and deployment notes.
 
 ### Image generation
 
@@ -251,4 +263,5 @@ For local models, start Ollama or LM Studio, then select the provider and enter 
 - Changing model provider after a thread starts requires creating a new task. Saving a new API Key safely restarts only the embedded execution service.
 - Chat Completions compatibility covers text/image messages and function tools. Provider-specific hosted tools or proprietary response fields are not translated.
 - Task history is stored in the isolated application `CODEX_HOME`; it is independent from any user Codex or ChatGPT account history.
+- Sub2API deployment availability, database backups, email delivery, model accounts, groups, pricing, redemption codes, and operator policy remain the deployment administrator's responsibility.
 - Scheduled Tasks run while OnPeople is open. Missed executions are picked up on the next scheduler tick after launch; this build does not install a privileged background daemon or wake a sleeping Mac. Dedicated scheduled Worktrees are retained after task deletion so their changes are never destroyed implicitly.

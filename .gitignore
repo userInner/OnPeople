@@ -7,3 +7,5 @@ dist-preview/
 .embedded-runtime/
 release/
 release-*/
+services/cloud/.env
+services/cloud/data/

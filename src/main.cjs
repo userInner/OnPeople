@@ -34,6 +34,8 @@ const { LocalMemoryStore } = require("./local-memory.cjs");
 const { UsageLedger } = require("./usage-ledger.cjs");
 const { SecretStore } = require("./secret-store.cjs");
 const { PetStateStore } = require("./pet-state.cjs");
+const { CloudAccountClient } = require("./cloud-account.cjs");
+const { imageGenerationCapability } = require("./provider-capabilities.cjs");
 const {
   computerUseMcpArgs,
   editorCandidates,
@@ -100,7 +102,9 @@ const COMPUTER_USE_READ_TOOLS = [
 const DEFAULT_CWD = process.env.INTERNAL_AGENT_WORKSPACE || path.join(os.homedir(), "Documents", "OnPeople");
 const START_URL = process.argv.find((value) => value.startsWith("--start-url="))?.slice("--start-url=".length) || null;
 const SMOKE_PROMPT = process.argv.find((value) => value.startsWith("--smoke-prompt="))?.slice("--smoke-prompt=".length) || null;
+const DEFAULT_CLOUD_SERVICE_URL = process.env.SUB2API_URL || process.env.ONPEOPLE_CLOUD_URL || "https://sub2api.aibro.vip";
 const PROVIDERS = {
+  onpeople: { name: "OnPeople · Sub2API", protocol: "responses", baseUrl: `${DEFAULT_CLOUD_SERVICE_URL.replace(/\/$/, "").replace(/\/api\/v1$/, "").replace(/\/v1$/, "")}/v1`, model: "", vision: true },
   openai: { name: "OpenAI", protocol: "responses", baseUrl: "https://api.openai.com/v1", model: "gpt-5.6-terra", vision: true },
   deepseek: { name: "DeepSeek", protocol: "chat", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", vision: false },
   minimax: { name: "MiniMax", protocol: "chat", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-M2.7", vision: true },
@@ -125,7 +129,7 @@ const CAPABILITY_INSTRUCTIONS = {
   pdf: "Create or edit a PDF. Use workspace_artifacts.artifact_create_pdf for the final file.",
   spreadsheets: "Create or edit an XLSX workbook. Use workspace_artifacts.artifact_create_spreadsheet for the final file.",
   presentations: "Create or edit a PPTX presentation. Use workspace_artifacts.artifact_create_presentation for the final file.",
-  templates: "Create a reusable artifact template. Use workspace_artifacts.artifact_create_template.",
+  templates: "Create or reuse an artifact template. Use workspace_artifacts.artifact_create_template to save a customized blueprint and workspace_artifacts.artifact_apply_template to produce a real artifact from it. Verify the produced artifact with artifact_inspect.",
   sites: "Build a standalone website in the workspace. Use artifact_create_site when a generated baseline is useful, then inspect and refine the files and preview them in the embedded browser.",
   browser: "Complete this task with OnPeople's internal_browser tools and verify the resulting page state.",
   computer: "Complete this task with the computer_use tools, minimizing native GUI actions and verifying each mutation.",
@@ -935,6 +939,7 @@ let agentProfileStore;
 let localMemoryStore;
 let usageLedger;
 let secretStore;
+let cloudAccount;
 let agentRuntime;
 let schedulerTimer;
 let activePowerBlockerId = null;
@@ -1458,7 +1463,7 @@ function threadProviderSettingsPath() {
 
 function encodeStoredProvider(settings) {
   const stored = { type: settings.type, model: settings.model, baseUrl: settings.baseUrl };
-  if (settings.apiKey) {
+  if (settings.apiKey && settings.type !== "onpeople") {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("系统安全存储不可用，无法保存 API Key");
     stored.encryptedApiKey = safeStorage.encryptString(settings.apiKey).toString("base64");
   }
@@ -1474,12 +1479,28 @@ function decodeStoredProvider(stored) {
   return normalizeProviderSettings({ ...stored, apiKey }, readProviderSettings(stored.type));
 }
 
-function readThreadProviderSettings(threadId) {
+function normalizeThreadProviderEntry(entry) {
+  if (!entry || typeof entry !== "object") return { activeType: null, profiles: {} };
+  if (entry.profiles && typeof entry.profiles === "object") {
+    return {
+      activeType: Object.hasOwn(PROVIDERS, entry.activeType) ? entry.activeType : null,
+      profiles: { ...entry.profiles },
+    };
+  }
+  const legacy = decodeStoredProvider(entry);
+  return legacy
+    ? { activeType: legacy.type, profiles: { [legacy.type]: encodeStoredProvider(legacy) } }
+    : { activeType: null, profiles: {} };
+}
+
+function readThreadProviderSettings(threadId, requestedType = null) {
   const id = String(threadId || "").trim();
   if (!id) return null;
   try {
     const store = JSON.parse(fs.readFileSync(threadProviderSettingsPath(), "utf8"));
-    return decodeStoredProvider(store.threads?.[id]);
+    const entry = normalizeThreadProviderEntry(store.threads?.[id]);
+    const type = Object.hasOwn(PROVIDERS, requestedType) ? requestedType : entry.activeType;
+    return type ? decodeStoredProvider(entry.profiles[type]) : null;
   } catch {
     return null;
   }
@@ -1491,7 +1512,10 @@ function persistThreadProviderSettings(threadId, settings) {
   let store = { threads: {} };
   try { store = JSON.parse(fs.readFileSync(threadProviderSettingsPath(), "utf8")); } catch {}
   store.threads ||= {};
-  store.threads[id] = encodeStoredProvider(settings);
+  const entry = normalizeThreadProviderEntry(store.threads[id]);
+  entry.activeType = settings.type;
+  entry.profiles[settings.type] = encodeStoredProvider(settings);
+  store.threads[id] = entry;
   fs.mkdirSync(path.dirname(threadProviderSettingsPath()), { recursive: true });
   fs.writeFileSync(threadProviderSettingsPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
 }
@@ -1514,23 +1538,31 @@ function readProviderSettings(requestedType = null) {
   if (profile.encryptedApiKey && safeStorage.isEncryptionAvailable()) {
     try { apiKey = safeStorage.decryptString(Buffer.from(profile.encryptedApiKey, "base64")); } catch {}
   }
+  const cloudBaseUrl = type === "onpeople" && cloudAccount ? cloudAccount.apiBaseUrl() : null;
+  const cloudApiKey = type === "onpeople" && cloudAccount ? cloudAccount.apiKey() : null;
   return {
     type,
     model: profile.model ?? preset.model,
-    baseUrl: profile.baseUrl ?? preset.baseUrl,
-    apiKey,
+    baseUrl: cloudBaseUrl || profile.baseUrl || preset.baseUrl,
+    apiKey: type === "onpeople" ? (cloudApiKey || "") : apiKey,
   };
 }
 
 function publicProviderSettings(settings = readProviderSettings()) {
   const preset = PROVIDERS[settings.type] || PROVIDERS.openai;
+  const imageGeneration = imageGenerationCapability(settings.type, Boolean(settings.apiKey));
   return {
     type: settings.type,
     model: settings.model,
     baseUrl: settings.baseUrl,
     hasApiKey: Boolean(settings.apiKey),
+    requiresAccount: settings.type === "onpeople",
+    accountSignedIn: settings.type === "onpeople" ? Boolean(cloudAccount?.accessToken() && cloudAccount?.apiKey()) : null,
     vision: preset.vision,
     protocol: preset.protocol,
+    imageGeneration: imageGeneration.available,
+    imageModel: imageGeneration.model,
+    imageGenerationReason: imageGeneration.reason,
   };
 }
 
@@ -1538,14 +1570,16 @@ function normalizeProviderSettings(input = {}, saved = readProviderSettings()) {
   const type = Object.hasOwn(PROVIDERS, input.type) ? input.type : saved.type;
   const baseline = type === saved.type ? saved : readProviderSettings(type);
   const model = String(input.model ?? baseline.model ?? "").trim();
-  let baseUrl = String(input.baseUrl ?? baseline.baseUrl ?? "").trim().replace(/\/$/, "");
+  let baseUrl = String(type === "onpeople" && cloudAccount ? cloudAccount.apiBaseUrl() : (input.baseUrl ?? baseline.baseUrl ?? "")).trim().replace(/\/$/, "");
   if (PROVIDERS[type].protocol !== "local") {
     if (!baseUrl) throw new Error(`${PROVIDERS[type].name} 需要 API Base URL`);
     const parsed = new URL(baseUrl);
     if (!new Set(["http:", "https:"]).has(parsed.protocol)) throw new Error("API Base URL 仅支持 HTTP(S)");
     if (!model) throw new Error(`${PROVIDERS[type].name} 需要模型名称`);
   }
-  const apiKey = input.apiKey ? String(input.apiKey) : baseline.apiKey;
+  const apiKey = type === "onpeople"
+    ? (cloudAccount?.apiKey() || "")
+    : (input.apiKey ? String(input.apiKey) : baseline.apiKey);
   return { type, model, baseUrl, apiKey };
 }
 
@@ -1554,7 +1588,7 @@ function persistProviderSettings(input) {
   const existing = readProviderStore();
   const profiles = existing.profiles || {};
   const profile = { model: settings.model, baseUrl: settings.baseUrl };
-  if (settings.apiKey) {
+  if (settings.apiKey && settings.type !== "onpeople") {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("系统安全存储不可用，无法保存 API Key");
     profile.encryptedApiKey = safeStorage.encryptString(settings.apiKey).toString("base64");
   }
@@ -1614,25 +1648,28 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
     },
   };
   const preset = PROVIDERS[providerSettings.type];
+  const imageGeneration = imageGenerationCapability(providerSettings.type, Boolean(providerSettings.apiKey));
   if (preset.protocol !== "local") {
     const gatewayBaseUrl = modelGateway.registerRoute(
       routeId || crypto.randomUUID(),
       { ...providerSettings, protocol: preset.protocol },
     );
-    config.mcp_servers.image_generation = {
-      command: process.execPath,
-      args: [IMAGE_GENERATION_MCP_SCRIPT],
-      env: {
-        ELECTRON_RUN_AS_NODE: "1",
-        ONPEOPLE_WORKSPACE_ROOT: workspaceRoot || DEFAULT_CWD,
-        ONPEOPLE_IMAGE_BASE_URL: providerSettings.baseUrl,
-        ONPEOPLE_IMAGE_API_KEY: providerSettings.apiKey || "",
-        ONPEOPLE_IMAGE_MODEL: "gpt-image-2",
-      },
-      startup_timeout_sec: 10,
-      tool_timeout_sec: 360,
-      default_tools_approval_mode: "writes",
-    };
+    if (imageGeneration.available) {
+      config.mcp_servers.image_generation = {
+        command: process.execPath,
+        args: [IMAGE_GENERATION_MCP_SCRIPT],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          ONPEOPLE_WORKSPACE_ROOT: workspaceRoot || DEFAULT_CWD,
+          ONPEOPLE_IMAGE_BASE_URL: providerSettings.baseUrl,
+          ONPEOPLE_IMAGE_API_KEY: providerSettings.apiKey || "",
+          ONPEOPLE_IMAGE_MODEL: imageGeneration.model,
+        },
+        startup_timeout_sec: 10,
+        tool_timeout_sec: 360,
+        default_tools_approval_mode: "writes",
+      };
+    }
     config.model_providers = {
       onpeople: {
         name: `${preset.name} via OnPeople`,
@@ -2031,6 +2068,26 @@ function providerContextForThread(threadId = null, overrides = null) {
     modelProvider: PROVIDERS[settings.type].protocol === "local" ? settings.type : "onpeople",
     model: settings.model || null,
   };
+}
+
+function providerProfileForThread(threadId, requestedType) {
+  const type = Object.hasOwn(PROVIDERS, requestedType) ? requestedType : "openai";
+  const context = threadContexts.get(threadId);
+  if (context?.provider?.type === type) {
+    return normalizeProviderSettings(context.provider, readProviderSettings(type));
+  }
+  return readThreadProviderSettings(threadId, type) || readProviderSettings(type);
+}
+
+function refreshOnPeopleRoutes() {
+  for (const context of threadContexts.snapshot().threads) {
+    if (context.provider?.type !== "onpeople") continue;
+    const settings = normalizeProviderSettings(context.provider, readProviderSettings("onpeople"));
+    threadContexts.update(context.id, { provider: { ...settings } });
+    if (context.gatewayRouteId) {
+      modelGateway.registerRoute(context.gatewayRouteId, { ...settings, protocol: PROVIDERS.onpeople.protocol });
+    }
+  }
 }
 
 async function applyThreadProvider(threadId, settings) {
@@ -2457,7 +2514,8 @@ function applyActiveThread(result, requestedThreadId = null) {
 async function resumeThread(threadId) {
   const id = String(threadId || "").trim();
   if (!id) throw new Error("缺少任务 ID");
-  const { model } = providerContextForThread(id);
+  const { settings, model } = providerContextForThread(id);
+  const provider = publicProviderSettings(settings);
   const local = readLocalThreadSnapshot(id);
   if (local) {
     rememberThread(local.thread);
@@ -2478,7 +2536,7 @@ async function resumeThread(threadId) {
     void ensureRuntimeThread(id, { cwd: local.thread.cwd, model }).catch((error) => {
       recordRuntimeEvent("warning", "历史任务后台恢复失败", `${id}: ${error.message}`);
     });
-    return { ...local, model, running: Boolean(liveTurnId), restoring, turnId: liveTurnId };
+    return { ...local, model, provider, running: Boolean(liveTurnId), restoring, turnId: liveTurnId };
   }
   await ensureRuntimeThread(id, { cwd: knownThreadCwd(id), model });
   const result = await appServer.request("thread/read", { threadId: id, includeTurns: true }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
@@ -2505,7 +2563,7 @@ async function resumeThread(threadId) {
     goal,
     turnId: activeTurnIdsByThread.get(thread.id) || null,
   });
-  return { thread, goal, model: result.model || model, running: statusIsActive || activeTurnIdsByThread.has(thread.id), restoring: false, turnId: activeTurnIdsByThread.get(thread.id) || null };
+  return { thread, goal, model: result.model || model, provider, running: statusIsActive || activeTurnIdsByThread.has(thread.id), restoring: false, turnId: activeTurnIdsByThread.get(thread.id) || null };
 }
 
 async function forkThread(threadId) {
@@ -2536,7 +2594,7 @@ async function forkThread(threadId) {
     reasoningEffort: result.reasoningEffort || null,
     provider: { ...settings },
   });
-  return { thread, goal: null, model: result.model || model };
+  return { thread, goal: null, model: result.model || model, provider: publicProviderSettings(settings) };
 }
 
 async function archiveThread(threadId) {
@@ -3489,6 +3547,11 @@ async function createWindow() {
   localMemoryStore = new LocalMemoryStore(path.join(app.getPath("userData"), "local-memories.json"));
   usageLedger = new UsageLedger(path.join(app.getPath("userData"), "usage-ledger.json"));
   secretStore = new SecretStore(path.join(app.getPath("userData"), "secure-variables.json"), safeStorage);
+  cloudAccount = new CloudAccountClient({
+    filePath: path.join(app.getPath("userData"), "cloud-account.json"),
+    safeStorage,
+    defaultServiceUrl: DEFAULT_CLOUD_SERVICE_URL,
+  });
   agentRuntime = new AgentRuntimeCoordinator({ stateFile: path.join(app.getPath("userData"), "runtime-sessions.json") });
   mainWindow = createWorkbenchWindow(null);
 
@@ -3747,6 +3810,7 @@ ipcMain.handle("agent:status", async (event) => {
   const hasWindowThread = windowThreadIds.has(event.sender.id);
   const threadId = hasWindowThread ? windowThreadIds.get(event.sender.id) : null;
   const context = contextForThread(threadId);
+  const providerSettings = providerContextForThread(threadId).settings;
   return {
     ready: Boolean(appServer?.ready),
     threadId: threadId || null,
@@ -3755,7 +3819,17 @@ ipcMain.handle("agent:status", async (event) => {
     collaborationModes,
     defaultCwd: DEFAULT_CWD,
     computerUse: computerUseStatus,
-    provider: publicProviderSettings(providerContextForThread(threadId).settings),
+    capabilities: {
+      artifacts: { available: fs.existsSync(ARTIFACT_MCP_SCRIPT) },
+      browser: { available: Boolean(browserBridge?.url) },
+      computer: { available: Boolean(cuaDriverBinary && computerUseStatus.running), reason: computerUseStatus.message || null },
+      imagegen: imageGenerationCapability(
+        providerSettings.type,
+        Boolean(providerSettings.apiKey),
+      ),
+      extensions: { available: Boolean(appServer?.ready) },
+    },
+    provider: publicProviderSettings(providerSettings),
     policy: readP0Settings().policy,
     context: contextState(threadId),
   };
@@ -3992,6 +4066,35 @@ ipcMain.handle("mcp:reload", async () => {
 });
 ipcMain.handle("models:discover", async () => discoverModels());
 ipcMain.handle("models:validate", async (_event, providerType, modelId) => detectModelVision(providerType, modelId));
+ipcMain.handle("cloud:account:status", async () => cloudAccount.status());
+ipcMain.handle("cloud:account:login", async (_event, payload) => {
+  const result = await cloudAccount.login(payload || {});
+  refreshOnPeopleRoutes();
+  sendToRenderer("cloud:account:updated", result);
+  return result;
+});
+ipcMain.handle("cloud:account:register-code", async (_event, payload) => cloudAccount.sendRegistrationCode(payload || {}));
+ipcMain.handle("cloud:account:register", async (_event, payload) => {
+  const result = await cloudAccount.register(payload || {});
+  refreshOnPeopleRoutes();
+  sendToRenderer("cloud:account:updated", result);
+  return result;
+});
+ipcMain.handle("cloud:account:logout", async () => {
+  const result = await cloudAccount.logout();
+  refreshOnPeopleRoutes();
+  sendToRenderer("cloud:account:updated", result);
+  return result;
+});
+ipcMain.handle("cloud:account:redeem", async (_event, code) => {
+  const result = await cloudAccount.redeem(code);
+  sendToRenderer("cloud:account:updated", result.state);
+  return result;
+});
+ipcMain.handle("cloud:account:open-console", async () => {
+  await shell.openExternal(cloudAccount.serviceUrl());
+  return { opened: true };
+});
 ipcMain.handle("agents:list", async () => ({ agents: [...managedAgents.values()].map(publicAgent), maxAgents: readP0Settings().policy.maxAgents }));
 ipcMain.handle("agent-profiles:list", async () => ({ profiles: agentProfileStore.list() }));
 ipcMain.handle("agent-profiles:save", async (_event, profile) => ({ profile: agentProfileStore.save(profile), profiles: agentProfileStore.list() }));
@@ -4118,8 +4221,18 @@ ipcMain.handle("agent:goal:set", async (event, payload) => {
   return result;
 });
 ipcMain.handle("agent:goal:update", async (_event, threadId, action, value) => updateGoal(threadId, action, value));
+ipcMain.handle("agent:provider:get", async (event, requestedType, requestedThreadId = null) => {
+  const threadId = String(requestedThreadId || windowThreadIds.get(event.sender.id) || "").trim() || null;
+  const settings = Object.hasOwn(PROVIDERS, requestedType)
+    ? providerProfileForThread(threadId, requestedType)
+    : providerContextForThread(threadId).settings;
+  return publicProviderSettings(settings);
+});
 ipcMain.handle("agent:provider:save", async (event, input) => {
   if (runtimeStartPromise) throw new Error("Agent 运行时正在重连，请稍后再试");
+  if (input?.type === "onpeople" && !cloudAccount?.apiKey()) {
+    throw new Error("请先登录 Sub2API 账号，再选择 OnPeople 模型");
+  }
   const threadId = String(input?.threadId || windowThreadIds.get(event.sender.id) || "").trim() || null;
   const before = providerContextForThread(threadId).settings;
   const normalized = normalizeProviderSettings(input, before);
