@@ -18,26 +18,30 @@ function errorMessage(error) {
 }
 
 class AppUpdateService extends EventEmitter {
-  constructor({ updater, platform, isPackaged, currentVersion, updateFeedUrl = WINDOWS_UPDATE_FEED_URL, checkIntervalMs = CHECK_INTERVAL_MS, startupDelayMs = STARTUP_CHECK_DELAY_MS }) {
+  constructor({ updater, platform, isPackaged, isWindowsStore = false, currentVersion, updateFeedUrl = WINDOWS_UPDATE_FEED_URL, checkIntervalMs = CHECK_INTERVAL_MS, startupDelayMs = STARTUP_CHECK_DELAY_MS }) {
     super();
     this.updater = updater;
     this.platform = platform;
     this.isPackaged = Boolean(isPackaged);
+    this.isWindowsStore = Boolean(isWindowsStore);
     this.checkIntervalMs = checkIntervalMs;
     this.startupDelayMs = startupDelayMs;
     this.updateFeedUrl = normalizeUpdateFeedUrl(updateFeedUrl);
     this.started = false;
     this.startupTimer = null;
     this.intervalTimer = null;
+    const supported = this.platform === "win32" && this.isPackaged && !this.isWindowsStore;
     this.state = {
-      supported: this.platform === "win32" && this.isPackaged,
-      status: this.platform === "win32" && this.isPackaged ? "idle" : "unsupported",
+      supported,
+      status: this.isWindowsStore ? "store-managed" : (supported ? "idle" : "unsupported"),
       currentVersion: String(currentVersion || "0.0.0"),
       availableVersion: null,
       percent: null,
       transferred: null,
       total: null,
-      message: this.platform === "win32"
+      message: this.isWindowsStore
+        ? "由 Microsoft Store 自动管理更新"
+        : this.platform === "win32"
         ? (this.isPackaged ? "自动检查 Windows 更新" : "开发模式不执行自动更新")
         : "当前平台请从 OnPeople 下载页更新",
     };

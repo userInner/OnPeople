@@ -3632,10 +3632,14 @@ function installApplicationMenu() {
       { role: "about" }, { type: "separator" },
       { label: "命令面板…", accelerator: "CmdOrCtrl+K", click: sendPalette },
       {
-        label: process.platform === "win32" ? "检查更新…" : "下载最新版…",
-        click: () => process.platform === "win32"
-          ? appUpdateService?.check()
-          : shell.openExternal("https://aibro.vip/onpeople/#download"),
+        label: process.windowsStore
+          ? "在 Microsoft Store 中检查更新…"
+          : (process.platform === "win32" ? "检查更新…" : "下载最新版…"),
+        click: () => process.windowsStore
+          ? shell.openExternal("ms-windows-store://downloadsandupdates")
+          : process.platform === "win32"
+            ? appUpdateService?.check()
+            : shell.openExternal("https://aibro.vip/onpeople/#download"),
       },
       { label: "显示 / 收起宠物", click: () => togglePet() },
       { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" },
@@ -3699,6 +3703,7 @@ async function createWindow() {
     updater: autoUpdater,
     platform: process.platform,
     isPackaged: app.isPackaged,
+    isWindowsStore: process.windowsStore,
     currentVersion: APP_VERSION,
   });
   appUpdateService.on("state", (state) => {
@@ -4418,7 +4423,9 @@ ipcMain.handle("app-update:check", async () => appUpdateService?.check());
 ipcMain.handle("app-update:download", async () => appUpdateService?.download());
 ipcMain.handle("app-update:install", async () => appUpdateService?.install());
 ipcMain.handle("app-update:open-download", async () => {
-  await shell.openExternal("https://aibro.vip/onpeople/#download");
+  await shell.openExternal(process.windowsStore
+    ? "ms-windows-store://downloadsandupdates"
+    : "https://aibro.vip/onpeople/#download");
   return { opened: true };
 });
 

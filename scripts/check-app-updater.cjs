@@ -44,6 +44,21 @@ async function run() {
   const unsupported = new AppUpdateService({ updater: new FakeUpdater(), platform: "darwin", isPackaged: true, currentVersion: "0.29.12" });
   assert.equal(unsupported.start().supported, false);
   assert.equal((await unsupported.check()).status, "unsupported");
+
+  const storeUpdater = new FakeUpdater();
+  const storeManaged = new AppUpdateService({
+    updater: storeUpdater,
+    platform: "win32",
+    isPackaged: true,
+    isWindowsStore: true,
+    currentVersion: "0.29.12",
+  });
+  assert.equal(storeManaged.start().supported, false);
+  assert.equal(storeManaged.snapshot().status, "store-managed");
+  assert.match(storeManaged.snapshot().message, /Microsoft Store/);
+  assert.equal(storeUpdater.feedConfig, undefined);
+  assert.equal((await storeManaged.check()).status, "store-managed");
+
   assert.equal(normalizeUpdateFeedUrl("https://updates.example.test/windows"), "https://updates.example.test/windows/");
   assert.throws(() => normalizeUpdateFeedUrl("http://updates.example.test/windows"), /HTTPS/);
   console.log("App updater checks passed.");

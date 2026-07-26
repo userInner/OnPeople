@@ -213,7 +213,8 @@ function renderAppUpdate(state = {}) {
   if (downloading) appUpdateProgress.value = Number(state.percent) || 0;
 
   appUpdateAction.disabled = ["checking", "downloading", "installing"].includes(state.status);
-  if (!state.supported) appUpdateAction.textContent = "下载最新版";
+  if (state.status === "store-managed") appUpdateAction.textContent = "Microsoft Store";
+  else if (!state.supported) appUpdateAction.textContent = "下载最新版";
   else if (state.status === "checking") appUpdateAction.textContent = "检查中…";
   else if (state.status === "available") appUpdateAction.textContent = "下载更新";
   else if (state.status === "downloading") appUpdateAction.textContent = `${Math.round(Number(state.percent) || 0)}%`;

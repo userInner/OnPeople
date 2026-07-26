@@ -139,6 +139,32 @@ The tester downloads and runs only that installer. It installs OnPeople for the 
 
 Packaged Windows builds check `https://aibro.vip/onpeople/update/windows/` for updates. The public Generic Feed must publish `latest.yml`, the versioned NSIS installer, and its blockmap together. `latest.yml` must use `no-store`; versioned installer and blockmap files may use long-lived immutable caching.
 
+### Microsoft Store package
+
+The primary public Windows distribution is an AppX/MSIX package submitted through Microsoft Store. Microsoft re-signs the package after certification, so no paid code-signing certificate is required and Store installations do not show SmartScreen or unknown-publisher warnings. The website NSIS installer remains a compatibility fallback; an unsigned direct-download EXE cannot provide the same warning-free experience.
+
+Copy the exact package identity values from Partner Center's **Product identity** page into GitHub repository variables:
+
+| Variable | Partner Center value |
+| --- | --- |
+| `MS_STORE_IDENTITY_NAME` | Package/Identity/Name |
+| `MS_STORE_PUBLISHER` | Package/Identity/Publisher, including the complete `CN=...` value |
+| `MS_STORE_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName |
+| `MS_STORE_APPLICATION_ID` | Optional manifest application id; use `OnPeople` unless the reserved product requires another value |
+
+When `MS_STORE_IDENTITY_NAME` is configured, tag and manual Actions builds also produce the temporary `OnPeople-Windows-Store-x64` artifact. Download its `OnPeople-Store-<version>-win-x64.appx` file and upload it to the matching Microsoft Store product. Do not publish that unsigned submission artifact as a direct website download; Partner Center validates and re-signs it for Store delivery.
+
+For an authorized local Windows build, set the same values and run:
+
+```powershell
+$env:ONPEOPLE_STORE_IDENTITY_NAME = "<Package Identity Name>"
+$env:ONPEOPLE_STORE_PUBLISHER = "CN=<Store Publisher ID>"
+$env:ONPEOPLE_STORE_PUBLISHER_DISPLAY_NAME = "<Publisher Display Name>"
+npm run package:win:store
+```
+
+Store-installed builds use Microsoft Store for updates. They do not connect to the NSIS Generic Update Feed, preventing the Store-managed package from trying to replace itself with the website installer.
+
 For local engineering diagnostics only, a portable ZIP can still be built:
 
 ```powershell

@@ -34,6 +34,10 @@ jobs:
     env:
       CODEX_VERSION: "0.146.0-alpha.3.1"
       CUA_DRIVER_VERSION: "0.12.4"
+      ONPEOPLE_STORE_IDENTITY_NAME: ${{ vars.MS_STORE_IDENTITY_NAME }}
+      ONPEOPLE_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
+      ONPEOPLE_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
+      ONPEOPLE_STORE_APPLICATION_ID: ${{ vars.MS_STORE_APPLICATION_ID }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -100,6 +104,17 @@ jobs:
             release/windows/latest.yml
           if-no-files-found: error
           retention-days: 7
+      - name: Build Microsoft Store AppX package
+        if: env.ONPEOPLE_STORE_IDENTITY_NAME != ''
+        run: node scripts/package-win-store.cjs
+      - name: Upload Microsoft Store submission package
+        if: env.ONPEOPLE_STORE_IDENTITY_NAME != ''
+        uses: actions/upload-artifact@v5
+        with:
+          name: OnPeople-Windows-Store-x64
+          path: release/store/OnPeople-Store-*-win-x64.appx
+          if-no-files-found: error
+          retention-days: 14
 
   package-macos:
     name: Package macOS arm64 app
