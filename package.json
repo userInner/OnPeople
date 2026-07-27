@@ -1,6 +1,6 @@
 {
   "name": "internal-agent-workbench",
-  "version": "0.29.15",
+  "version": "0.29.16",
   "private": true,
   "description": "Cross-platform agent workbench for OpenAI-compatible and local language models.",
   "main": "src/main.cjs",
