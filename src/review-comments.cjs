@@ -9,8 +9,12 @@ function annotateDiffLines(lines = []) {
       newLine = Number(header[2]);
       return { index, text: value, type: "hunk", oldLine: null, newLine: null, commentLine: null, side: null };
     }
-    const type = value.startsWith("+") && !value.startsWith("+++") ? "add"
-      : value.startsWith("-") && !value.startsWith("---") ? "remove"
+    if (value.startsWith("diff ")) { oldLine = null; newLine = null; }
+    // Inside a hunk, "---"/"+++" are removed/added lines whose content starts
+    // with "--"/"++" — only outside hunks are they file headers.
+    const inHunk = oldLine !== null && newLine !== null;
+    const type = value.startsWith("+") && (inHunk || !value.startsWith("+++")) ? "add"
+      : value.startsWith("-") && (inHunk || !value.startsWith("---")) ? "remove"
         : value.startsWith("diff ") || value.startsWith("# ") || value.startsWith("---") || value.startsWith("+++") ? "header" : "context";
     const result = { index, text: value, type, oldLine: null, newLine: null, commentLine: null, side: null };
     if (oldLine !== null && type === "remove") {

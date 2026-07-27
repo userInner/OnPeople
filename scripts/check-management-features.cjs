@@ -31,9 +31,17 @@ try {
   usage.setPrice("compatible|demo", { input: 1, cached: 0.5, output: 2 });
   usage.record({ threadId: "t1", provider: "compatible", model: "demo", usage: { total: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 500 } } });
   usage.record({ threadId: "t1", provider: "compatible", model: "demo", usage: { total: { inputTokens: 1200, cachedInputTokens: 250, outputTokens: 600 } } });
-  const row = usage.snapshot().rows[0];
+  usage.turnStarted({ threadId: "t1", turnId: "turn-1", startedAt: 1_000 });
+  usage.recordItem({ item: { type: "mcpToolCall", server: "browser", tool: "navigate" } });
+  usage.turnCompleted({ threadId: "t1", turnId: "turn-1", completedAt: 66_000 });
+  const usageSnapshot = usage.snapshot();
+  const row = usageSnapshot.rows[0];
   assert.deepEqual({ input: row.input, cached: row.cached, output: row.output }, { input: 1200, cached: 250, output: 600 });
   assert.ok(row.estimatedCost > 0);
+  assert.equal(usageSnapshot.profile.totalTokens, 1800, "cached input tokens must not be counted twice");
+  assert.equal(usageSnapshot.profile.taskCount, 1);
+  assert.equal(usageSnapshot.profile.longestTaskMs, 65_000);
+  assert.deepEqual(usageSnapshot.profile.tools[0], { name: "browser · navigate", runs: 1 });
 
   const fakeSafeStorage = {
     isEncryptionAvailable: () => true,

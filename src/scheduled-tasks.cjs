@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { rrulestr } = require("rrule");
+const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 function parseRRule(schedule, from) {
   const rule = String(schedule.rule || "").trim().replace(/^RRULE:/i, "");
@@ -87,7 +88,7 @@ class ScheduledTaskStore {
 
   read() {
     try {
-      const value = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      const value = readJsonWithBackup(this.filePath, { tasks: [], runs: [] });
       const tasks = Array.isArray(value.tasks) ? value.tasks.map((task) => ({
         ...task,
         destination: task.destination || { mode: "standalone", threadId: null },
@@ -99,8 +100,7 @@ class ScheduledTaskStore {
   }
 
   save() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
+    atomicWriteFile(this.filePath, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
   }
 
   snapshot() {

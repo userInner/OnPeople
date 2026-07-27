@@ -55,6 +55,8 @@ function toChatRequest(body, stream = true) {
     stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(body.max_output_tokens ? { max_tokens: body.max_output_tokens } : {}),
+    ...(Number.isFinite(body.temperature) ? { temperature: body.temperature } : {}),
+    ...(Number.isFinite(body.top_p) ? { top_p: body.top_p } : {}),
     ...(tools.length ? { tools, tool_choice: body.tool_choice === "none" ? "none" : "auto" } : {}),
   };
 }
@@ -254,13 +256,15 @@ function writeResponsesStream(response, requestBody, chatBody) {
 
 function readJson(request, limit = 32 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
+    let bytes = 0;
     request.on("data", (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > limit) request.destroy(new Error("Request body is too large"));
+      chunks.push(chunk);
+      bytes += chunk.length;
+      if (bytes > limit) request.destroy(new Error("Request body is too large"));
     });
     request.on("end", () => {
-      try { resolve(JSON.parse(body || "{}")); } catch (error) { reject(error); }
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (error) { reject(error); }
     });
     request.on("error", reject);
   });
@@ -283,6 +287,12 @@ async function consumeSse(readable, onData) {
       onData(JSON.parse(data));
     }
   }
+  // Flush a final block that was not followed by the terminating blank line.
+  const tail = buffer.split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (tail && tail !== "[DONE]") onData(JSON.parse(tail));
 }
 
 class ModelGateway {

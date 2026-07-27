@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { resolveWorkspaceInput } = require("./workspace-boundary.cjs");
 
 const PREVIEW_EXTENSIONS = new Set([".md", ".txt", ".json", ".html", ".css", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".py", ".go", ".toml", ".yaml", ".yml"]);
 const PRIORITY_FILES = ["README.md", "AGENTS.md", "package.json", "index.html", "THIRD_PARTY_NOTICES.md"];
@@ -11,8 +12,7 @@ function insideRoot(root, candidate) {
 
 function resolveWorkspaceFile(cwd, filePath) {
   const root = path.resolve(String(cwd || ""));
-  const candidate = path.resolve(root, String(filePath || ""));
-  if (!insideRoot(root, candidate)) throw new Error("只能打开当前工作区内的文件");
+  const candidate = resolveWorkspaceInput(root, filePath);
   const stat = fs.statSync(candidate);
   if (!stat.isFile()) throw new Error("所选项目不是文件");
   if (stat.size > 1_000_000) throw new Error("文件超过 1 MB，无法在快速预览中打开");

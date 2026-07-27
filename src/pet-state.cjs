@@ -1,5 +1,4 @@
-const fs = require("node:fs");
-const path = require("node:path");
+const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 // Status names, priority, and the 8 × 9 atlas geometry follow the public
 // OpenAI Codex terminal-pet implementation:
@@ -8,10 +7,12 @@ const PET_FRAME = Object.freeze({ width: 192, height: 208, columns: 8, rows: 9 }
 const PET_STATUS_PRIORITY = Object.freeze({
   "needs-input": 4,
   blocked: 3,
-  ready: 2,
-  running: 1,
+  running: 2,
+  ready: 1,
   idle: 0,
 });
+const READY_TASK_TTL_MS = 60_000;
+const MAX_PET_TASKS = 100;
 
 const PET_ANIMATIONS = Object.freeze({
   idle: { row: 0, frames: 6, durations: [1680, 660, 660, 840, 840, 1920] },
@@ -52,8 +53,10 @@ class PetStateStore {
   }
 
   #readSettings() {
+    const value = readJsonWithBackup(this.filePath, () => (
+      { visible: false, position: null, trayOpen: false, skinId: "onpeople", customSkins: [] }
+    ));
     try {
-      const value = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
       return {
         visible: Boolean(value.visible),
         position: value.position && Number.isFinite(value.position.x) && Number.isFinite(value.position.y)
@@ -75,9 +78,10 @@ class PetStateStore {
   }
 
   saveSettings(patch = {}) {
-    this.settings = { ...this.settings, ...patch };
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify(this.settings, null, 2)}\n`, { mode: 0o600 });
+    const allowed = new Set(["visible", "position", "trayOpen", "skinId", "customSkins"]);
+    const filtered = Object.fromEntries(Object.entries(patch).filter(([key]) => allowed.has(key)));
+    this.settings = { ...this.settings, ...filtered };
+    atomicWriteFile(this.filePath, `${JSON.stringify(this.settings, null, 2)}\n`, { mode: 0o600 });
     return this.snapshot();
   }
 
@@ -95,6 +99,7 @@ class PetStateStore {
       title: String(input.title || existing.title || `任务 ${threadId.slice(0, 8)}`).trim(),
       status,
       updatedAt: Date.now(),
+      expiresAt: status === "ready" ? Date.now() + READY_TASK_TTL_MS : null,
     });
     return this.snapshot();
   }
@@ -105,9 +110,14 @@ class PetStateStore {
   }
 
   snapshot() {
+    const now = Date.now();
+    for (const [threadId, task] of this.tasks) {
+      if (task.status === "ready" && Number(task.expiresAt || 0) <= now) this.tasks.delete(threadId);
+    }
     const tasks = [...this.tasks.values()].sort((left, right) =>
       (PET_STATUS_PRIORITY[right.status] - PET_STATUS_PRIORITY[left.status])
-      || (right.updatedAt - left.updatedAt));
+      || (right.updatedAt - left.updatedAt))
+      .slice(0, MAX_PET_TASKS);
     const active = tasks[0] || null;
     return {
       ...this.settings,

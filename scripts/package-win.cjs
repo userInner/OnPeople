@@ -10,7 +10,9 @@ if (process.platform !== "win32") {
 
 const root = path.resolve(__dirname, "..");
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-package-"));
-const packager = path.join(root, "node_modules", ".bin", "electron-packager.cmd");
+// Run the JS entry with Node directly: spawning .cmd shims without a shell
+// throws EINVAL on Node >= 22 (CVE-2024-27980 hardening).
+const packager = path.join(root, "node_modules", "@electron", "packager", "bin", "electron-packager.js");
 const releaseRoot = path.join(root, "release");
 const version = require("../package.json").version;
 const architecture = process.env.ONPEOPLE_TARGET_ARCH || "x64";
@@ -33,7 +35,7 @@ const packagerArgs = [
 ];
 
 fs.mkdirSync(releaseRoot, { recursive: true });
-execFileSync(packager, packagerArgs, { cwd: root, stdio: "inherit", windowsHide: true });
+execFileSync(process.execPath, [packager, ...packagerArgs], { cwd: root, stdio: "inherit", windowsHide: true });
 
 const appPath = path.join(temporaryRoot, outputName);
 execFileSync(process.execPath, [path.join(__dirname, "check-packaged-app.cjs"), appPath], {

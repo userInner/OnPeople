@@ -1,10 +1,11 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 const DESKTOP_KEY_NAME = "OnPeople Desktop";
 const DEFAULT_SERVICE_URL = "https://sub2api.aibro.vip";
-const ACCOUNT_SCHEMA_VERSION = 3;
+const ACCOUNT_SCHEMA_VERSION = 4;
 const LEGACY_LOCAL_SERVICE_URLS = new Set([
   "http://127.0.0.1:8080",
   "http://127.0.0.1:8787",
@@ -13,6 +14,8 @@ const LEGACY_LOCAL_SERVICE_URLS = new Set([
 function normalizeServiceUrl(value) {
   const parsed = new URL(String(value || "").trim());
   if (!new Set(["http:", "https:"]).has(parsed.protocol)) throw new Error("Sub2API 地址仅支持 HTTP(S)");
+  const loopback = new Set(["localhost", "127.0.0.1", "::1"]).has(parsed.hostname);
+  if (parsed.protocol !== "https:" && !loopback) throw new Error("远程 OnPeople 服务必须使用 HTTPS");
   parsed.pathname = parsed.pathname
     .replace(/\/+$/, "")
     .replace(/\/api\/v1$/, "")
@@ -56,6 +59,7 @@ function emptyAccountRecord(serviceUrl) {
     encryptedApiKey: "",
     apiKeyId: null,
     group: null,
+    groupCredentials: {},
     cachedAccount: null,
     cachedModels: [],
   };
@@ -82,8 +86,69 @@ function normalizeCachedModels(models) {
       id: String(model?.id || ""),
       name: String(model?.name || model?.id || ""),
       ownedBy: model?.ownedBy || null,
+      groupId: Number(model?.groupId || 0) || null,
+      groupName: String(model?.groupName || ""),
     }))
     .filter((model) => model.id);
+}
+
+function normalizeGroupCredentials(credentials) {
+  const normalized = {};
+  for (const [rawId, value] of Object.entries(credentials && typeof credentials === "object" ? credentials : {})) {
+    const groupId = Number(rawId || value?.group?.id || 0);
+    if (!groupId || !value?.encryptedApiKey) continue;
+    normalized[String(groupId)] = {
+      encryptedApiKey: String(value.encryptedApiKey),
+      apiKeyId: Number(value.apiKeyId || 0) || null,
+      group: value.group && typeof value.group === "object" ? value.group : { id: groupId },
+    };
+  }
+  return normalized;
+}
+
+function mergeModelCatalog(groups, discovered = []) {
+  const models = new Map();
+  for (const group of Array.isArray(groups) ? groups : []) {
+    for (const id of parseGroupModels(group)) {
+      if (models.has(id)) continue;
+      models.set(id, {
+        id,
+        name: id,
+        ownedBy: group.platform || null,
+        groupId: Number(group.id || 0) || null,
+        groupName: String(group.name || group.id || ""),
+      });
+    }
+  }
+  for (const model of normalizeCachedModels(discovered)) {
+    const existing = models.get(model.id);
+    models.set(model.id, {
+      ...model,
+      groupId: model.groupId || existing?.groupId || null,
+      groupName: model.groupName || existing?.groupName || "",
+      ownedBy: model.ownedBy || existing?.ownedBy || null,
+    });
+  }
+  return [...models.values()];
+}
+
+function parseGroupModels(group) {
+  const raw = group?.models
+    ?? group?.models_list_config?.models
+    ?? group?.modelsListConfig?.models;
+  let list = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      list = Array.isArray(parsed) ? parsed : raw.split(",");
+    } catch {
+      list = raw.split(",");
+    }
+  }
+  return list
+    .map((item) => typeof item === "string" ? item.trim() : String(item?.id || item?.model || "").trim())
+    .filter(Boolean);
 }
 
 function jwtAccount(token) {
@@ -101,17 +166,23 @@ function jwtAccount(token) {
 }
 
 class CloudAccountClient {
-  constructor({ filePath, safeStorage, defaultServiceUrl = DEFAULT_SERVICE_URL }) {
+  constructor({ filePath, safeStorage, defaultServiceUrl = DEFAULT_SERVICE_URL, onCredentialsChanged = null }) {
     this.filePath = filePath;
     this.safeStorage = safeStorage;
     this.defaultServiceUrl = normalizeServiceUrl(defaultServiceUrl);
+    this.onCredentialsChanged = typeof onCredentialsChanged === "function" ? onCredentialsChanged : null;
+    this.cachedRecord = null;
   }
 
   read() {
+    if (this.cachedRecord) return structuredClone(this.cachedRecord);
     try {
-      const stored = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      const stored = readJsonWithBackup(this.filePath, {});
       const storedVersion = Number(stored.schemaVersion || 0);
-      const legacyUrl = normalizeServiceUrl(stored.serviceUrl || this.defaultServiceUrl);
+      // A corrupted serviceUrl must not discard intact encrypted credentials.
+      let legacyUrl;
+      try { legacyUrl = normalizeServiceUrl(stored.serviceUrl || this.defaultServiceUrl); }
+      catch { legacyUrl = this.defaultServiceUrl; }
       const normalized = {
         schemaVersion: ACCOUNT_SCHEMA_VERSION,
         serviceUrl: LEGACY_LOCAL_SERVICE_URLS.has(legacyUrl) ? this.defaultServiceUrl : legacyUrl,
@@ -120,23 +191,34 @@ class CloudAccountClient {
         encryptedApiKey: String(stored.encryptedApiKey || ""),
         apiKeyId: Number(stored.apiKeyId || 0) || null,
         group: stored.group && typeof stored.group === "object" ? stored.group : null,
+        groupCredentials: normalizeGroupCredentials(stored.groupCredentials),
         cachedAccount: normalizeCachedAccount(stored.cachedAccount),
         cachedModels: normalizeCachedModels(stored.cachedModels),
       };
+      if (normalized.group?.id && normalized.encryptedApiKey) {
+        normalized.groupCredentials[String(normalized.group.id)] ||= {
+          encryptedApiKey: normalized.encryptedApiKey,
+          apiKeyId: normalized.apiKeyId,
+          group: normalized.group,
+        };
+      }
       // Account schema upgrades must never discard encrypted credentials. Older
       // builds wrote compatible encrypted fields, so normalize and persist them.
       if (storedVersion > 0 && storedVersion < ACCOUNT_SCHEMA_VERSION) {
         try { this.write(normalized); } catch {}
       }
+      this.cachedRecord = structuredClone(normalized);
       return normalized;
     } catch {
-      return emptyAccountRecord(this.defaultServiceUrl);
+      const empty = emptyAccountRecord(this.defaultServiceUrl);
+      this.cachedRecord = structuredClone(empty);
+      return empty;
     }
   }
 
   write(value) {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    this.cachedRecord = structuredClone(value);
+    atomicWriteFile(this.filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   }
 
   serviceUrl() {
@@ -153,6 +235,15 @@ class CloudAccountClient {
 
   decrypt(field) {
     const encrypted = this.read()[field];
+    if (!encrypted || !this.safeStorage.isEncryptionAvailable()) return "";
+    try {
+      return this.safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+    } catch {
+      return "";
+    }
+  }
+
+  decryptValue(encrypted) {
     if (!encrypted || !this.safeStorage.isEncryptionAvailable()) return "";
     try {
       return this.safeStorage.decryptString(Buffer.from(encrypted, "base64"));
@@ -190,6 +281,7 @@ class CloudAccountClient {
         encryptedApiKey: "",
         apiKeyId: null,
         group: null,
+        groupCredentials: {},
         cachedAccount: null,
         cachedModels: [],
       } : previous),
@@ -201,9 +293,14 @@ class CloudAccountClient {
     if (Object.hasOwn(changes, "apiKey")) next.encryptedApiKey = this.encrypt(changes.apiKey);
     if (Object.hasOwn(changes, "apiKeyId")) next.apiKeyId = changes.apiKeyId || null;
     if (Object.hasOwn(changes, "group")) next.group = changes.group || null;
+    if (Object.hasOwn(changes, "groupCredentials")) next.groupCredentials = normalizeGroupCredentials(changes.groupCredentials);
     if (Object.hasOwn(changes, "cachedAccount")) next.cachedAccount = normalizeCachedAccount(changes.cachedAccount);
     if (Object.hasOwn(changes, "cachedModels")) next.cachedModels = normalizeCachedModels(changes.cachedModels);
     this.write(next);
+    // Every credential mutation funnels through here (clearCredentials,
+    // refreshSession, ensureDesktopApiKey), so this is the one choke point
+    // where callers can drop caches derived from account state.
+    this.onCredentialsChanged?.();
     return next;
   }
 
@@ -214,6 +311,7 @@ class CloudAccountClient {
       apiKey: "",
       apiKeyId: null,
       group: null,
+      groupCredentials: {},
       cachedAccount: null,
       cachedModels: [],
     });
@@ -305,8 +403,7 @@ class CloudAccountClient {
     }
   }
 
-  async gatewayRequest(pathname) {
-    const apiKey = this.apiKey();
+  async gatewayRequest(pathname, apiKey = this.apiKey()) {
     if (!apiKey) throw Object.assign(new Error("尚未配置 OnPeople Desktop API Key"), { code: "MISSING_API_KEY" });
     return this.fetchJson(`${this.apiBaseUrl()}${pathname}`, { token: apiKey });
   }
@@ -318,44 +415,153 @@ class CloudAccountClient {
       .sort((left, right) => groupPriority(left) - groupPriority(right));
   }
 
-  async ensureDesktopApiKey() {
+  async ensureDesktopApiKeyForGroup(group, { makeActive = false } = {}) {
+    const groupId = Number(group?.id || 0);
+    if (!groupId) throw new Error("模型分组无效，请刷新后重试");
+    const stored = this.read();
+    const cached = stored.groupCredentials?.[String(groupId)];
+    const cachedKey = this.decryptValue(cached?.encryptedApiKey);
+    if (cachedKey) {
+      if (makeActive) {
+        this.saveCredentials(this.serviceUrl(), {
+          apiKey: cachedKey,
+          apiKeyId: cached.apiKeyId,
+          group: { ...group },
+        });
+      }
+      return {
+        id: cached.apiKeyId,
+        key: cachedKey,
+        group_id: groupId,
+        group: { ...group },
+      };
+    }
     const listed = await this.managementRequest("/keys?page=1&page_size=100");
     const keys = Array.isArray(listed?.items) ? listed.items : (Array.isArray(listed) ? listed : []);
-    let selected = keys.find((key) => key.name === DESKTOP_KEY_NAME && key.status === "active" && key.group_id && key.key);
+    let selected = keys.find((key) => key.status === "active"
+      && Number(key.group_id) === groupId
+      && key.key
+      && String(key.name || "").startsWith(DESKTOP_KEY_NAME));
     if (!selected) {
-      const groups = await this.availableGroups();
-      const group = groups[0];
-      if (!group) {
-        throw new Error("Sub2API 账号当前没有可用分组，请先在 Sub2API 管理端为用户开放模型分组");
-      }
       selected = await this.managementRequest("/keys", {
         method: "POST",
-        body: { name: DESKTOP_KEY_NAME, group_id: group.id },
+        body: {
+          name: makeActive && !Object.keys(stored.groupCredentials || {}).length
+            ? DESKTOP_KEY_NAME
+            : `${DESKTOP_KEY_NAME} · ${group.name || group.id}`.slice(0, 60),
+          group_id: groupId,
+        },
         headers: { "idempotency-key": crypto.randomUUID() },
       });
     }
     if (!selected?.key) throw new Error("Sub2API 未返回可用 API Key");
-    const group = selected.group || (await this.availableGroups()).find((item) => item.id === selected.group_id) || null;
+    const groupCredentials = {
+      ...(this.read().groupCredentials || {}),
+      [String(groupId)]: {
+        encryptedApiKey: this.encrypt(selected.key),
+        apiKeyId: selected.id,
+        group: { ...group },
+      },
+    };
     this.saveCredentials(this.serviceUrl(), {
-      apiKey: selected.key,
-      apiKeyId: selected.id,
-      group,
+      groupCredentials,
+      ...(makeActive ? {
+        apiKey: selected.key,
+        apiKeyId: selected.id,
+        group: { ...group },
+      } : {}),
     });
-    return { ...selected, group };
+    return { ...selected, group: { ...group } };
   }
 
-  async models() {
-    try {
-      const result = await this.gatewayRequest("/models");
-      const models = Array.isArray(result?.data) ? result.data : (Array.isArray(result?.models) ? result.models : []);
-      return models.map((model) => ({
-        id: String(model.id || model.model || ""),
-        name: String(model.name || model.id || model.model || ""),
-        ownedBy: model.owned_by || null,
-      })).filter((model) => model.id);
-    } catch {
-      return [];
+  async ensureDesktopApiKey() {
+    const stored = this.read();
+    const groups = await this.availableGroups();
+    const group = groups.find((item) => Number(item.id) === Number(stored.group?.id))
+      || groups[0];
+    if (!group) {
+      throw new Error("Sub2API 账号当前没有可用分组，请先在 Sub2API 管理端为用户开放模型分组");
     }
+    return this.ensureDesktopApiKeyForGroup(group, { makeActive: true });
+  }
+
+  async models(apiKey = this.apiKey()) {
+    try {
+      const result = await this.gatewayRequest("/models", apiKey);
+      const models = Array.isArray(result?.data) ? result.data : (Array.isArray(result?.models) ? result.models : []);
+      return models.map((model) => {
+        const id = String(model.id || model.model || "");
+        return { id, name: String(model.name || id), ownedBy: model.owned_by || null };
+      }).filter((model) => model.id);
+    } catch {}
+    return [];
+  }
+
+  async listGroups() {
+    const stored = this.read();
+    const groups = await this.availableGroups();
+    return {
+      groups: groups.map((group) => ({
+        id: group.id,
+        name: String(group.name || group.id),
+        platform: group.platform || null,
+        models: parseGroupModels(group),
+      })),
+      activeGroupId: stored.group?.id ?? null,
+    };
+  }
+
+  async selectGroup(groupId) {
+    const id = Number(groupId);
+    const groups = await this.availableGroups();
+    const group = groups.find((item) => Number(item.id) === id);
+    if (!group) throw new Error("分组不可用，请刷新后重试");
+    await this.ensureDesktopApiKeyForGroup(group, { makeActive: true });
+    return this.status();
+  }
+
+  modelGroup(modelId) {
+    const id = String(modelId || "").trim();
+    const stored = this.read();
+    const model = stored.cachedModels.find((item) => item.id === id);
+    return model?.groupId
+      ? { id: model.groupId, name: model.groupName || String(model.groupId) }
+      : stored.group;
+  }
+
+  apiKeyForModel(modelId) {
+    const stored = this.read();
+    const group = this.modelGroup(modelId);
+    if (!group?.id) return this.apiKey();
+    const groupKey = this.decryptValue(stored.groupCredentials?.[String(group.id)]?.encryptedApiKey);
+    if (groupKey) return groupKey;
+    return Number(group.id) === Number(stored.group?.id) ? this.apiKey() : "";
+  }
+
+  async ensureModelAccess(modelId) {
+    const id = String(modelId || "").trim();
+    if (!id) throw new Error("请选择 OnPeople 模型");
+    let stored = this.read();
+    let model = stored.cachedModels.find((item) => item.id === id);
+    if (!model) {
+      await this.status();
+      stored = this.read();
+      model = stored.cachedModels.find((item) => item.id === id);
+    }
+    if (!model) throw new Error(`当前 OnPeople 账号未开放模型：${id}`);
+    if (!model.groupId) {
+      const apiKey = this.apiKey();
+      if (!apiKey) throw new Error("请先登录 OnPeople 账号");
+      return { baseUrl: this.apiBaseUrl(), apiKey, group: stored.group };
+    }
+    const cached = stored.groupCredentials?.[String(model.groupId)];
+    const cachedKey = this.decryptValue(cached?.encryptedApiKey);
+    if (cachedKey) return { baseUrl: this.apiBaseUrl(), apiKey: cachedKey, group: cached.group };
+    const groups = await this.availableGroups();
+    const group = groups.find((item) => Number(item.id) === Number(model.groupId));
+    if (!group) throw new Error(`模型 ${id} 所属分组当前不可用`);
+    const selected = await this.ensureDesktopApiKeyForGroup(group);
+    return { baseUrl: this.apiBaseUrl(), apiKey: selected.key, group };
   }
 
   async status() {
@@ -379,7 +585,9 @@ class CloudAccountClient {
         apiKeyId: stored.apiKeyId,
         group: stored.group,
       };
-      const models = await this.models();
+      const groups = await this.availableGroups();
+      const discoveredModels = await this.models();
+      const models = mergeModelCatalog(groups, discoveredModels);
       this.saveCredentials(serviceUrl, { cachedAccount: account, cachedModels: models });
       return {
         signedIn: true,
@@ -405,54 +613,79 @@ class CloudAccountClient {
   }
 
   async login({ email, password, serviceUrl }) {
+    // A failed login must not destroy the current session: switching the
+    // service URL wipes stored tokens, so restore the prior record on failure.
+    const previousRecord = this.read();
     this.saveCredentials(serviceUrl || this.serviceUrl());
-    const result = await this.managementRequest("/auth/login", {
-      method: "POST",
-      body: { email, password },
-      authenticated: false,
-    });
-    if (result?.requires_2fa) {
-      const error = new Error("该账号启用了两步验证，请先在 Sub2API 控制台登录，或暂时关闭两步验证后重试");
-      error.code = "TWO_FACTOR_REQUIRED";
+    try {
+      const result = await this.managementRequest("/auth/login", {
+        method: "POST",
+        body: { email, password },
+        authenticated: false,
+      });
+      if (result?.requires_2fa) {
+        const error = new Error("该账号启用了两步验证，请先在 Sub2API 控制台登录，或暂时关闭两步验证后重试");
+        error.code = "TWO_FACTOR_REQUIRED";
+        throw error;
+      }
+      if (!result?.access_token) throw new Error("Sub2API 没有返回登录令牌");
+      this.saveCredentials(this.serviceUrl(), {
+        accessToken: result.access_token,
+        refreshToken: result.refresh_token || "",
+        apiKey: "",
+        apiKeyId: null,
+        group: null,
+        groupCredentials: {},
+      });
+      await this.ensureDesktopApiKey();
+      return await this.status();
+    } catch (error) {
+      this.write(previousRecord);
+      this.onCredentialsChanged?.();
       throw error;
     }
-    if (!result?.access_token) throw new Error("Sub2API 没有返回登录令牌");
-    this.saveCredentials(this.serviceUrl(), {
-      accessToken: result.access_token,
-      refreshToken: result.refresh_token || "",
-      apiKey: "",
-      apiKeyId: null,
-      group: null,
-    });
-    await this.ensureDesktopApiKey();
-    return this.status();
   }
 
   async sendRegistrationCode({ email, serviceUrl }) {
+    const previousRecord = this.read();
     this.saveCredentials(serviceUrl || this.serviceUrl());
-    return this.managementRequest("/auth/send-verify-code", {
-      method: "POST",
-      body: { email },
-      authenticated: false,
-    });
+    try {
+      return await this.managementRequest("/auth/send-verify-code", {
+        method: "POST",
+        body: { email },
+        authenticated: false,
+      });
+    } catch (error) {
+      this.write(previousRecord);
+      this.onCredentialsChanged?.();
+      throw error;
+    }
   }
 
   async register({ email, password, verifyCode }) {
-    const result = await this.managementRequest("/auth/register", {
-      method: "POST",
-      body: { email, password, verify_code: verifyCode },
-      authenticated: false,
-    });
-    if (!result?.access_token) throw new Error("Sub2API 没有返回注册令牌");
-    this.saveCredentials(this.serviceUrl(), {
-      accessToken: result.access_token,
-      refreshToken: result.refresh_token || "",
-      apiKey: "",
-      apiKeyId: null,
-      group: null,
-    });
-    await this.ensureDesktopApiKey();
-    return this.status();
+    const previousRecord = this.read();
+    try {
+      const result = await this.managementRequest("/auth/register", {
+        method: "POST",
+        body: { email, password, verify_code: verifyCode },
+        authenticated: false,
+      });
+      if (!result?.access_token) throw new Error("Sub2API 没有返回注册令牌");
+      this.saveCredentials(this.serviceUrl(), {
+        accessToken: result.access_token,
+        refreshToken: result.refresh_token || "",
+        apiKey: "",
+        apiKeyId: null,
+        group: null,
+        groupCredentials: {},
+      });
+      await this.ensureDesktopApiKey();
+      return await this.status();
+    } catch (error) {
+      this.write(previousRecord);
+      this.onCredentialsChanged?.();
+      throw error;
+    }
   }
 
   async redeem(code) {
@@ -461,6 +694,21 @@ class CloudAccountClient {
       body: { code: String(code || "").trim() },
     });
     return { redemption: result, state: await this.status() };
+  }
+
+  async usageProfile({ period = "all" } = {}) {
+    const query = new URLSearchParams({ period: String(period || "all") });
+    return this.managementRequest(`/usage/onpeople-profile?${query}`);
+  }
+
+  async updateLeaderboardPreference({ participating, displayName } = {}) {
+    return this.managementRequest("/usage/leaderboard-preference", {
+      method: "PUT",
+      body: {
+        participating: Boolean(participating),
+        display_name: String(displayName || "").trim().slice(0, 40),
+      },
+    });
   }
 
   async logout() {
@@ -479,8 +727,8 @@ class CloudAccountClient {
     return this.status();
   }
 
-  providerCredentials() {
-    const apiKey = this.apiKey();
+  providerCredentials(modelId = "") {
+    const apiKey = this.apiKeyForModel(modelId);
     if (!apiKey) throw new Error("请先登录 Sub2API 账号，再选择 OnPeople 模型");
     return { baseUrl: this.apiBaseUrl(), apiKey };
   }

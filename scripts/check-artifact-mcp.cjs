@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-artifacts-test-"));
+const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-artifacts-outside-"));
 process.env.ONPEOPLE_WORKSPACE_ROOT = temporaryRoot;
 const artifacts = require("../src/artifact-mcp.cjs");
 
@@ -11,7 +12,9 @@ async function run() {
   try {
     const sections = [{ heading: "概述", text: "OnPeople 产物测试。", bullets: ["本地", "可验证"] }];
     await artifacts.createDocument({ output: "report", title: "测试文档", sections });
-    await artifacts.createPdf({ output: "report", title: "测试 PDF", sections });
+    const pdfResult = await artifacts.createPdf({ output: "report", title: "中文 PDF 测试", sections });
+    assert.equal(pdfResult.embeddedFont, true, "Chinese PDFs must embed a CJK-capable font");
+    assert.notEqual(pdfResult.font, "Helvetica", "Chinese PDFs must not silently fall back to Helvetica");
     await artifacts.createSpreadsheet({ output: "data", sheets: [{ name: "数据", columns: [{ header: "名称", key: "name" }, { header: "数值", key: "value" }], rows: [{ name: "A", value: 1 }] }] });
     await artifacts.createPresentation({ output: "deck", title: "测试演示", slides: [{ title: "结论", bullets: ["已创建"] }] });
     artifacts.createTemplate({ output: "template", kind: "site", template: { title: "可复用站点", sections: [{ heading: "模板章节", text: "默认内容" }] } });
@@ -34,11 +37,17 @@ async function run() {
       const inspected = await artifacts.inspectArtifact({ input: file });
       assert.equal(inspected.truncated, false);
       assert.ok(inspected.text.length > 0, `${file} should expose readable content`);
+      if (file === "report.pdf") assert.match(inspected.text, /中文 PDF 测试|概述|产物测试/, "Chinese PDF text must remain extractable");
     }
-    assert.throws(() => artifacts.safeOutput("../outside", ".txt"), /active workspace/);
+    assert.throws(() => artifacts.safeOutput("../outside", ".txt"), /工作目录/);
+    fs.writeFileSync(path.join(outsideRoot, "secret.txt"), "outside");
+    fs.symlinkSync(outsideRoot, path.join(temporaryRoot, "escape"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => artifacts.safeInput("escape/secret.txt"), /工作目录/);
+    assert.throws(() => artifacts.safeOutput("escape/result", ".pdf"), /符号链接|工作目录/);
     process.stdout.write("Artifact MCP checks passed.\n");
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
   }
 }
 

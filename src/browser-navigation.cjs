@@ -16,6 +16,15 @@ function looksLikeHost(value) {
     || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d+)?$/i.test(candidate);
 }
 
+function isLoopbackHost(value) {
+  const candidate = value.split(/[/?#]/, 1)[0];
+  const hostWithoutPort = candidate.replace(/:\d+$/, "");
+  return hostWithoutPort === "localhost"
+    || hostWithoutPort.endsWith(".localhost")
+    || hostWithoutPort === "127.0.0.1"
+    || hostWithoutPort === "[::1]";
+}
+
 function searchUrl(query, endpoint = DEFAULT_SEARCH_URL) {
   const url = new URL(endpoint);
   url.searchParams.set("q", query);
@@ -33,7 +42,9 @@ function resolveAddressInput(input, options = {}) {
   }
 
   if (!/\s/.test(value) && looksLikeHost(value)) {
-    return { url: new URL(`https://${value}`), kind: "url", input: value };
+    // Loopback dev servers rarely speak TLS — default them to http.
+    const scheme = isLoopbackHost(value) ? "http" : "https";
+    return { url: new URL(`${scheme}://${value}`), kind: "url", input: value };
   }
 
   if (/^[a-z][a-z\d+.-]*:/i.test(value)) {

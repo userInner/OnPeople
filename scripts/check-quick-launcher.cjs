@@ -11,8 +11,11 @@ try {
   const result = collectWorkspaceSuggestions(root);
   assert.deepEqual(result.files.map((item) => item.label), ["README.md", "index.html"]);
   assert.deepEqual(result.urls.map((item) => item.label), ["localhost:3000", "localhost:11434/v1"]);
-  assert.equal(resolveWorkspaceFile(root, "README.md").candidate, path.join(root, "README.md"));
-  assert.throws(() => resolveWorkspaceFile(root, "../outside.txt"), /当前工作区/);
+  assert.equal(
+    fs.realpathSync(resolveWorkspaceFile(root, "README.md").candidate),
+    fs.realpathSync(path.join(root, "README.md")),
+  );
+  assert.throws(() => resolveWorkspaceFile(root, "../outside.txt"), /当前工作(?:区|目录)/);
   assert.equal(urlCandidates("localhost:8080/test")[0].url, "http://localhost:8080/test");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

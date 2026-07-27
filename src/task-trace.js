@@ -4,6 +4,7 @@
   if (root) root.OnPeopleTrace = api;
 })(typeof window !== "undefined" ? window : null, () => {
   const SECRET_PATTERNS = [
+    [/(\b[A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY)\b\s*=\s*)[^\s]+/g, "$1[REDACTED]"],
     [/(\bauthorization\b\s*[=:]\s*)(?:Bearer\s+)?[^\s,;\]}]+/gi, "$1[REDACTED]"],
     [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]"],
     [/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|cookie|set-cookie)\b\s*[=:]\s*)([^\s,;\]}]+)/gi, "$1[REDACTED]"],
@@ -69,6 +70,40 @@
         detail: truncateTraceText(detailFrom(item)),
       };
     }
+    if (type === "collabagenttoolcall") {
+      const tool = String(item.tool || item.name || "").replace(/[ _-]/g, "").toLowerCase();
+      const receivers = item.receiverThreadIds || item.receiver_thread_ids || [];
+      const agentsStates = item.agentsStates || item.agents_states || {};
+      const summaries = {
+        spawnagent: "派发子 Agent",
+        sendinput: "向子 Agent 追加指令",
+        resumeagent: "恢复子 Agent",
+        wait: "等待子 Agent",
+        closeagent: "停止子 Agent",
+      };
+      const detail = [
+        item.prompt && `INSTRUCTION\n${item.prompt}`,
+        receivers.length && `THREADS\n${receivers.join("\n")}`,
+        Object.keys(agentsStates).length && `STATES\n${text(agentsStates)}`,
+        detailFrom(item) && `RESULT\n${text(detailFrom(item))}`,
+      ].filter(Boolean).join("\n\n");
+      return {
+        id, kind: "agent", label: "SUBAGENT", status,
+        summary: summaries[tool] || firstLine(item.tool, "协调子 Agent"),
+        detail: truncateTraceText(detail),
+      };
+    }
+    if (type === "subagentactivity") {
+      const activity = String(item.kind || item.activity || "started").toLowerCase();
+      const summaries = { started: "子 Agent 已开始", interacted: "子 Agent 正在协作", interrupted: "子 Agent 已中断" };
+      const agentPath = item.agentPath || item.agent_path || "";
+      const agentThreadId = item.agentThreadId || item.agent_thread_id || "";
+      return {
+        id, kind: "agent", label: "SUBAGENT", status: activity === "interrupted" ? "failed" : status,
+        summary: summaries[activity] || "子 Agent 状态更新",
+        detail: truncateTraceText([agentPath && `PATH\n${agentPath}`, agentThreadId && `THREAD\n${agentThreadId}`].filter(Boolean).join("\n\n")),
+      };
+    }
     if (type === "mcptoolcall" || type === "toolcall" || type === "customtoolcall") {
       const server = item.server || item.serverName || "TOOL";
       const tool = item.tool || item.name || item.method || "调用工具";
@@ -111,6 +146,7 @@
       plan: running ? "正在规划" : completed ? "已规划" : "规划失败",
       reasoning: running ? "正在思考" : completed ? "已思考" : "思考失败",
       search: running ? "正在搜索" : completed ? "已搜索" : "搜索失败",
+      agent: running ? "正在协调" : completed ? "已协调" : "协调失败",
       error: "执行失败",
       event: running ? "正在处理" : completed ? "已处理" : "处理失败",
     };

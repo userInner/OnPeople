@@ -6,6 +6,9 @@ const { activityLabel, normalizeTraceItem, redactTraceText, truncateTraceText } 
 assert.equal(redactTraceText("Authorization: Bearer abc.def.ghi"), "Authorization: [REDACTED]");
 assert.equal(redactTraceText("api_key=sk-example1234567890"), "api_key=[REDACTED]");
 assert.equal(redactTraceText('{"password":"hello"}'), '{"password":"[REDACTED]"}');
+assert.equal(redactTraceText("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz"), "GITHUB_TOKEN=[REDACTED]");
+assert.equal(redactTraceText("OPENAI_API_KEY=plain-secret-value-123456"), "OPENAI_API_KEY=[REDACTED]");
+assert.equal(redactTraceText("AWS_SECRET_ACCESS_KEY=ABCD1234EFGH5678"), "AWS_SECRET_ACCESS_KEY=[REDACTED]");
 assert.match(truncateTraceText("x".repeat(20_000), 1_000), /characters omitted/);
 
 const command = normalizeTraceItem({ id: "1", type: "commandExecution", command: "npm test", aggregatedOutput: "passed", status: "completed" });
@@ -21,6 +24,10 @@ const read = normalizeTraceItem({ type: "commandExecution", command: "/bin/zsh -
 assert.equal(read.kind, "read"); assert.equal(read.summary, "main.cjs"); assert.equal(activityLabel(read, "completed"), "已读取");
 const search = normalizeTraceItem({ type: "commandExecution", command: "rg -n \"browser_fill\" src/browser-mcp.cjs", status: "completed" });
 assert.equal(search.kind, "search"); assert.equal(search.summary, "browser_fill · browser-mcp.cjs");
+const collab = normalizeTraceItem({ type: "collabAgentToolCall", id: "a1", tool: "spawnAgent", receiverThreadIds: ["child-1"], status: "completed" });
+assert.equal(collab.kind, "agent"); assert.equal(collab.summary, "派发子 Agent"); assert.equal(activityLabel(collab, "completed"), "已协调");
+const subagent = normalizeTraceItem({ type: "subAgentActivity", id: "a2", kind: "started", agentThreadId: "child-1", agentPath: "root/child-1" }, "started");
+assert.equal(subagent.kind, "agent"); assert.equal(subagent.summary, "子 Agent 已开始"); assert.match(subagent.detail, /root\/child-1/);
 
 const root = path.resolve(__dirname, "..");
 const renderer = fs.readFileSync(path.join(root, "src/renderer.js"), "utf8");

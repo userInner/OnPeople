@@ -41,7 +41,10 @@ async function main() {
   assert.equal(request.body.prompt, "A clean launch poster");
   assert.equal(result.kind, "generated-image");
   assert.equal(result.images.length, 1);
-  assert.equal(path.dirname(result.images[0].output), path.join(temporary, ".onpeople", "generated-images"));
+  assert.equal(
+    fs.realpathSync(path.dirname(result.images[0].output)),
+    fs.realpathSync(path.join(temporary, ".onpeople", "generated-images")),
+  );
   assert.equal(fs.readFileSync(result.images[0].output).compare(png), 0);
   assert.match(tools[0].description, /ONE tool call and set count/);
 

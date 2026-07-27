@@ -1,31 +1,30 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
-const PDFDocument = require("pdfkit");
-const ExcelJS = require("exceljs");
-const PptxGenJS = require("pptxgenjs");
-const AdmZip = require("adm-zip");
-const mammoth = require("mammoth");
-const { PDFParse } = require("pdf-parse");
-const { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun } = require("docx");
+const { resolveWorkspaceInput, resolveWorkspaceOutput } = require("./workspace-boundary.cjs");
+// Document libraries load lazily inside each handler: this script is spawned as an
+// MCP child per thread, so eager requires would delay initialize/tools/list and keep
+// every format resident even when no artifact tool runs.
+let pdfkitModule, exceljsModule, pptxgenModule, admZipModule, mammothModule, pdfParseModule, docxModule;
+const getPdfDocument = () => (pdfkitModule ||= require("pdfkit"));
+const getExcelJS = () => (exceljsModule ||= require("exceljs"));
+const getPptxGenJS = () => (pptxgenModule ||= require("pptxgenjs"));
+const getAdmZip = () => (admZipModule ||= require("adm-zip"));
+const getMammoth = () => (mammothModule ||= require("mammoth"));
+const getPdfParse = () => (pdfParseModule ||= require("pdf-parse"));
+const getDocx = () => (docxModule ||= require("docx"));
 
 const workspaceRoot = path.resolve(process.env.ONPEOPLE_WORKSPACE_ROOT || process.cwd());
 
 function safeOutput(candidate, extension) {
   const requested = String(candidate || "").trim();
   if (!requested) throw new Error("output is required");
-  const resolved = path.resolve(workspaceRoot, requested);
-  if (resolved !== workspaceRoot && !resolved.startsWith(`${workspaceRoot}${path.sep}`)) throw new Error("output must stay inside the active workspace");
-  const output = resolved.toLowerCase().endsWith(extension) ? resolved : `${resolved}${extension}`;
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  return output;
+  const output = requested.toLowerCase().endsWith(extension) ? requested : `${requested}${extension}`;
+  return resolveWorkspaceOutput(workspaceRoot, output);
 }
 
 function safeInput(candidate) {
-  const resolved = path.resolve(workspaceRoot, String(candidate || ""));
-  if (resolved !== workspaceRoot && !resolved.startsWith(`${workspaceRoot}${path.sep}`)) throw new Error("input must stay inside the active workspace");
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) throw new Error("input file does not exist");
-  return resolved;
+  return resolveWorkspaceInput(workspaceRoot, candidate);
 }
 
 function sections(input = {}) {
@@ -38,6 +37,7 @@ function sections(input = {}) {
 }
 
 async function createDocument(input) {
+  const { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun } = getDocx();
   const output = safeOutput(input.output, ".docx");
   const children = [new Paragraph({ text: String(input.title || "Untitled document"), heading: HeadingLevel.TITLE })];
   for (const section of sections(input)) {
@@ -54,28 +54,70 @@ async function createDocument(input) {
   return { output, format: "docx" };
 }
 
+function pdfFontCandidates() {
+  const windowsRoot = process.env.WINDIR || process.env.SystemRoot || "C:\\Windows";
+  const packagedFont = process.resourcesPath
+    ? path.join(process.resourcesPath, "assets", "fonts", "NotoSansCJKsc-Regular.otf")
+    : null;
+  return [
+    process.env.ONPEOPLE_PDF_FONT
+      ? { file: process.env.ONPEOPLE_PDF_FONT, face: process.env.ONPEOPLE_PDF_FONT_FACE || null, name: "Custom CJK font" }
+      : null,
+    packagedFont ? { file: packagedFont, name: "Noto Sans CJK SC" } : null,
+    { file: "/System/Library/Fonts/Hiragino Sans GB.ttc", face: "HiraginoSansGB-W3", name: "Hiragino Sans GB" },
+    { file: "/System/Library/Fonts/STHeiti Medium.ttc", face: "STHeitiSC-Medium", name: "Heiti SC" },
+    { file: "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", name: "Arial Unicode MS" },
+    { file: path.join(windowsRoot, "Fonts", "msyh.ttc"), face: "MicrosoftYaHei", name: "Microsoft YaHei" },
+    { file: path.join(windowsRoot, "Fonts", "msyh.ttc"), face: "MicrosoftYaHeiUI", name: "Microsoft YaHei UI" },
+    { file: path.join(windowsRoot, "Fonts", "simhei.ttf"), name: "SimHei" },
+    { file: path.join(windowsRoot, "Fonts", "simsun.ttc"), face: "SimSun", name: "SimSun" },
+    { file: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", face: "NotoSansCJKsc-Regular", name: "Noto Sans CJK SC" },
+    { file: "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf", name: "Noto Sans CJK SC" },
+    { file: "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", face: "WenQuanYiZenHei", name: "WenQuanYi Zen Hei" },
+  ].filter(Boolean);
+}
+
 function pdfFont(document) {
-  const candidates = [
-    ["/System/Library/Fonts/PingFang.ttc", "PingFang SC"],
-    ["/System/Library/Fonts/STHeiti Light.ttc", "STHeiti Light"],
-  ];
-  for (const [fontPath, family] of candidates) {
-    if (!fs.existsSync(fontPath)) continue;
-    try { document.font(fontPath, family); return; } catch {}
+  for (const candidate of pdfFontCandidates()) {
+    if (!fs.existsSync(candidate.file)) continue;
+    try {
+      if (candidate.face) document.font(candidate.file, candidate.face);
+      else document.font(candidate.file);
+      return { ...candidate, supportsCjk: true };
+    } catch {}
   }
   document.font("Helvetica");
+  return { name: "Helvetica", supportsCjk: false };
+}
+
+function containsCjk(value) {
+  return /[\u2e80-\u2eff\u3000-\u303f\u3040-\u30ff\u3100-\u312f\u31a0-\u31bf\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(String(value || ""));
 }
 
 async function createPdf(input) {
   const output = safeOutput(input.output, ".pdf");
+  const title = String(input.title || "Untitled document");
+  const contentSections = sections(input);
+  const needsCjk = containsCjk([
+    title,
+    ...contentSections.flatMap((section) => [section.heading, section.text, ...section.bullets]),
+  ].join("\n"));
+  let fontInfo = null;
+  const PDFDocument = getPdfDocument();
   await new Promise((resolve, reject) => {
-    const document = new PDFDocument({ size: "A4", margin: 54, info: { Title: String(input.title || "OnPeople document") } });
+    const document = new PDFDocument({ size: "A4", margin: 54, info: { Title: title || "OnPeople document" } });
+    fontInfo = pdfFont(document);
+    if (needsCjk && !fontInfo.supportsCjk) {
+      document.end();
+      reject(new Error("未找到可嵌入的中文字体。请安装 Microsoft YaHei、Hiragino Sans GB 或 Noto Sans CJK，或通过 ONPEOPLE_PDF_FONT 指定字体文件。"));
+      return;
+    }
     const stream = fs.createWriteStream(output, { mode: 0o600 });
     stream.on("finish", resolve); stream.on("error", reject); document.on("error", reject);
-    document.pipe(stream); pdfFont(document);
-    document.fontSize(22).fillColor("#20201e").text(String(input.title || "Untitled document"));
+    document.pipe(stream);
+    document.fontSize(22).fillColor("#20201e").text(title);
     document.moveDown(0.8);
-    for (const section of sections(input)) {
+    for (const section of contentSections) {
       if (section.heading) document.fontSize(15).fillColor("#20201e").text(section.heading).moveDown(0.35);
       if (section.text) document.fontSize(10.5).fillColor("#3f3f3b").text(section.text, { lineGap: 4 }).moveDown(0.7);
       for (const bullet of section.bullets) document.fontSize(10.5).text(`•  ${bullet}`, { indent: 8, lineGap: 3 });
@@ -83,12 +125,12 @@ async function createPdf(input) {
     }
     document.end();
   });
-  return { output, format: "pdf" };
+  return { output, format: "pdf", font: fontInfo.name, embeddedFont: fontInfo.supportsCjk };
 }
 
 async function createSpreadsheet(input) {
   const output = safeOutput(input.output, ".xlsx");
-  const workbook = new ExcelJS.Workbook();
+  const workbook = new (getExcelJS()).Workbook();
   workbook.creator = "OnPeople";
   const sheets = Array.isArray(input.sheets) && input.sheets.length ? input.sheets.slice(0, 50) : [{ name: "Sheet1", rows: [] }];
   for (const item of sheets) {
@@ -109,6 +151,7 @@ async function createSpreadsheet(input) {
 
 async function createPresentation(input) {
   const output = safeOutput(input.output, ".pptx");
+  const PptxGenJS = getPptxGenJS();
   const presentation = new PptxGenJS();
   presentation.layout = "LAYOUT_WIDE";
   presentation.author = "OnPeople";
@@ -200,17 +243,38 @@ function decodeXml(value) {
   return String(value).replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&").replaceAll("&quot;", '"').replaceAll("&#39;", "'");
 }
 
+function inspectArchiveSafety(target) {
+  const AdmZip = getAdmZip();
+  const archive = new AdmZip(target);
+  const entries = archive.getEntries();
+  if (entries.length > 10_000) throw new Error("artifact archive contains too many entries");
+  let inflatedBytes = 0;
+  for (const entry of entries) {
+    const size = Number(entry.header?.size || 0);
+    if (size > 64 * 1024 * 1024) throw new Error("artifact archive contains an oversized entry");
+    inflatedBytes += size;
+    if (inflatedBytes > 256 * 1024 * 1024) throw new Error("artifact archive expands beyond the 256 MB inspection limit");
+  }
+  return { archive, entries };
+}
+
 async function inspectArtifact(input) {
   const target = safeInput(input.input);
   const extension = path.extname(target).toLowerCase();
+  const size = fs.statSync(target).size;
+  if (size > 64 * 1024 * 1024) throw new Error("artifact exceeds the 64 MB inspection limit");
   const limit = Math.max(1_000, Math.min(100_000, Number(input.maxCharacters) || 30_000));
   let text = "";
   let metadata = {};
+  const archiveSafety = new Set([".docx", ".xlsx", ".pptx"]).has(extension)
+    ? inspectArchiveSafety(target)
+    : null;
   if (extension === ".docx") {
-    const result = await mammoth.extractRawText({ path: target });
+    const result = await getMammoth().extractRawText({ path: target });
     text = result.value;
     metadata = { warnings: result.messages.length };
   } else if (extension === ".pdf") {
+    const { PDFParse } = getPdfParse();
     const parser = new PDFParse({ data: fs.readFileSync(target) });
     try {
       const result = await parser.getText();
@@ -218,7 +282,7 @@ async function inspectArtifact(input) {
       metadata = { pages: result.total };
     } finally { await parser.destroy(); }
   } else if (extension === ".xlsx") {
-    const workbook = new ExcelJS.Workbook();
+    const workbook = new (getExcelJS()).Workbook();
     await workbook.xlsx.readFile(target);
     const summaries = [];
     for (const sheet of workbook.worksheets.slice(0, 50)) {
@@ -229,8 +293,8 @@ async function inspectArtifact(input) {
     text = JSON.stringify(summaries, null, 2);
     metadata = { sheets: workbook.worksheets.length };
   } else if (extension === ".pptx") {
-    const archive = new AdmZip(target);
-    const slides = archive.getEntries().filter((entry) => /^ppt\/slides\/slide\d+\.xml$/.test(entry.entryName)).sort((a, b) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true }));
+    const { entries } = archiveSafety;
+    const slides = entries.filter((entry) => /^ppt\/slides\/slide\d+\.xml$/.test(entry.entryName)).sort((a, b) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true }));
     text = slides.map((entry, index) => {
       const xml = entry.getData().toString("utf8");
       const values = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((match) => decodeXml(match[1]));
@@ -240,7 +304,7 @@ async function inspectArtifact(input) {
   } else if (new Set([".html", ".htm", ".json", ".md", ".txt", ".csv", ".tsv"]).has(extension)) {
     text = fs.readFileSync(target, "utf8");
   } else throw new Error(`unsupported artifact format: ${extension || "unknown"}`);
-  return { input: target, format: extension.slice(1), size: fs.statSync(target).size, metadata, text: text.slice(0, limit), truncated: text.length > limit };
+  return { input: target, format: extension.slice(1), size, metadata, text: text.slice(0, limit), truncated: text.length > limit };
 }
 
 const definitions = [
@@ -282,7 +346,14 @@ async function handle(message) {
 
 if (require.main === module) {
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-  input.on("line", (line) => { if (line.trim()) void handle(JSON.parse(line)); });
+  input.on("line", (line) => {
+    if (!line.trim()) return;
+    try {
+      void handle(JSON.parse(line));
+    } catch (error) {
+      process.stderr.write(`Invalid MCP message: ${error.message}\n`);
+    }
+  });
 }
 
 module.exports = { applyTemplate, callTool, createDocument, createPdf, createPresentation, createSite, createSpreadsheet, createTemplate, createVisualization, definitions, inspectArtifact, mergeTemplate, safeInput, safeOutput };

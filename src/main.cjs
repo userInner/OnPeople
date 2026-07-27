@@ -1,6 +1,7 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, webContents } = require("electron");
-const { spawn, execFile, execFileSync } = require("node:child_process");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, webContents } = require("electron");
+const { spawn, execFile } = require("node:child_process");
 const { EventEmitter } = require("node:events");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const http = require("node:http");
 const path = require("node:path");
 const os = require("node:os");
@@ -15,6 +16,7 @@ const { ThreadContextRegistry } = require("./thread-contexts.cjs");
 const { ThreadRecoveryCoordinator } = require("./thread-recovery.cjs");
 const { AGENT_BEHAVIOR_CONTRACT } = require("./agent-instructions.cjs");
 const { BrowserSessionManager } = require("./browser-session-manager.cjs");
+const { BrowserTargetRegistry } = require("./browser-target-registry.cjs");
 const { BrowserProfileImporter } = require("./browser-profile-importer.cjs");
 const { BrowserCredentialVault } = require("./browser-credential-vault.cjs");
 const { ChromiumProfileImporter } = require("./chromium-profile-importer.cjs");
@@ -29,6 +31,7 @@ const { listProjectDirectory, searchProjectFiles } = require("./project-files.cj
 const { buildBrowserFillScript } = require("./browser-fill.cjs");
 const { formatReviewPrompt } = require("./review-comments.cjs");
 const { AgentProfileStore } = require("./agent-profiles.cjs");
+const { AgentTaskBoardStore } = require("./agent-task-board.cjs");
 const { inspectEffectiveConfig } = require("./effective-config.cjs");
 const { LocalMemoryStore } = require("./local-memory.cjs");
 const { UsageLedger } = require("./usage-ledger.cjs");
@@ -36,8 +39,10 @@ const { SecretStore } = require("./secret-store.cjs");
 const { PetStateStore } = require("./pet-state.cjs");
 const { CloudAccountClient } = require("./cloud-account.cjs");
 const { AppUpdateService } = require("./app-updater.cjs");
-const { autoUpdater } = require("electron-updater");
+const { createCodexMultiAgentAdapter } = require("./codex-multi-agent-adapter.cjs");
 const { imageGenerationCapability } = require("./provider-capabilities.cjs");
+const { isWithin, resolveWorkspaceInput } = require("./workspace-boundary.cjs");
+const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 const { buildSkillInputItems, flattenSkillsResponse } = require("./skill-runtime.cjs");
 const { watchSkillRoot } = require("./skill-watcher.cjs");
 const {
@@ -55,13 +60,35 @@ const { version: APP_VERSION } = require("../package.json");
 // Keep the original data directory as a compatibility invariant. Electron
 // derives userData from package.json name by default, which made dev builds and
 // renamed packages appear to lose sessions after an upgrade.
-const STABLE_USER_DATA_PATH = path.join(app.getPath("appData"), "internal-agent-workbench");
+const STABLE_USER_DATA_PATH = process.env.ONPEOPLE_TEST_USER_DATA
+  ? path.resolve(process.env.ONPEOPLE_TEST_USER_DATA)
+  : path.join(app.getPath("appData"), "internal-agent-workbench");
 if (app.getPath("userData") !== STABLE_USER_DATA_PATH) app.setPath("userData", STABLE_USER_DATA_PATH);
 
 const EMBEDDED_BROWSER_PARTITION = "persist:internal-agent-browser";
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const APP_ICON_PNG = path.join(APP_ROOT, "assets", "onpeople-app-icon.png");
+const PDFJS_ROOT = path.dirname(require.resolve("pdfjs-dist/package.json"));
+const PREVIEWABLE_EXTENSIONS = new Set([".html", ".htm", ".pdf", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"]);
+const PREVIEW_MIME_TYPES = Object.freeze({
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".pdf": "application/pdf",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+});
 const BUILTIN_PET_SKINS = Object.freeze([
   { id: "onpeople", name: "经典水獭", subtitle: "OnPeople 原生", src: "../assets/onpeople-app-icon.png", builtIn: true },
   { id: "arthur", name: "亚瑟 Cosplay", subtitle: "非官方同人灵感", src: "../assets/pets/arthur.png", builtIn: true },
@@ -73,6 +100,14 @@ const EXTERNAL_RUNTIME_ROOT = path.join(process.resourcesPath, ".embedded-runtim
 const EMBEDDED_RUNTIME_ROOT = fs.existsSync(EXTERNAL_RUNTIME_ROOT)
   ? EXTERNAL_RUNTIME_ROOT
   : path.join(APP_ROOT, ".embedded-runtime");
+function embeddedCodexVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(EMBEDDED_RUNTIME_ROOT, "manifest.json"), "utf8"))?.components?.codex?.version || "";
+  } catch {
+    return "";
+  }
+}
+const codexMultiAgent = createCodexMultiAgentAdapter({ version: embeddedCodexVersion() });
 const MCP_SCRIPT = path.join(__dirname, "browser-mcp.cjs");
 const ARTIFACT_MCP_SCRIPT = path.join(__dirname, "artifact-mcp.cjs");
 const IMAGE_GENERATION_MCP_SCRIPT = path.join(__dirname, "image-generation-mcp.cjs");
@@ -172,38 +207,43 @@ function findCuaDriverApp() {
   return resolveCuaDriverApp({ runtimeRoot: EMBEDDED_RUNTIME_ROOT });
 }
 
-function inspectComputerUse(binary) {
+function computerUseReadyStatus(rawPermissions) {
+  const permissions = JSON.parse(rawPermissions);
+  const granted = process.platform !== "darwin"
+    || Boolean(permissions.accessibility && permissions.screen_recording);
+  return {
+    available: true,
+    running: true,
+    permissions: process.platform === "darwin" ? {
+      accessibility: Boolean(permissions.accessibility),
+      screenRecording: Boolean(permissions.screen_recording),
+    } : null,
+    message: granted ? "Computer Use 已就绪" : "需要系统辅助功能与录屏权限",
+  };
+}
+
+function computerUseErrorStatus(error) {
+  return {
+    available: true,
+    running: false,
+    permissions: null,
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+async function inspectComputerUseAsync(binary) {
   if (!binary) return { available: false, running: false, permissions: null, message: "未安装 cua-driver" };
   try {
-    execFileSync(binary, ["status"], { encoding: "utf8", timeout: 5_000 });
-    const raw = execFileSync(binary, ["check_permissions", JSON.stringify({ prompt: false })], {
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    const permissions = JSON.parse(raw);
-    const granted = process.platform !== "darwin"
-      || Boolean(permissions.accessibility && permissions.screen_recording);
-    return {
-      available: true,
-      running: true,
-      permissions: process.platform === "darwin" ? {
-        accessibility: Boolean(permissions.accessibility),
-        screenRecording: Boolean(permissions.screen_recording),
-      } : null,
-      message: granted ? "Computer Use 已就绪" : "需要系统辅助功能与录屏权限",
-    };
+    await execFileAsync(binary, ["status"], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(binary, ["check_permissions", JSON.stringify({ prompt: false })], { timeout: 10_000 });
+    return computerUseReadyStatus(stdout);
   } catch (error) {
-    return {
-      available: true,
-      running: false,
-      permissions: null,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    return computerUseErrorStatus(error);
   }
 }
 
 async function prepareComputerUse(binary, driverApp) {
-  let status = inspectComputerUse(binary);
+  let status = await inspectComputerUseAsync(binary);
   if (!binary || status.running) return status;
   try {
     if (process.platform === "darwin" && !driverApp) return status;
@@ -220,7 +260,7 @@ async function prepareComputerUse(binary, driverApp) {
   }
   for (let attempt = 0; attempt < 12; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 400));
-    status = inspectComputerUse(binary);
+    status = await inspectComputerUseAsync(binary);
     if (status.running) return status;
   }
   return status;
@@ -279,6 +319,20 @@ class AppServerClient extends EventEmitter {
         pending.reject(new Error("Codex App Server exited"));
       }
       this.pending.clear();
+    });
+    // An async spawn failure (binary removed, EACCES) or a stdin write racing
+    // process death emits "error" — without listeners it crashes the app.
+    this.process.on("error", (error) => {
+      this.ready = false;
+      if (!this.intentionalStop) this.emit("event", { type: "server-exit", code: null, signal: null, error: error.message });
+      for (const pending of this.pending.values()) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+      this.pending.clear();
+    });
+    this.process.stdin.on("error", (error) => {
+      this.emit("event", { type: "server-log", text: `App Server stdin error: ${error.message}` });
     });
     this.process.stderr.on("data", (chunk) => {
       const text = chunk.toString().trim();
@@ -408,7 +462,8 @@ class AppServerClient extends EventEmitter {
 
 class EmbeddedBrowserBridge {
   constructor() {
-    this.webContents = null;
+    this.targets = new BrowserTargetRegistry();
+    this.routeContext = new AsyncLocalStorage();
     this.allowedHosts = new Set(["localhost", "127.0.0.1", "::1"]);
     this.token = crypto.randomBytes(32).toString("hex");
     this.server = null;
@@ -418,6 +473,9 @@ class EmbeddedBrowserBridge {
     this.developerTarget = null;
     this.developerMessageHandler = null;
     this.annotationsFile = null;
+    this.previewEntries = new Map();
+    this.previewWatchers = new Map();
+    this.workspaceRoots = new Map();
   }
 
   async start() {
@@ -432,20 +490,66 @@ class EmbeddedBrowserBridge {
 
   stop() {
     this.detachDeveloperMode();
+    for (const watcher of this.previewWatchers.values()) watcher.close();
+    this.previewWatchers.clear();
+    this.previewEntries.clear();
     this.server?.close();
   }
 
-  attach(target) {
+  attach(target, routeId, ownerWebContentsId) {
     if (!target || target.isDestroyed()) throw new Error("Embedded browser guest is unavailable");
-    this.webContents = target;
+    return this.targets.attach(routeId, target, ownerWebContentsId);
   }
 
-  target() {
-    if (!this.webContents || this.webContents.isDestroyed()) throw new Error("Embedded browser is not ready");
-    return this.webContents;
+  bindRoute(aliasId, routeId) {
+    return this.targets.bind(aliasId, routeId);
+  }
+
+  setWorkspaceRoot(routeId, root) {
+    const route = String(routeId || "").trim();
+    if (!route || !root) return;
+    const resolved = path.resolve(String(root));
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return;
+    this.workspaceRoots.set(route, fs.realpathSync(resolved));
+  }
+
+  detachOwner(ownerWebContentsId) {
+    const routes = this.targets.detachOwner(ownerWebContentsId);
+    for (const route of routes) this.clearPreviewRoute(route);
+  }
+
+  withRoute(routeId, callback) {
+    return this.routeContext.run({ routeId: String(routeId || "") }, callback);
+  }
+
+  currentRouteId() {
+    return String(this.routeContext.getStore()?.routeId || "").trim();
+  }
+
+  target(routeId = null) {
+    const requested = String(routeId || this.currentRouteId()).trim();
+    if (!requested) throw new Error("浏览器任务尚未绑定");
+    const record = this.targets.get(requested);
+    if (!record) throw new Error(`任务浏览器页面尚未就绪：${requested}`);
+    return record.target;
+  }
+
+  sendToCurrentRoute(channel, value = {}) {
+    const record = this.targets.get(this.currentRouteId());
+    if (!record) return;
+    const owner = webContents.fromId(record.ownerWebContentsId);
+    if (owner && !owner.isDestroyed()) owner.send(channel, { ...value, routeId: record.routeId });
   }
 
   async handleHttp(request, response) {
+    if (request.method === "GET" && request.url?.startsWith("/preview-assets/")) {
+      this.servePreviewAsset(request, response);
+      return;
+    }
+    if (request.method === "GET" && request.url?.startsWith("/preview/")) {
+      await this.servePreview(request, response);
+      return;
+    }
     response.setHeader("content-type", "application/json");
     if (request.method !== "POST" || request.url !== "/command") {
       response.statusCode = 404;
@@ -459,7 +563,9 @@ class EmbeddedBrowserBridge {
     }
     try {
       const body = await this.readBody(request);
-      const value = await this.execute(body.action, body.args || {});
+      const routeId = String(request.headers["x-internal-browser-route-id"] || body.routeId || "").trim();
+      if (!routeId) throw new Error("Browser command is missing its task route");
+      const value = await this.withRoute(routeId, () => this.execute(body.action, body.args || {}));
       response.end(JSON.stringify({ ok: true, value }));
     } catch (error) {
       response.statusCode = 400;
@@ -502,6 +608,10 @@ class EmbeddedBrowserBridge {
 
   async openWorkspaceFile(cwd, filePath) {
     const { root, candidate } = resolveWorkspaceFile(cwd, filePath);
+    const extension = path.extname(candidate).toLowerCase();
+    if (PREVIEWABLE_EXTENSIONS.has(extension)) {
+      return this.openWorkspacePreview(root, candidate);
+    }
     const relative = path.relative(root, candidate);
     const escapeHtml = (value) => String(value)
       .replaceAll("&", "&amp;")
@@ -513,6 +623,296 @@ class EmbeddedBrowserBridge {
     const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f7f7f5;color:#252522;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.bar{position:sticky;top:0;padding:14px 22px;border-bottom:1px solid #deded9;background:rgba(255,255,255,.94);backdrop-filter:blur(12px)}.bar strong,.bar span{display:block}.bar strong{font-size:14px}.bar span{margin-top:4px;color:#898983;font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.page{max-width:940px;margin:24px auto;padding:0 22px 60px}pre{margin:0;padding:24px;border:1px solid #deded9;border-radius:12px;background:#fff;box-shadow:0 8px 30px rgba(26,26,23,.04);font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><header class="bar"><strong>${title}</strong><span>${escapeHtml(relative)}</span></header><main class="page"><pre>${escapeHtml(content)}</pre></main></body></html>`;
     await loadWebContentsUrl(this.target(), `data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     return { name: path.basename(candidate), path: relative };
+  }
+
+  previewMimeType(file) {
+    return PREVIEW_MIME_TYPES[path.extname(file).toLowerCase()] || "application/octet-stream";
+  }
+
+  servePreviewAsset(request, response) {
+    try {
+      const parsed = new URL(request.url, this.url);
+      const relative = decodeURIComponent(parsed.pathname.slice("/preview-assets/".length));
+      const candidates = {
+        "pdf.mjs": path.join(PDFJS_ROOT, "build", "pdf.mjs"),
+        "pdf.worker.mjs": path.join(PDFJS_ROOT, "build", "pdf.worker.mjs"),
+        "pdf_viewer.mjs": path.join(PDFJS_ROOT, "web", "pdf_viewer.mjs"),
+        "pdf_viewer.css": path.join(PDFJS_ROOT, "web", "pdf_viewer.css"),
+      };
+      let asset = candidates[relative];
+      if (!asset && relative.startsWith("images/")) {
+        const imageRoot = path.join(PDFJS_ROOT, "web", "images");
+        const requested = path.resolve(imageRoot, relative.slice("images/".length));
+        const contained = path.relative(imageRoot, requested);
+        if (!contained.startsWith("..") && !path.isAbsolute(contained)) asset = requested;
+      }
+      if (!asset || !fs.existsSync(asset) || !fs.statSync(asset).isFile()) throw new Error("PDF 预览资源不存在");
+      response.statusCode = 200;
+      response.setHeader("content-type", this.previewMimeType(asset));
+      response.setHeader("cache-control", "public, max-age=86400");
+      response.setHeader("x-content-type-options", "nosniff");
+      fs.createReadStream(asset).pipe(response);
+    } catch (error) {
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(error.message);
+    }
+  }
+
+  pdfPreviewHtml(entry, rawUrl) {
+    const escapeHtml = (value) => String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+    const fileName = path.basename(entry.file);
+    const displayName = fileName.replace(/\.pdf$/i, "");
+    const encodedRawUrl = JSON.stringify(rawUrl).replaceAll("<", "\\u003c");
+    const encodedFileName = JSON.stringify(fileName).replaceAll("<", "\\u003c");
+    return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(fileName)}</title>
+  <link rel="stylesheet" href="/preview-assets/pdf_viewer.css">
+  <style>
+    :root { color: #202124; background: #f5f6f7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    button, input, a { font: inherit; }
+    button, a { -webkit-app-region: no-drag; }
+    .document-shell { height: 100%; display: grid; grid-template-rows: 54px minmax(0, 1fr); background: #f5f6f7; }
+    .document-toolbar {
+      position: relative; z-index: 10; display: grid; grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
+      align-items: center; gap: 16px; padding: 0 14px 0 16px; border-bottom: 1px solid #e5e7ea;
+      background: rgba(255,255,255,.96); box-shadow: 0 1px 0 rgba(21,23,26,.02); backdrop-filter: blur(14px);
+    }
+    .document-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
+    .pdf-mark { width: 25px; height: 28px; display: grid; place-items: center; border-radius: 6px; background: #ed5b58; color: #fff; font: 700 7px/1 "SFMono-Regular", Consolas, monospace; box-shadow: inset 0 0 0 1px rgba(95,11,11,.08); }
+    .document-name { min-width: 0; }
+    .document-name strong { display: block; overflow: hidden; color: #25272a; font-size: 13px; font-weight: 590; letter-spacing: -.015em; text-overflow: ellipsis; white-space: nowrap; }
+    .document-name span { display: block; margin-top: 2px; color: #989da4; font-size: 9px; }
+    .document-pages, .document-actions { display: flex; align-items: center; gap: 5px; }
+    .document-pages { justify-content: center; }
+    .document-actions { justify-content: flex-end; }
+    .tool-button, .download-button {
+      height: 30px; min-width: 30px; display: inline-grid; place-items: center; padding: 0 8px; border: 0;
+      border-radius: 8px; background: transparent; color: #6d737a; text-decoration: none; cursor: default;
+    }
+    .tool-button:hover, .download-button:hover { background: #f0f2f4; color: #25282c; }
+    .tool-button:focus-visible, .download-button:focus-visible, .page-input:focus-visible { outline: 2px solid #7e9fd8; outline-offset: 1px; }
+    .tool-button:disabled { opacity: .32; }
+    .tool-button svg, .download-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .page-input { width: 34px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #27292c; font-size: 12px; text-align: center; }
+    .page-input:hover, .page-input:focus { border-color: #d9dde1; background: #fff; outline: none; }
+    .page-total { min-width: 24px; color: #72777e; font-size: 11px; }
+    .zoom-value { min-width: 42px; color: #656b72; font-size: 10px; text-align: center; }
+    .primary-action { gap: 7px; padding: 0 11px; border: 1px solid #d9dde1; background: #fff; color: #303338; font-size: 10px; font-weight: 550; }
+    #viewerContainer { position: absolute; inset: 54px 0 0; overflow: auto; background: #f3f4f5; }
+    #viewer.pdfViewer { padding: 34px 18px 64px; }
+    #viewer.pdfViewer .page { margin: 0 auto 24px; border: 1px solid #e1e3e5; box-shadow: 0 2px 8px rgba(24,28,32,.08), 0 18px 48px rgba(24,28,32,.035); }
+    .loading-state { position: fixed; z-index: 5; inset: 54px 0 0; display: grid; place-items: center; background: #f3f4f5; color: #8b9096; font-size: 11px; }
+    .loading-state[hidden] { display: none; }
+    .loading-state::before { width: 18px; height: 18px; margin: 0 auto 10px; display: block; content: ""; border: 2px solid #d6dade; border-top-color: #5f6c78; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 580px) {
+      .document-toolbar { grid-template-columns: minmax(90px,1fr) auto auto; gap: 5px; padding-right: 8px; }
+      .document-pages { gap: 0; }
+      .document-pages .tool-button { display: none; }
+      .page-input { width: 24px; }
+      .page-total { min-width: 20px; }
+      .document-name span, .zoom-value { display: none; }
+      .document-actions { gap: 1px; }
+      .document-actions #print { display: none; }
+      .primary-action span { display: none; }
+    }
+    @media print {
+      .document-toolbar, .loading-state { display: none !important; }
+      #viewerContainer { position: static; overflow: visible; background: #fff; }
+      #viewer.pdfViewer { padding: 0; }
+      #viewer.pdfViewer .page { margin: 0; border: 0; box-shadow: none; break-after: page; }
+    }
+  </style>
+</head>
+<body>
+  <main class="document-shell">
+    <header class="document-toolbar">
+      <div class="document-title">
+        <button id="documentBack" class="tool-button document-back" type="button" aria-label="返回浏览器"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+        <span class="pdf-mark">PDF</span>
+        <div class="document-name"><strong>${escapeHtml(displayName)}</strong><span>PDF · 实时预览</span></div>
+      </div>
+      <div class="document-pages" aria-label="页码">
+        <button id="previous" class="tool-button" type="button" aria-label="上一页"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+        <input id="pageNumber" class="page-input" inputmode="numeric" value="1" aria-label="当前页">
+        <span id="pageTotal" class="page-total">/ 1</span>
+        <button id="next" class="tool-button" type="button" aria-label="下一页"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="document-actions">
+        <button id="zoomOut" class="tool-button" type="button" aria-label="缩小"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+        <span id="zoomValue" class="zoom-value">适合宽度</span>
+        <button id="zoomIn" class="tool-button" type="button" aria-label="放大"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+        <button id="print" class="tool-button" type="button" aria-label="打印"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v7H6z"/></svg></button>
+        <a id="download" class="download-button primary-action" href="#" download="${escapeHtml(fileName)}" aria-label="下载 PDF"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 21h16"/></svg><span>下载</span></a>
+      </div>
+    </header>
+    <div id="viewerContainer"><div id="viewer" class="pdfViewer"></div></div>
+    <div id="loading" class="loading-state">正在打开文档…</div>
+  </main>
+  <script type="module">
+    import * as pdfjsLib from "/preview-assets/pdf.mjs";
+    import { EventBus, PDFLinkService, PDFViewer } from "/preview-assets/pdf_viewer.mjs";
+    const rawUrl = ${encodedRawUrl};
+    const fileName = ${encodedFileName};
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/preview-assets/pdf.worker.mjs";
+    const eventBus = new EventBus();
+    const linkService = new PDFLinkService({ eventBus });
+    const viewer = new PDFViewer({
+      container: document.getElementById("viewerContainer"),
+      viewer: document.getElementById("viewer"),
+      eventBus,
+      linkService,
+      textLayerMode: 1,
+      annotationMode: 2,
+    });
+    linkService.setViewer(viewer);
+    const pageNumber = document.getElementById("pageNumber");
+    const pageTotal = document.getElementById("pageTotal");
+    const zoomValue = document.getElementById("zoomValue");
+    const previous = document.getElementById("previous");
+    const next = document.getElementById("next");
+    const loading = document.getElementById("loading");
+    document.getElementById("download").href = rawUrl;
+    document.getElementById("documentBack").addEventListener("click", () => history.back());
+    const updatePageControls = () => {
+      pageNumber.value = String(viewer.currentPageNumber || 1);
+      previous.disabled = viewer.currentPageNumber <= 1;
+      next.disabled = viewer.currentPageNumber >= viewer.pagesCount;
+    };
+    eventBus.on("pagesinit", () => {
+      viewer.currentScaleValue = "page-width";
+      pageTotal.textContent = "/ " + viewer.pagesCount;
+      zoomValue.textContent = "适合宽度";
+      updatePageControls();
+      loading.hidden = true;
+    });
+    eventBus.on("pagechanging", updatePageControls);
+    eventBus.on("scalechanging", ({ scale, presetValue }) => {
+      zoomValue.textContent = presetValue === "page-width" ? "适合宽度" : Math.round(scale * 100) + "%";
+    });
+    previous.addEventListener("click", () => { if (viewer.currentPageNumber > 1) viewer.currentPageNumber -= 1; });
+    next.addEventListener("click", () => { if (viewer.currentPageNumber < viewer.pagesCount) viewer.currentPageNumber += 1; });
+    pageNumber.addEventListener("change", () => {
+      const value = Math.max(1, Math.min(viewer.pagesCount, Number.parseInt(pageNumber.value, 10) || 1));
+      viewer.currentPageNumber = value;
+      updatePageControls();
+    });
+    document.getElementById("zoomOut").addEventListener("click", () => viewer.decreaseScale());
+    document.getElementById("zoomIn").addEventListener("click", () => viewer.increaseScale());
+    document.getElementById("print").addEventListener("click", () => window.print());
+    try {
+      const task = pdfjsLib.getDocument({ url: rawUrl, disableRange: false, disableStream: false });
+      const documentProxy = await task.promise;
+      viewer.setDocument(documentProxy);
+      linkService.setDocument(documentProxy, null);
+    } catch (error) {
+      loading.textContent = "无法打开 PDF：" + (error?.message || String(error));
+      loading.classList.add("error");
+    }
+  </script>
+</body>
+</html>`;
+  }
+
+  clearPreviewWatcher(routeId) {
+    const route = String(routeId || "");
+    const watcher = this.previewWatchers.get(route);
+    if (watcher) {
+      clearTimeout(watcher._debounceTimer);
+      watcher.close();
+    }
+    this.previewWatchers.delete(route);
+  }
+
+  clearPreviewRoute(routeId) {
+    const route = String(routeId || "");
+    this.clearPreviewWatcher(route);
+    for (const [id, entry] of this.previewEntries) {
+      if (entry.routeId === route) this.previewEntries.delete(id);
+    }
+  }
+
+  watchWorkspacePreview(routeId, entry) {
+    this.clearPreviewWatcher(routeId);
+    let timer = null;
+    try {
+      const watcher = fs.watch(path.dirname(entry.file), { recursive: process.platform !== "linux" }, () => {
+        clearTimeout(timer);
+        watcher._debounceTimer = timer = setTimeout(() => {
+          const record = this.targets.get(routeId);
+          if (!record || !record.target.getURL().startsWith(entry.url)) return;
+          void record.target.reload();
+          const owner = webContents.fromId(record.ownerWebContentsId);
+          if (owner && !owner.isDestroyed()) owner.send("browser:preview-updated", { routeId, path: entry.relative });
+        }, 180);
+      });
+      watcher.on("error", () => this.clearPreviewWatcher(routeId));
+      this.previewWatchers.set(routeId, watcher);
+    } catch {}
+  }
+
+  async openWorkspacePreview(root, candidate) {
+    const routeId = this.currentRouteId();
+    if (!routeId) throw new Error("浏览器任务尚未绑定");
+    for (const [id, entry] of this.previewEntries) {
+      if (entry.routeId === routeId) this.previewEntries.delete(id);
+    }
+    const previewId = crypto.randomUUID();
+    const relative = path.relative(root, candidate).split(path.sep).join("/");
+    const entry = { id: previewId, root, file: candidate, relative, routeId };
+    entry.url = `${this.url}/preview/${previewId}/${relative.split("/").map(encodeURIComponent).join("/")}`;
+    this.previewEntries.set(previewId, entry);
+    const navigation = await loadWebContentsUrl(this.target(), entry.url);
+    this.watchWorkspacePreview(routeId, entry);
+    return {
+      name: path.basename(candidate),
+      path: relative,
+      url: navigation.url,
+      preview: true,
+      live: true,
+    };
+  }
+
+  async servePreview(request, response) {
+    try {
+      const parsed = new URL(request.url, this.url);
+      const [, , previewId, ...segments] = parsed.pathname.split("/");
+      const entry = this.previewEntries.get(previewId);
+      if (!entry) throw new Error("预览已过期");
+      const requested = path.resolve(entry.root, ...segments.map((segment) => decodeURIComponent(segment)));
+      const rootRelative = path.relative(entry.root, requested);
+      if (rootRelative.startsWith("..") || path.isAbsolute(rootRelative)) throw new Error("预览路径越界");
+      if (!fs.existsSync(requested) || !fs.statSync(requested).isFile()) throw new Error("预览文件不存在");
+      response.statusCode = 200;
+      if (path.extname(requested).toLowerCase() === ".pdf" && parsed.searchParams.get("raw") !== "1") {
+        const rawUrl = `${parsed.pathname}?raw=1`;
+        response.setHeader("content-type", "text/html; charset=utf-8");
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("x-content-type-options", "nosniff");
+        response.end(this.pdfPreviewHtml(entry, rawUrl));
+        return;
+      }
+      response.setHeader("content-type", this.previewMimeType(requested));
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("x-content-type-options", "nosniff");
+      fs.createReadStream(requested).pipe(response);
+    } catch (error) {
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(error.message);
+    }
   }
 
   async execute(action, args) {
@@ -528,7 +928,7 @@ class EmbeddedBrowserBridge {
       } else if (!this.allowedHosts.has(parsed.hostname)) {
         throw new Error(`Host ${parsed.hostname} is not approved. Open it manually in the address bar first.`);
       }
-      sendToRenderer("browser:agent-navigation", { url: parsed.toString() });
+      this.sendToCurrentRoute("browser:agent-navigation", { url: parsed.toString() });
       return loadWebContentsUrl(this.target(), parsed.toString());
     }
     if (action === "snapshot") return this.snapshot();
@@ -732,8 +1132,15 @@ class EmbeddedBrowserBridge {
         while (this.networkEntries.size > 250) this.networkEntries.delete(this.networkEntries.keys().next().value);
       }
     };
+    this.developerDetachHandler = () => {
+      if (this.developerMessageHandler) target.debugger.removeListener("message", this.developerMessageHandler);
+      if (this.developerDetachHandler) target.debugger.removeListener("detach", this.developerDetachHandler);
+      this.developerTarget = null;
+      this.developerMessageHandler = null;
+      this.developerDetachHandler = null;
+    };
     target.debugger.on("message", this.developerMessageHandler);
-    target.debugger.on("detach", () => { this.developerTarget = null; });
+    target.debugger.on("detach", this.developerDetachHandler);
     await Promise.all([
       target.debugger.sendCommand("Runtime.enable"),
       target.debugger.sendCommand("Log.enable"),
@@ -743,11 +1150,18 @@ class EmbeddedBrowserBridge {
 
   detachDeveloperMode() {
     const target = this.developerTarget;
-    if (!target || target.isDestroyed()) { this.developerTarget = null; return; }
+    if (!target || target.isDestroyed()) {
+      this.developerTarget = null;
+      this.developerMessageHandler = null;
+      this.developerDetachHandler = null;
+      return;
+    }
     if (this.developerMessageHandler) target.debugger.removeListener("message", this.developerMessageHandler);
+    if (this.developerDetachHandler) target.debugger.removeListener("detach", this.developerDetachHandler);
     try { if (target.debugger.isAttached()) target.debugger.detach(); } catch {}
     this.developerTarget = null;
     this.developerMessageHandler = null;
+    this.developerDetachHandler = null;
   }
 
   async developerInspect() {
@@ -901,10 +1315,11 @@ class EmbeddedBrowserBridge {
   }
 
   async upload(elementId, paths) {
-    const files = (Array.isArray(paths) ? paths : [paths])
-      .map((file) => path.resolve(String(file || "")))
-      .filter(Boolean);
-    if (!files.length || files.some((file) => !fs.statSync(file).isFile())) throw new Error("Upload files must exist");
+    const workspaceRoot = this.workspaceRoots.get(this.currentRouteId());
+    if (!workspaceRoot) throw new Error("当前浏览器任务尚未绑定工作目录");
+    const requested = (Array.isArray(paths) ? paths : [paths]).filter(Boolean).slice(0, 20);
+    if (!requested.length) throw new Error("Upload files must exist");
+    const files = requested.map((file) => resolveWorkspaceInput(workspaceRoot, file));
     await this.ensureDeveloperMode();
     const selector = `[data-internal-agent-id="${String(elementId).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"]`;
     const root = await this.target().debugger.sendCommand("DOM.getDocument", { depth: -1, pierce: true });
@@ -962,6 +1377,7 @@ let appServer;
 let modelGateway;
 let scheduledTaskStore;
 let agentProfileStore;
+let agentTaskBoardStore;
 let localMemoryStore;
 let usageLedger;
 let secretStore;
@@ -971,6 +1387,7 @@ let appUpdateService;
 let schedulerTimer;
 let activePowerBlockerId = null;
 const scheduledRunsByThread = new Map();
+const scheduledRunLocks = new Set();
 const activeTurnIdsByThread = new Map();
 const runtimeLoadedThreadIds = new Set();
 const runtimeThreadLoadPromises = new Map();
@@ -980,11 +1397,23 @@ const deferredPromptIds = new Set();
 const goalsByThread = new Map();
 const cuaDriverBinary = findCuaDriverBinary();
 const cuaDriverApp = findCuaDriverApp();
-let computerUseStatus = inspectComputerUse(cuaDriverBinary);
+// The synchronous probe spawns two child processes (up to 15 s combined
+// timeout), so module load starts from a cheap placeholder and an async probe
+// fills in the real status. prepareComputerUse in createWindow may land first;
+// the guard keeps this initial probe from clobbering that fresher status.
+const initialComputerUseStatus = { available: Boolean(cuaDriverBinary), running: false, permissions: null, message: "检测中" };
+let computerUseStatus = initialComputerUseStatus;
+void inspectComputerUseAsync(cuaDriverBinary).then((status) => {
+  if (computerUseStatus === initialComputerUseStatus) computerUseStatus = status;
+});
 let collaborationModes = [];
 let smokeStarted = false;
 const terminalProcesses = new Map();
-const managedAgents = new Map();
+const nativeAgentHints = new Map();
+const nativeAgentRootByThread = new Map();
+const nativeAgentsByParent = new Map();
+const nativeAgentRefreshTimers = new Map();
+const pendingBoardDispatchesByParent = new Map();
 const tokenUsageByThread = new Map();
 const lastAgentMessageByThread = new Map();
 const queuedMessages = new Map();
@@ -1062,6 +1491,45 @@ function bindWindowThread(webContentsId, threadId) {
   return threadContexts.bindWindow(webContentsId, threadId);
 }
 
+function senderThreadId(event, requestedThreadId = null, { allowUnbound = true } = {}) {
+  const bound = String(windowThreadIds.get(event.sender.id) || "").trim() || null;
+  const requested = String(requestedThreadId || "").trim() || null;
+  if (requested && requested !== bound) throw new Error("当前窗口不能操作另一个任务");
+  if (!allowUnbound && !bound) throw new Error("请先新建或打开任务");
+  return bound;
+}
+
+function browserRouteForEvent(event, requestedRouteId = null) {
+  const requested = String(requestedRouteId || "").trim();
+  if (requested && browserBridge.targets.owns(requested, event.sender.id)) return requested;
+  const threadId = windowThreadIds.get(event.sender.id);
+  if (threadId && browserBridge.targets.owns(threadId, event.sender.id)) return threadId;
+  throw new Error("当前任务的浏览器页面尚未就绪");
+}
+
+function withBrowserRoute(event, requestedRouteId, callback) {
+  return browserBridge.withRoute(browserRouteForEvent(event, requestedRouteId), callback);
+}
+
+function publishBrowserTarget(target) {
+  const record = browserBridge?.targets?.recordForTarget(target);
+  if (!record) return;
+  const owner = webContents.fromId(record.ownerWebContentsId);
+  if (!owner || owner.isDestroyed()) return;
+  const raw = target.getURL();
+  let host = "";
+  try { host = new URL(raw).hostname; } catch {}
+  owner.send("browser:state", {
+    routeId: record.routeId,
+    url: raw,
+    title: target.getTitle(),
+    host,
+    approved: host ? browserBridge.allowedHosts.has(host) : false,
+    canGoBack: target.canGoBack(),
+    canGoForward: target.canGoForward(),
+  });
+}
+
 function updatePowerBlocker() {
   const shouldBlock = activeTurnIdsByThread.size > 0 || scheduledRunsByThread.size > 0;
   if (shouldBlock && activePowerBlockerId == null) {
@@ -1089,6 +1557,18 @@ function clearAllActiveTurns() {
   updatePowerBlocker();
 }
 
+let runtimeUpdatedTimer = null;
+
+function scheduleRuntimeUpdatedBroadcast() {
+  // Bursts of runtime events (e.g. per-chunk App Server stderr) coalesce into
+  // one snapshot build + broadcast; the diagnostics view also pulls on demand.
+  if (runtimeUpdatedTimer) return;
+  runtimeUpdatedTimer = setTimeout(() => {
+    runtimeUpdatedTimer = null;
+    sendToRenderer("runtime:updated", runtimeSnapshot());
+  }, 250);
+}
+
 function recordRuntimeEvent(level, title, detail = "") {
   const safeDetail = String(detail || "")
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
@@ -1096,7 +1576,7 @@ function recordRuntimeEvent(level, title, detail = "") {
     .replace(/(["']?(?:api[_-]?key|token|password|secret)["']?\s*[:=]\s*)[^\s,}\]]+/gi, "$1[REDACTED]");
   const entry = { id: crypto.randomUUID(), at: new Date().toISOString(), level, title, detail: safeDetail.slice(0, 2_000) };
   boundedPush(runtimeEvents, entry, 120);
-  sendToRenderer("runtime:updated", runtimeSnapshot());
+  scheduleRuntimeUpdatedBroadcast();
   return entry;
 }
 
@@ -1104,7 +1584,11 @@ function runtimeSnapshot() {
   let browserUrl = null;
   const coordinated = agentRuntime?.snapshot() || { sessions: [], inFlight: [] };
   const selected = mainWindowThreadContext();
-  try { browserUrl = browserBridge?.webContents?.getURL() || null; } catch {}
+  const browserTargets = browserBridge?.targets?.snapshot() || { routes: [], aliases: [] };
+  try {
+    const record = selected?.id ? browserBridge?.targets?.get(selected.id) : null;
+    browserUrl = record?.target?.getURL() || null;
+  } catch {}
   return {
     status: runtimeStatus,
     ready: Boolean(appServer?.ready),
@@ -1119,7 +1603,7 @@ function runtimeSnapshot() {
       appServer: { status: appServer?.ready ? "healthy" : runtimeStatus, binary: appServer?.binary || null },
       sessionRuntime: { status: appServer?.ready ? "healthy" : runtimeStatus, sessions: coordinated.sessions.length, activeItems: coordinated.inFlight.length },
       modelGateway: { status: modelGateway?.server ? "healthy" : "stopped", url: modelGateway?.baseUrl || modelGateway?.url || null },
-      browser: { status: browserBridge?.webContents ? "healthy" : "detached", url: browserUrl },
+      browser: { status: browserTargets.routes.length ? "healthy" : "detached", url: browserUrl, tabs: browserTargets.routes.length },
       computerUse: { status: computerUseStatus.running ? "healthy" : (computerUseStatus.available ? "attention" : "unavailable"), message: computerUseStatus.message },
       scheduler: { status: scheduledTaskStore ? "healthy" : "stopped", activeRuns: scheduledRunsByThread.size },
       terminal: { status: terminalProcesses.size ? "active" : "idle", sessions: terminalProcesses.size },
@@ -1179,7 +1663,7 @@ async function restoreActiveThread(client, threadId) {
   agentRuntime?.rememberSession(result.thread, { model: result.model || model, cwd: result.thread?.cwd || knownThreadCwd(threadId) });
   threadContexts.update(threadId, { model: result.model || model });
   recordRuntimeEvent("success", "已恢复当前会话", threadId);
-  sendToRenderer("agent:event", { type: "thread-recovered", threadId });
+  sendToTaskThread(threadId, "agent:event", { type: "thread-recovered", threadId });
 }
 
 async function restartAppServer(reason = "manual") {
@@ -1225,18 +1709,23 @@ function p0SettingsPath() {
   return path.join(app.getPath("userData"), "p0-settings.json");
 }
 
+let p0SettingsCache = null;
+
 function readP0Settings() {
+  if (p0SettingsCache) return structuredClone(p0SettingsCache);
   try {
     const stored = JSON.parse(fs.readFileSync(p0SettingsPath(), "utf8"));
-    return { ...P0_DEFAULTS, ...stored, policy: { ...P0_DEFAULTS.policy, ...(stored.policy || {}) } };
+    p0SettingsCache = { ...P0_DEFAULTS, ...stored, policy: { ...P0_DEFAULTS.policy, ...(stored.policy || {}) } };
   } catch {
-    return structuredClone(P0_DEFAULTS);
+    p0SettingsCache = structuredClone(P0_DEFAULTS);
   }
+  return structuredClone(p0SettingsCache);
 }
 
 function writeP0Settings(settings) {
   fs.mkdirSync(path.dirname(p0SettingsPath()), { recursive: true });
   fs.writeFileSync(p0SettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  p0SettingsCache = null;
   return settings;
 }
 
@@ -1344,7 +1833,8 @@ function createPetWindow() {
     }, 180);
   });
   petWindow.on("closed", () => { petWindow = null; });
-  void petWindow.loadFile(path.join(__dirname, "pet.html")).then(() => publishPetState());
+  void petWindow.loadFile(path.join(__dirname, "pet.html")).then(() => publishPetState())
+    .catch((error) => recordRuntimeEvent("warning", "宠物窗口加载失败", error.message));
   return petWindow;
 }
 
@@ -1431,8 +1921,14 @@ async function scheduledTaskCwd(task) {
 
 async function runScheduledTask(task) {
   if (!scheduledTaskStore) throw new Error("计划任务存储尚未就绪");
+  const lockKeys = [`task:${task.id}`];
+  if (task.destination?.mode === "thread" && task.destination.threadId) lockKeys.push(`thread:${task.destination.threadId}`);
+  if (lockKeys.some((key) => scheduledRunLocks.has(key))) return { skipped: true, reason: "starting" };
+  for (const key of lockKeys) scheduledRunLocks.add(key);
+  try {
   if ([...scheduledRunsByThread.values()].some((entry) => entry.taskId === task.id)) return { skipped: true, reason: "running" };
-  if (task.destination?.mode === "thread" && activeTurnIdsByThread.has(task.destination.threadId)) {
+  if (task.destination?.mode === "thread"
+    && (activeTurnIdsByThread.has(task.destination.threadId) || scheduledRunsByThread.has(task.destination.threadId))) {
     return { skipped: true, reason: "target-thread-busy" };
   }
   let run;
@@ -1455,11 +1951,17 @@ async function runScheduledTask(task) {
       developerInstructions: developerInstructionsFor(taskCwd, "This is an unattended scheduled task. Stay within the configured sandbox. Do not request interactive approval; report any blocked action clearly."),
     };
     const started = task.destination?.mode === "thread"
-      ? await appServer.request("thread/resume", { ...threadOptions, threadId: task.destination.threadId })
+      ? await appServer.request("thread/resume", { ...threadOptions, threadId: task.destination.threadId, deferGoalContinuation: true })
       : await appServer.request("thread/start", { ...threadOptions, ephemeral: false, serviceName: "onpeople-scheduled", threadSource: "appServer" });
     const threadId = started.thread.id;
     run.threadId = threadId;
-    scheduledRunsByThread.set(threadId, { taskId: task.id, runId: run.id, summary: "" });
+    scheduledRunsByThread.set(threadId, {
+      taskId: task.id,
+      runId: run.id,
+      summary: "",
+      // Runs on a user-visible thread must not swallow that thread's events.
+      userThread: task.destination?.mode === "thread",
+    });
     updatePowerBlocker();
     const skillInputs = await skillInputItemsForPrompt(taskCwd, task.prompt);
     const turn = await appServer.request("turn/start", {
@@ -1477,6 +1979,9 @@ async function runScheduledTask(task) {
     appendAudit("scheduler.run.failed", { taskId: task.id, runId: run?.id || null, error: error.message });
     publishScheduler(); if (failed) notifyScheduledRun(failed);
     return { runId: run?.id || null, error: error.message };
+  }
+  } finally {
+    for (const key of lockKeys) scheduledRunLocks.delete(key);
   }
 }
 
@@ -1499,17 +2004,21 @@ function handleScheduledNotification(message, threadId) {
       error: turn.error?.message || null,
     });
     scheduledRunsByThread.delete(threadId);
+    modelGateway?.removeRoute(`scheduled-${active.runId}`);
     updatePowerBlocker();
     appendAudit("scheduler.run.completed", { taskId: active.taskId, runId: active.runId, status: result?.status });
     publishScheduler(); if (result) notifyScheduledRun(result);
   }
-  return true;
+  // Detached scheduled threads are invisible — swallow their events. A run on
+  // a user thread only piggybacks bookkeeping; the normal pipeline continues.
+  return !active.userThread;
 }
 
 function failActiveScheduledRuns(message, notify = true) {
   for (const [threadId, active] of scheduledRunsByThread) {
     const result = scheduledTaskStore?.finishRun(active.runId, { status: "failed", summary: active.summary.trim().slice(0, 1_000), error: message });
     scheduledRunsByThread.delete(threadId);
+    modelGateway?.removeRoute(`scheduled-${active.runId}`);
     updatePowerBlocker();
     if (notify && result) notifyScheduledRun(result);
   }
@@ -1527,6 +2036,18 @@ function providerSettingsPath() {
 
 function threadProviderSettingsPath() {
   return path.join(app.getPath("userData"), "thread-provider-settings.json");
+}
+
+// Parsed+decrypted provider settings are re-derived on hot paths (every
+// thread/tokenUsage/updated notification). The main process is the only writer
+// of both settings files, so cache results and invalidate on our own writes
+// and on cloud-account changes (readProviderSettings reads cloudAccount state).
+const providerSettingsCache = new Map();
+const threadProviderSettingsCache = new Map();
+
+function invalidateProviderSettingsCaches() {
+  providerSettingsCache.clear();
+  threadProviderSettingsCache.clear();
 }
 
 function encodeStoredProvider(settings) {
@@ -1564,14 +2085,22 @@ function normalizeThreadProviderEntry(entry) {
 function readThreadProviderSettings(threadId, requestedType = null) {
   const id = String(threadId || "").trim();
   if (!id) return null;
+  const cacheKey = `${id}\u0000${requestedType ?? ""}`;
+  if (threadProviderSettingsCache.has(cacheKey)) {
+    const cached = threadProviderSettingsCache.get(cacheKey);
+    return cached ? { ...cached } : null;
+  }
+  let settings = null;
   try {
     const store = JSON.parse(fs.readFileSync(threadProviderSettingsPath(), "utf8"));
     const entry = normalizeThreadProviderEntry(store.threads?.[id]);
     const type = Object.hasOwn(PROVIDERS, requestedType) ? requestedType : entry.activeType;
-    return type ? decodeStoredProvider(entry.profiles[type]) : null;
+    settings = type ? decodeStoredProvider(entry.profiles[type]) : null;
   } catch {
-    return null;
+    settings = null;
   }
+  threadProviderSettingsCache.set(cacheKey, settings);
+  return settings ? { ...settings } : null;
 }
 
 function persistThreadProviderSettings(threadId, settings) {
@@ -1586,6 +2115,7 @@ function persistThreadProviderSettings(threadId, settings) {
   store.threads[id] = entry;
   fs.mkdirSync(path.dirname(threadProviderSettingsPath()), { recursive: true });
   fs.writeFileSync(threadProviderSettingsPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  invalidateProviderSettingsCaches();
 }
 
 function readProviderStore() {
@@ -1597,6 +2127,9 @@ function readProviderStore() {
 }
 
 function readProviderSettings(requestedType = null) {
+  const cacheKey = `${requestedType ?? ""}`;
+  const cached = providerSettingsCache.get(cacheKey);
+  if (cached) return { ...cached };
   const store = readProviderStore();
   const type = Object.hasOwn(PROVIDERS, requestedType) ? requestedType : (Object.hasOwn(PROVIDERS, store.type) ? store.type : "openai");
   const preset = PROVIDERS[type];
@@ -1607,13 +2140,16 @@ function readProviderSettings(requestedType = null) {
     try { apiKey = safeStorage.decryptString(Buffer.from(profile.encryptedApiKey, "base64")); } catch {}
   }
   const cloudBaseUrl = type === "onpeople" && cloudAccount ? cloudAccount.apiBaseUrl() : null;
-  const cloudApiKey = type === "onpeople" && cloudAccount ? cloudAccount.apiKey() : null;
-  return {
+  const selectedModel = profile.model ?? preset.model;
+  const cloudApiKey = type === "onpeople" && cloudAccount ? cloudAccount.apiKeyForModel(selectedModel) : null;
+  const settings = {
     type,
-    model: profile.model ?? preset.model,
+    model: selectedModel,
     baseUrl: cloudBaseUrl || profile.baseUrl || preset.baseUrl,
     apiKey: type === "onpeople" ? (cloudApiKey || "") : apiKey,
   };
+  providerSettingsCache.set(cacheKey, settings);
+  return { ...settings };
 }
 
 function publicProviderSettings(settings = readProviderSettings()) {
@@ -1625,7 +2161,7 @@ function publicProviderSettings(settings = readProviderSettings()) {
     baseUrl: settings.baseUrl,
     hasApiKey: Boolean(settings.apiKey),
     requiresAccount: settings.type === "onpeople",
-    accountSignedIn: settings.type === "onpeople" ? Boolean(cloudAccount?.accessToken() && cloudAccount?.apiKey()) : null,
+    accountSignedIn: settings.type === "onpeople" ? Boolean(cloudAccount?.accessToken() && cloudAccount?.apiKeyForModel(settings.model)) : null,
     vision: preset.vision,
     protocol: preset.protocol,
     imageGeneration: imageGeneration.available,
@@ -1643,10 +2179,12 @@ function normalizeProviderSettings(input = {}, saved = readProviderSettings()) {
     if (!baseUrl) throw new Error(`${PROVIDERS[type].name} 需要 API Base URL`);
     const parsed = new URL(baseUrl);
     if (!new Set(["http:", "https:"]).has(parsed.protocol)) throw new Error("API Base URL 仅支持 HTTP(S)");
+    const loopback = new Set(["localhost", "127.0.0.1", "::1"]).has(parsed.hostname);
+    if (parsed.protocol !== "https:" && !loopback) throw new Error("远程 API Base URL 必须使用 HTTPS");
     if (!model) throw new Error(`${PROVIDERS[type].name} 需要模型名称`);
   }
   const apiKey = type === "onpeople"
-    ? (cloudAccount?.apiKey() || "")
+    ? (cloudAccount?.apiKeyForModel(model) || "")
     : (input.apiKey ? String(input.apiKey) : baseline.apiKey);
   return { type, model, baseUrl, apiKey };
 }
@@ -1663,13 +2201,21 @@ function persistProviderSettings(input) {
   const stored = { type: settings.type, profiles: { ...profiles, [settings.type]: profile } };
   fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
   fs.writeFileSync(providerSettingsPath(), `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+  // Global settings are also the decode baseline for per-thread profiles.
+  invalidateProviderSettingsCaches();
   return publicProviderSettings(settings);
 }
 
 function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = null) {
   const p0 = readP0Settings();
+  const browserRouteId = String(routeId || crypto.randomUUID());
+  browserBridge?.setWorkspaceRoot(browserRouteId, workspaceRoot || DEFAULT_CWD);
   const config = {
     features: { goals: true, collaboration_modes: true, hooks: true },
+    agents: {
+      enabled: true,
+      max_concurrent_threads_per_session: p0.policy.maxAgents,
+    },
     // Third-party model metadata is not always rich enough for Codex Core to
     // choose a useful automatic compaction threshold. Keep long-running Goal
     // threads responsive instead of replaying an unbounded transcript.
@@ -1684,6 +2230,7 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
           ELECTRON_RUN_AS_NODE: "1",
           INTERNAL_BROWSER_BRIDGE_URL: browserBridge.url,
           INTERNAL_BROWSER_BRIDGE_TOKEN: browserBridge.token,
+          INTERNAL_BROWSER_ROUTE_ID: browserRouteId,
         },
         startup_timeout_sec: 10,
         default_tools_approval_mode: "writes",
@@ -1767,6 +2314,10 @@ async function ensureThread(payload = {}) {
   const requestedThreadId = String(payload.threadId || "").trim();
   if (requestedThreadId) {
     const existing = contextForThread(requestedThreadId);
+    if (payload.browserRouteId) {
+      browserBridge.bindRoute(requestedThreadId, payload.browserRouteId);
+      if (existing?.gatewayRouteId) browserBridge.bindRoute(existing.gatewayRouteId, payload.browserRouteId);
+    }
     const resumed = await ensureRuntimeThread(requestedThreadId, { cwd, model: payload.model || existing?.model || null });
     return {
       threadId: requestedThreadId,
@@ -1791,6 +2342,7 @@ async function ensureThread(payload = {}) {
   const model = settings.model || null;
   const p0 = readP0Settings();
   const gatewayRouteId = `pending-${crypto.randomUUID()}`;
+  if (payload.browserRouteId) browserBridge.bindRoute(gatewayRouteId, payload.browserRouteId);
   const result = await appServer.request("thread/start", {
     cwd,
     model,
@@ -1798,7 +2350,7 @@ async function ensureThread(payload = {}) {
     approvalPolicy: p0.policy.approvalPolicy,
     approvalsReviewer: p0.policy.approvalsReviewer,
     sandbox: p0.policy.sandbox,
-    multiAgentMode: p0.policy.multiAgentMode,
+    ...codexMultiAgent.policyOverrides(p0.policy.multiAgentMode),
     config: buildThreadConfig(settings, cwd, gatewayRouteId),
     ephemeral: false,
     serviceName: "onpeople",
@@ -2131,10 +2683,9 @@ async function updateGoal(threadId, action, value) {
 
 function providerContextForThread(threadId = null, overrides = null) {
   const context = threadContexts.get(threadId);
-  const persisted = readThreadProviderSettings(threadId);
   const saved = context?.provider
     ? normalizeProviderSettings(context.provider, readProviderSettings(context.provider.type))
-    : (persisted || readProviderSettings());
+    : (readThreadProviderSettings(threadId) || readProviderSettings());
   const settings = normalizeProviderSettings(overrides || {}, saved);
   return {
     settings,
@@ -2209,7 +2760,7 @@ async function listThreads({ search = "", archived = false } = {}) {
   }
   for (const thread of result.data || []) merged.set(thread.id, { ...(merged.get(thread.id) || {}), ...thread });
   for (const [threadId] of activeTurnIdsByThread) {
-    const known = merged.get(threadId) || readThreadUiState().threads.find((thread) => thread.id === threadId);
+    const known = merged.get(threadId) || uiState.threads.find((thread) => thread.id === threadId);
     if (known) merged.set(threadId, { ...known, status: { type: "active", activeFlags: ["running"] } });
   }
   if (!archived) {
@@ -2258,10 +2809,17 @@ function threadUiStatePath() {
   return path.join(app.getPath("userData"), "thread-ui-state.json");
 }
 
+// The main process is the only reader/writer of thread-ui-state.json and all
+// access funnels through readThreadUiState/writeThreadUiState, so a
+// write-through cache is safe. Reads return clones because callers mutate the
+// returned state before writing it back.
+let threadUiStateCache = null;
+
 function readThreadUiState() {
+  if (threadUiStateCache) return structuredClone(threadUiStateCache);
   try {
-    const stored = JSON.parse(fs.readFileSync(threadUiStatePath(), "utf8"));
-    return {
+    const stored = readJsonWithBackup(threadUiStatePath(), {});
+    threadUiStateCache = {
       pinnedThreadIds: [...new Set((stored.pinnedThreadIds || []).filter((id) => typeof id === "string" && id))],
       unreadThreadIds: [...new Set((stored.unreadThreadIds || []).filter((id) => typeof id === "string" && id))],
       archivedThreadIds: [...new Set((stored.archivedThreadIds || []).filter((id) => typeof id === "string" && id))],
@@ -2275,8 +2833,9 @@ function readThreadUiState() {
       threads: (stored.threads || []).filter((thread) => thread && typeof thread.id === "string").slice(-500),
     };
   } catch {
-    return { pinnedThreadIds: [], unreadThreadIds: [], archivedThreadIds: [], projectPaths: [], projects: [], hiddenProjectPaths: [], threads: [] };
+    threadUiStateCache = { pinnedThreadIds: [], unreadThreadIds: [], archivedThreadIds: [], projectPaths: [], projects: [], hiddenProjectPaths: [], threads: [] };
   }
+  return structuredClone(threadUiStateCache);
 }
 
 function knownThreadCwd(threadId) {
@@ -2286,26 +2845,29 @@ function knownThreadCwd(threadId) {
   return contextCwd || saved || DEFAULT_CWD;
 }
 
-function generatedImagePath(threadId, candidate) {
+async function generatedImagePath(threadId, candidate) {
   const cwd = path.resolve(knownThreadCwd(threadId));
   const generatedRoot = path.join(cwd, ".onpeople", "generated-images");
-  const selected = path.resolve(String(candidate || ""));
-  if (selected !== generatedRoot && !selected.startsWith(`${generatedRoot}${path.sep}`)) {
+  const selectedLexical = path.resolve(String(candidate || ""));
+  if (!isWithin(generatedRoot, selectedLexical)) {
     throw new Error("图片不在当前任务的生成目录中");
   }
-  if (!fs.existsSync(selected) || !fs.statSync(selected).isFile()) throw new Error("生成图片不存在或已移动");
+  const selected = resolveWorkspaceInput(cwd, selectedLexical);
+  const generatedRootReal = fs.realpathSync(generatedRoot);
+  if (!isWithin(generatedRootReal, selected)) throw new Error("图片不在当前任务的生成目录中");
   const extension = path.extname(selected).toLowerCase();
   const mimeType = extension === ".png" ? "image/png"
     : extension === ".webp" ? "image/webp"
       : new Set([".jpg", ".jpeg"]).has(extension) ? "image/jpeg" : null;
   if (!mimeType) throw new Error("不支持的生成图片格式");
-  const buffer = fs.readFileSync(selected);
+  const buffer = await fs.promises.readFile(selected);
   if (!buffer.length || buffer.length > 48 * 1024 * 1024) throw new Error("生成图片为空或超过 48 MB");
   return { path: selected, name: path.basename(selected), mimeType, bytes: buffer.length, dataUrl: `data:${mimeType};base64,${buffer.toString("base64")}` };
 }
 
 function writeThreadUiState(state) {
-  fs.writeFileSync(threadUiStatePath(), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  threadUiStateCache = structuredClone(state);
+  atomicWriteFile(threadUiStatePath(), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
 function threadRecency(thread) {
@@ -2342,7 +2904,7 @@ function readLocalSessionIndex() {
 
 const localRolloutPathCache = new Map();
 
-function findLocalRolloutPath(threadId) {
+async function findLocalRolloutPath(threadId) {
   const id = String(threadId || "").trim();
   if (!id) return null;
   const cached = localRolloutPathCache.get(id);
@@ -2352,7 +2914,7 @@ function findLocalRolloutPath(threadId) {
   while (pending.length) {
     const directory = pending.pop();
     let entries = [];
-    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { continue; }
+    try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
       const candidate = path.join(directory, entry.name);
       if (entry.isDirectory()) pending.push(candidate);
@@ -2377,9 +2939,9 @@ function visibleRolloutUserText(text) {
   return value;
 }
 
-function readLocalThreadSnapshot(threadId) {
+async function readLocalThreadSnapshot(threadId) {
   const id = String(threadId || "").trim();
-  const rolloutPath = findLocalRolloutPath(id);
+  const rolloutPath = await findLocalRolloutPath(id);
   if (!rolloutPath) return null;
   const saved = readThreadUiState().threads.find((thread) => thread.id === id) || {};
   const thread = { id, name: saved.name || saved.preview || "未命名任务", preview: saved.preview || saved.name || "未命名任务", cwd: saved.cwd || DEFAULT_CWD, turns: [], status: { type: "saved" } };
@@ -2397,7 +2959,8 @@ function readLocalThreadSnapshot(threadId) {
     return currentTurn;
   };
   try {
-    for (const line of fs.readFileSync(rolloutPath, "utf8").split("\n")) {
+    const content = await fs.promises.readFile(rolloutPath, "utf8");
+    for (const line of content.split("\n")) {
       if (!line.trim()) continue;
       let record;
       try { record = JSON.parse(line); } catch { continue; }
@@ -2589,7 +3152,7 @@ async function resumeThread(threadId) {
   if (!id) throw new Error("缺少任务 ID");
   const { settings, model } = providerContextForThread(id);
   const provider = publicProviderSettings(settings);
-  const local = readLocalThreadSnapshot(id);
+  const local = await readLocalThreadSnapshot(id);
   if (local) {
     rememberThread(local.thread);
     agentRuntime?.rememberSession(local.thread, { model, cwd: local.thread.cwd });
@@ -2655,6 +3218,7 @@ async function forkThread(threadId) {
     ephemeral: false,
   });
   const thread = result.thread;
+  runtimeLoadedThreadIds.add(thread.id);
   const threadName = thread.name ? `${thread.name} · 分叉` : "分叉任务";
   await appServer.request("thread/name/set", { threadId: thread.id, name: threadName });
   thread.name = threadName;
@@ -2678,7 +3242,14 @@ async function archiveThread(threadId) {
     if (boundThreadId === threadId) bindWindowThread(windowId, null);
   }
   goalsByThread.delete(threadId);
+  const gatewayRouteId = contextForThread(threadId)?.gatewayRouteId;
   threadContexts.remove(threadId);
+  tokenUsageByThread.delete(threadId);
+  threadLifecycleById.delete(threadId);
+  localRolloutPathCache.delete(threadId);
+  queuedMessages.delete(threadId);
+  modelGateway?.removeRoute(threadId);
+  if (gatewayRouteId && gatewayRouteId !== threadId) modelGateway?.removeRoute(gatewayRouteId);
   return { archived: true, activeThreadId: mainWindowThreadId() };
 }
 
@@ -2688,153 +3259,248 @@ async function unarchiveThread(threadId) {
   return { unarchived: true };
 }
 
-function publicAgent(agent) {
-  return {
-    id: agent.id,
-    threadId: agent.threadId,
-    parentThreadId: agent.parentThreadId,
-    turnId: agent.turnId,
-    name: agent.name,
-    role: agent.role,
-    prompt: agent.prompt,
-    model: agent.model,
-    effort: agent.effort,
-    cwd: agent.cwd,
-    status: agent.status,
-    activeFlags: agent.activeFlags || [],
-    startedAt: agent.startedAt,
-    completedAt: agent.completedAt || null,
-    error: agent.error || null,
-    summary: agent.summary || null,
-  };
-}
-
-function publishAgents() {
-  sendToRenderer("agent:event", { type: "agents-updated", agents: [...managedAgents.values()].map(publicAgent) });
-}
-
-async function spawnManagedAgent(payload = {}) {
-  if (!appServer?.ready) throw new Error("Agent 运行时尚未就绪");
-  const p0 = readP0Settings();
-  const activeCount = [...managedAgents.values()].filter((agent) => new Set(["starting", "running", "waitingOnApproval", "waitingOnUserInput"]).has(agent.status)).length;
-  if (activeCount >= p0.policy.maxAgents) throw new Error(`已达到 ${p0.policy.maxAgents} 个并行 Agent 的限制`);
-  const prompt = String(payload.prompt || "").trim();
-  if (!prompt) throw new Error("请输入子 Agent 的任务");
-  const role = String(payload.role || "worker").trim().slice(0, 40) || "worker";
-  const name = String(payload.name || role).trim().slice(0, 64) || "子 Agent";
-  const cwd = String(payload.cwd || DEFAULT_CWD);
-  const parentThreadId = String(payload.parentThreadId || mainWindowThreadId() || "").trim() || null;
-  const { settings, modelProvider, model: defaultModel } = providerContextForThread(parentThreadId);
-  const model = String(payload.model || defaultModel || "").trim() || null;
-  const effort = String(payload.effort || "medium");
-  const requestedSandbox = new Set(["read-only", "workspace-write", "danger-full-access"]).has(payload.sandbox) ? payload.sandbox : p0.policy.sandbox;
-  const profileInstructions = String(payload.instructions || "").replace(/\0/g, "").trim().slice(0, 8_000);
-  const delegatedInstructions = [`You are the ${role} sub-agent. Work only on the delegated task and return a concise handoff to the parent task.`, profileInstructions].filter(Boolean).join("\n\n");
-  const agent = {
-    id: crypto.randomUUID(), parentThreadId, name, role, prompt, model, effort, cwd,
-    threadId: null, turnId: null, status: "starting", startedAt: Date.now(),
-  };
-  managedAgents.set(agent.id, agent);
-  publishAgents();
-  try {
-    let started;
-    if (parentThreadId && !activeTurnIdsByThread.has(parentThreadId)) {
-      started = await appServer.request("thread/fork", {
-        threadId: parentThreadId,
-        model,
-        modelProvider,
-        approvalPolicy: p0.policy.approvalPolicy,
-        approvalsReviewer: p0.policy.approvalsReviewer,
-        sandbox: requestedSandbox,
-        config: buildThreadConfig(settings, cwd, `agent-${agent.id}`),
-        developerInstructions: developerInstructionsFor(cwd, delegatedInstructions),
-        deferGoalContinuation: true,
-        ephemeral: false,
-        threadSource: "subAgent",
-      });
-    } else {
-      started = await appServer.request("thread/start", {
-        cwd, model, modelProvider,
-        approvalPolicy: p0.policy.approvalPolicy,
-        approvalsReviewer: p0.policy.approvalsReviewer,
-        sandbox: requestedSandbox,
-        config: buildThreadConfig(settings, cwd, `agent-${agent.id}`),
-        ephemeral: false,
-        serviceName: "onpeople",
-        threadSource: "subAgent",
-        developerInstructions: developerInstructionsFor(cwd, delegatedInstructions),
-      });
+async function mapWithConcurrency(values, concurrency, callback) {
+  const output = new Array(values.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      output[index] = await callback(values[index], index);
     }
-    agent.threadId = started.thread.id;
-    await appServer.request("thread/settings/update", { threadId: agent.threadId, cwd, model, effort });
-    await appServer.request("thread/name/set", { threadId: agent.threadId, name: `${name} · ${role}` });
-    publishAgents();
-    const skillInputs = await skillInputItemsForPrompt(cwd, prompt);
-    const turn = await appServer.request("turn/start", {
-      threadId: agent.threadId,
-      cwd,
-      model,
-      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+  return output;
+}
+
+async function listNativeAgents(parentThreadId) {
+  const parentId = String(parentThreadId || "").trim();
+  const maxAgents = readP0Settings().policy.maxAgents;
+  if (!parentId || !appServer?.ready) return { agents: [], maxAgents, runtime: codexMultiAgent.protocolFamily };
+  const result = await appServer.request("thread/list", {
+    limit: 100,
+    ancestorThreadId: parentId,
+    sourceKinds: codexMultiAgent.sourceKinds,
+    sortKey: "created_at",
+    sortDirection: "asc",
+  });
+  const threads = Array.isArray(result?.data) ? result.data : [];
+  const detailed = await mapWithConcurrency(threads, 8, async (thread) => {
+    try {
+      const read = await appServer.request("thread/read", { threadId: thread.id, includeTurns: true });
+      return read?.thread || thread;
+    } catch {
+      return thread;
+    }
+  });
+  const agents = detailed.map((thread) => {
+    nativeAgentRootByThread.set(thread.id, parentId);
+    return codexMultiAgent.projectNativeAgent(thread, {
+      ...(nativeAgentHints.get(thread.id) || {}),
+      parentThreadId: thread.parentThreadId || parentId,
     });
-    agent.turnId = turn.turn?.id || turn.turnId || null;
-    agent.status = "running";
-    appendAudit("agent.spawn", { agentId: agent.id, threadId: agent.threadId, parentThreadId, role, model, effort, cwd });
-    publishAgents();
-    return publicAgent(agent);
+  });
+  nativeAgentsByParent.set(parentId, agents);
+  agentTaskBoardStore?.expireDispatches(parentId);
+  const reconciliation = agentTaskBoardStore?.reconcileNativeThreads(parentId, agents);
+  if (reconciliation?.attached) {
+    recordRuntimeEvent("info", "共享任务已从原生 Agent 图恢复", `${reconciliation.attached} 个任务`);
+  }
+  const board = agentTaskBoardStore?.snapshot(parentId, agents) || { tasks: [], counts: {}, states: [] };
+  return { agents, board, maxAgents, runtime: codexMultiAgent.protocolFamily };
+}
+
+function publishNativeAgents(parentThreadId, result) {
+  const parentId = String(parentThreadId || "").trim();
+  if (!parentId) return;
+  sendToTaskThread(parentId, "agent:event", {
+    type: "agents-updated",
+    parentThreadId: parentId,
+    agents: result.agents || [],
+    board: result.board || { tasks: [], counts: {}, states: [] },
+    maxAgents: result.maxAgents,
+    runtime: result.runtime || codexMultiAgent.protocolFamily,
+  });
+}
+
+function scheduleNativeAgentRefresh(parentThreadId, delay = 90) {
+  const parentId = String(parentThreadId || "").trim();
+  if (!parentId) return;
+  clearTimeout(nativeAgentRefreshTimers.get(parentId));
+  nativeAgentRefreshTimers.set(parentId, setTimeout(() => {
+    nativeAgentRefreshTimers.delete(parentId);
+    void listNativeAgents(parentId)
+      .then((result) => publishNativeAgents(parentId, result))
+      .catch((error) => recordRuntimeEvent("warning", "子 Agent 图刷新失败", error.message));
+  }, delay));
+}
+
+function observeNativeCollaboration(parentThreadId, item, phase) {
+  const normalized = codexMultiAgent.normalizeCollaborationItem(item, { threadId: parentThreadId, phase });
+  if (!normalized) return null;
+  const senderId = normalized.senderThreadId || String(parentThreadId || "");
+  const rootId = nativeAgentRootByThread.get(senderId) || senderId || String(parentThreadId || "");
+  if (normalized.type === "collabAgentToolCall") {
+    for (const threadId of normalized.receiverThreadIds) {
+      const state = normalized.agentsStates?.[threadId] || {};
+      nativeAgentRootByThread.set(threadId, rootId);
+      nativeAgentHints.set(threadId, {
+        ...(nativeAgentHints.get(threadId) || {}),
+        threadId,
+        parentThreadId: senderId,
+        prompt: normalized.prompt || nativeAgentHints.get(threadId)?.prompt || "",
+        model: normalized.model || nativeAgentHints.get(threadId)?.model || null,
+        effort: normalized.reasoningEffort || nativeAgentHints.get(threadId)?.effort || "inherit",
+        status: state.status || (normalized.tool === "spawnAgent" ? "starting" : undefined),
+        error: state.status === "errored" ? state.message : null,
+        startedAt: nativeAgentHints.get(threadId)?.startedAt || Date.now(),
+      });
+      const pending = pendingBoardDispatchesByParent.get(rootId);
+      if (normalized.tool === "spawnAgent" && pending?.length) {
+        const boardTaskId = String(normalized.prompt || "").match(/"board_task_id"\s*:\s*"([^"]+)"/)?.[1] || "";
+        const matchedIndex = boardTaskId
+          ? pending.findIndex((item) => item.taskId === boardTaskId)
+          : (pending.length === 1 ? 0 : -1);
+        if (matchedIndex >= 0) {
+          const dispatch = pending.splice(matchedIndex, 1)[0];
+          if (!pending.length) pendingBoardDispatchesByParent.delete(rootId);
+          try {
+            agentTaskBoardStore?.attachNativeThread(rootId, dispatch.taskId, threadId);
+          } catch (error) {
+            recordRuntimeEvent("warning", "共享任务未能关联子 Agent", error.message);
+          }
+        }
+      }
+    }
+  } else if (normalized.agentThreadId) {
+    const threadId = normalized.agentThreadId;
+    nativeAgentRootByThread.set(threadId, rootId);
+    nativeAgentHints.set(threadId, {
+      ...(nativeAgentHints.get(threadId) || {}),
+      threadId,
+      parentThreadId: senderId,
+      agentPath: normalized.agentPath || nativeAgentHints.get(threadId)?.agentPath || null,
+      status: normalized.kind === "interrupted" ? "interrupted" : "running",
+      startedAt: nativeAgentHints.get(threadId)?.startedAt || Date.now(),
+    });
+  }
+  scheduleNativeAgentRefresh(rootId);
+  if (phase === "completed") scheduleNativeAgentRefresh(rootId, 450);
+  return normalized;
+}
+
+async function nativeAgentFor(parentThreadId, agentId) {
+  const result = await listNativeAgents(parentThreadId);
+  const agent = result.agents.find((candidate) => candidate.id === agentId || candidate.threadId === agentId);
+  if (!agent) throw new Error("找不到这个原生子 Agent");
+  return agent;
+}
+
+async function dispatchNativeAgent(parentThreadId, payload = {}) {
+  if (!appServer?.ready) throw new Error("Agent 运行时尚未就绪");
+  const parentId = String(parentThreadId || payload.parentThreadId || "").trim();
+  if (!parentId) throw new Error("请先新建父任务，再派发子 Agent");
+  const current = await listNativeAgents(parentId);
+  const activeStatuses = new Set(["starting", "running", "waitingOnApproval", "waitingOnUserInput"]);
+  if (current.agents.filter((agent) => activeStatuses.has(agent.status)).length >= current.maxAgents) {
+    throw new Error(`已达到 ${current.maxAgents} 个并行 Agent 的限制`);
+  }
+  const prompt = codexMultiAgent.buildDelegationPrompt(payload);
+  const result = await dispatchAgentPrompt({
+    threadId: parentId,
+    cwd: knownThreadCwd(parentId),
+    prompt,
+  });
+  appendAudit("agent.native.dispatch", {
+    parentThreadId: parentId,
+    role: String(payload.role || "worker"),
+    model: String(payload.model || "") || null,
+    effort: String(payload.effort || "medium"),
+    runtime: codexMultiAgent.protocolFamily,
+  });
+  scheduleNativeAgentRefresh(parentId, 250);
+  return { dispatched: true, parentThreadId: parentId, ...result };
+}
+
+async function createNativeBoardTask(parentThreadId, payload = {}) {
+  const parentId = String(parentThreadId || payload.parentThreadId || "").trim();
+  if (!parentId) throw new Error("请先新建父任务，再创建共享任务");
+  const task = agentTaskBoardStore.save(parentId, payload);
+  const result = await listNativeAgents(parentId);
+  publishNativeAgents(parentId, result);
+  return { task, board: result.board };
+}
+
+async function dispatchNativeBoardTask(parentThreadId, taskId) {
+  const parentId = String(parentThreadId || "").trim();
+  const current = await listNativeAgents(parentId);
+  const task = agentTaskBoardStore.assertDispatchable(parentId, taskId, current.agents);
+  const dispatching = agentTaskBoardStore.markDispatching(parentId, task.id);
+  const pending = pendingBoardDispatchesByParent.get(parentId) || [];
+  pending.push({ taskId: task.id, attemptId: dispatching.dispatchAttemptId, createdAt: Date.now() });
+  pendingBoardDispatchesByParent.set(parentId, pending);
+  try {
+    const result = await dispatchNativeAgent(parentId, {
+      parentThreadId: parentId,
+      name: task.title,
+      role: task.role,
+      model: task.model,
+      effort: task.effort,
+      prompt: task.description,
+      profileId: task.profileId,
+      instructions: task.instructions,
+      boardTaskId: task.id,
+    });
+    publishNativeAgents(parentId, await listNativeAgents(parentId));
+    return { task: agentTaskBoardStore.snapshot(parentId, current.agents).tasks.find((item) => item.id === task.id), ...result };
   } catch (error) {
-    agent.status = "failed";
-    agent.error = error.message;
-    agent.completedAt = Date.now();
-    publishAgents();
+    const queue = pendingBoardDispatchesByParent.get(parentId) || [];
+    pendingBoardDispatchesByParent.set(parentId, queue.filter((item) => item.taskId !== task.id));
+    if (!pendingBoardDispatchesByParent.get(parentId)?.length) pendingBoardDispatchesByParent.delete(parentId);
+    agentTaskBoardStore.markDispatchFailed(parentId, task.id, error.message);
+    publishNativeAgents(parentId, await listNativeAgents(parentId));
     throw error;
   }
 }
 
-async function sendManagedAgentMessage(agentId, text) {
-  const agent = managedAgents.get(agentId);
-  if (!agent?.threadId) throw new Error("找不到子 Agent");
-  const prompt = String(text || "").trim();
-  if (!prompt) throw new Error("追加指令不能为空");
-  const skillInputs = await skillInputItemsForPrompt(agent.cwd, prompt);
-  let result;
-  if (agent.turnId && new Set(["running", "waitingOnApproval", "waitingOnUserInput"]).has(agent.status)) {
-    result = await appServer.request("turn/steer", {
-      threadId: agent.threadId,
-      expectedTurnId: agent.turnId,
-      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
-    });
-  } else {
-    result = await appServer.request("turn/start", {
-      threadId: agent.threadId,
-      cwd: agent.cwd,
-      model: agent.model,
-      input: [{ type: "text", text: prompt, text_elements: [] }, ...skillInputs],
-    });
-    agent.turnId = result.turn?.id || result.turnId || null;
-    agent.status = "running";
-    agent.completedAt = null;
-  }
-  appendAudit("agent.message", { agentId, threadId: agent.threadId, mode: agent.status === "running" ? "steer-or-turn" : "turn" });
-  publishAgents();
-  return publicAgent(agent);
+async function removeNativeBoardTask(parentThreadId, taskId) {
+  const parentId = String(parentThreadId || "").trim();
+  const result = agentTaskBoardStore.remove(parentId, taskId);
+  const refreshed = await listNativeAgents(parentId);
+  publishNativeAgents(parentId, refreshed);
+  return { ...result, board: refreshed.board };
 }
 
-async function stopManagedAgent(agentId) {
-  const agent = managedAgents.get(agentId);
-  if (!agent?.threadId || !agent.turnId) return { stopped: false };
-  await appServer.request("turn/interrupt", { threadId: agent.threadId, turnId: agent.turnId });
-  agent.status = "stopped";
-  agent.completedAt = Date.now();
-  appendAudit("agent.stop", { agentId, threadId: agent.threadId });
-  publishAgents();
-  return { stopped: true };
+async function messageNativeAgent(parentThreadId, agentId, text) {
+  const parentId = String(parentThreadId || "").trim();
+  const agent = await nativeAgentFor(parentId, agentId);
+  const result = await dispatchAgentPrompt({
+    threadId: parentId,
+    cwd: knownThreadCwd(parentId),
+    prompt: codexMultiAgent.buildFollowupPrompt(agent, text),
+  });
+  appendAudit("agent.native.followup", { parentThreadId: parentId, threadId: agent.threadId });
+  scheduleNativeAgentRefresh(parentId, 250);
+  return { dispatched: true, agent, ...result };
 }
 
-async function readManagedAgent(agentId) {
-  const agent = managedAgents.get(agentId);
-  if (!agent?.threadId) throw new Error("找不到子 Agent");
+async function stopNativeAgent(parentThreadId, agentId) {
+  const parentId = String(parentThreadId || "").trim();
+  const agent = await nativeAgentFor(parentId, agentId);
+  const result = await dispatchAgentPrompt({
+    threadId: parentId,
+    cwd: knownThreadCwd(parentId),
+    prompt: codexMultiAgent.buildStopPrompt(agent),
+  });
+  appendAudit("agent.native.stop", { parentThreadId: parentId, threadId: agent.threadId });
+  scheduleNativeAgentRefresh(parentId, 250);
+  return { stopped: true, agent, ...result };
+}
+
+async function readNativeAgent(parentThreadId, agentId) {
+  const agent = await nativeAgentFor(parentThreadId, agentId);
   const result = await appServer.request("thread/read", { threadId: agent.threadId, includeTurns: true });
-  return { agent: publicAgent(agent), thread: result.thread };
+  return { agent: codexMultiAgent.projectNativeAgent(result.thread, nativeAgentHints.get(agent.threadId) || agent), thread: result.thread };
 }
 
 async function gitRoot(cwd) {
@@ -3028,7 +3694,8 @@ async function applyPolicy(input = {}, threadId = null) {
   const approvalsReviewer = new Set(["user", "auto_review"]).has(input.approvalsReviewer) ? input.approvalsReviewer : settings.policy.approvalsReviewer;
   const multiAgentMode = new Set(["explicitRequestOnly", "proactive"]).has(input.multiAgentMode) ? input.multiAgentMode : settings.policy.multiAgentMode;
   const maxAgents = Math.max(1, Math.min(16, Number(input.maxAgents) || settings.policy.maxAgents));
-  settings.policy = { sandbox, approvalPolicy, approvalsReviewer, multiAgentMode, maxAgents, networkAccess: Boolean(input.networkAccess) };
+  const networkAccess = Boolean(Object.hasOwn(input, "networkAccess") ? input.networkAccess : settings.policy.networkAccess);
+  settings.policy = { sandbox, approvalPolicy, approvalsReviewer, multiAgentMode, maxAgents, networkAccess };
   writeP0Settings(settings);
   if (threadId) {
     await appServer.request("thread/settings/update", {
@@ -3036,6 +3703,7 @@ async function applyPolicy(input = {}, threadId = null) {
       approvalPolicy,
       approvalsReviewer,
       sandboxPolicy: sandboxPolicyFrom(settings.policy),
+      ...codexMultiAgent.policyOverrides(multiAgentMode),
     });
   }
   appendAudit("policy.update", settings.policy);
@@ -3286,7 +3954,6 @@ async function listExtensions(cwd, threadId = null) {
         && !path.isAbsolute(relative);
       return {
         ...skill,
-        cwd: entry.cwd,
         origin: isOnPeopleSkill ? "onpeople" : (skill.scope || "project"),
         originLabel: isOnPeopleSkill ? "OnPeople 独立 Skills" : (skill.scope || "项目"),
         hasUiMetadata: fs.existsSync(path.join(path.dirname(skillFile), "agents", "openai.yaml")),
@@ -3351,7 +4018,7 @@ function detectModelVision(providerType, modelId, advertised = []) {
 }
 
 async function maybeRunSmokePrompt() {
-  if (!SMOKE_PROMPT || smokeStarted || !appServer?.ready || !browserBridge?.webContents) return;
+  if (!SMOKE_PROMPT || smokeStarted || !appServer?.ready || !browserBridge?.targets?.snapshot().routes.length) return;
   smokeStarted = true;
   sendToRenderer("agent:event", { type: "smoke-started", prompt: SMOKE_PROMPT });
   try {
@@ -3392,6 +4059,7 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     else sendToRenderer("agent:event", event);
   });
   client.on("notification", (message) => {
+    try {
     if (message.method === "skills/changed") {
       invalidateSkillCatalog();
     }
@@ -3403,30 +4071,26 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
         stream: params.stream,
         data: Buffer.from(params.deltaBase64 || "", "base64").toString("utf8"),
       });
+      // Output deltas carry no thread/turn/item ids, so the runtime coordinator
+      // has nothing to track; skip the duplicate runtime:event broadcast that
+      // would re-send the same base64 payload to every window.
+      return;
     }
     const messageThreadId = message.params?.threadId || message.params?.thread?.id || null;
     const messageTurnId = message.params?.turn?.id || message.params?.turnId || null;
     if (messageThreadId && handleScheduledNotification(message, messageThreadId)) return;
     const turnEvent = agentRuntime?.observe(message);
     if (turnEvent) sendToTaskThread(messageThreadId, "runtime:event", turnEvent);
-    const managedAgent = [...managedAgents.values()].find((agent) => agent.threadId && agent.threadId === messageThreadId);
+    if ((message.method === "item/started" || message.method === "item/completed") && message.params?.item) {
+      observeNativeCollaboration(messageThreadId, message.params.item, message.method === "item/started" ? "inProgress" : "completed");
+    }
     if (message.method === "turn/started") {
       if (messageThreadId) runtimeLoadedThreadIds.add(messageThreadId);
       if (messageThreadId && messageTurnId) setActiveTurn(messageThreadId, messageTurnId);
+      if (messageThreadId && messageTurnId) usageLedger?.turnStarted({ threadId: messageThreadId, turnId: messageTurnId });
       if (messageThreadId) threadContexts.startTurn(messageThreadId, messageTurnId);
       if (messageThreadId) setThreadLifecycle(messageThreadId, "running");
       if (messageThreadId) sendToRenderer("agent:event", { type: "thread-status-changed", threadId: messageThreadId, status: "working" });
-      if (managedAgent) {
-        managedAgent.turnId = messageTurnId || managedAgent.turnId;
-        managedAgent.status = "running";
-        publishAgents();
-      }
-    }
-    if (message.method === "thread/status/changed" && managedAgent) {
-      const status = message.params?.status || {};
-      managedAgent.status = status.type === "active" ? (status.activeFlags?.[0] || "running") : status.type;
-      managedAgent.activeFlags = status.activeFlags || [];
-      publishAgents();
     }
     if (message.method === "thread/status/changed" && messageThreadId) {
       signalRuntimeThreadReady(messageThreadId, "thread/status/changed");
@@ -3440,6 +4104,8 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
       sendToRenderer("agent:event", { type: "thread-status-changed", threadId: messageThreadId, status: publicStatus });
       if (publicStatus === "waiting-input") notifyTaskState(messageThreadId, "OnPeople 等待输入", "任务需要你补充信息后才能继续。");
       if (publicStatus === "waiting-approval") notifyTaskState(messageThreadId, "OnPeople 等待审批", "任务需要你的确认才能继续。");
+      const nativeRoot = nativeAgentRootByThread.get(messageThreadId);
+      if (nativeRoot) scheduleNativeAgentRefresh(nativeRoot);
     }
     if (message.method === "thread/tokenUsage/updated" && messageThreadId) {
       signalRuntimeThreadReady(messageThreadId, "thread/tokenUsage/updated");
@@ -3451,9 +4117,17 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     if (message.method === "item/completed" && messageThreadId && message.params?.item?.type === "agentMessage" && message.params.item.text) {
       lastAgentMessageByThread.set(messageThreadId, String(message.params.item.text));
     }
+    if (message.method === "item/completed" && message.params?.item) {
+      usageLedger?.recordItem({ item: message.params.item });
+    }
     if (message.method === "hook/started" || message.method === "hook/completed") {
       const run = message.params?.run;
-      if (run?.id) hookRuns.set(run.id, { ...run, threadId: messageThreadId, turnId: messageTurnId });
+      if (run?.id) {
+        hookRuns.set(run.id, { ...run, threadId: messageThreadId, turnId: messageTurnId });
+        // Readers cap at 100 entries; evict oldest insertions so the Map and
+        // the per-event payload stay bounded for the app lifetime.
+        while (hookRuns.size > 100) hookRuns.delete(hookRuns.keys().next().value);
+      }
       sendToRenderer("agent:event", { type: "hooks-updated", runs: [...hookRuns.values()] });
     }
     if (message.method === "thread/compacted") {
@@ -3462,6 +4136,13 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     }
     if (message.method === "turn/completed") {
       if (messageThreadId) clearActiveTurn(messageThreadId);
+      if (messageThreadId && messageTurnId) {
+        usageLedger?.turnCompleted({
+          threadId: messageThreadId,
+          turnId: messageTurnId,
+          status: message.params?.turn?.status || "completed",
+        });
+      }
       if (messageThreadId) {
         threadContexts.completeTurn(
           messageThreadId,
@@ -3480,20 +4161,8 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
           failed ? (message.params?.turn?.error?.message || "任务执行失败。") : (finalText || "任务已经完成。"),
         );
       }
-      if (managedAgent) {
-        managedAgent.status = message.params?.turn?.status === "failed" ? "failed" : "completed";
-        managedAgent.error = message.params?.turn?.error?.message || null;
-        managedAgent.completedAt = Date.now();
-        managedAgent.summary = finalText ? finalText.slice(0, 4_000) : null;
-        publishAgents();
-        if (managedAgent.parentThreadId) {
-          sendToTaskThread(managedAgent.parentThreadId, "agent:event", {
-            type: "agent-handoff",
-            parentThreadId: managedAgent.parentThreadId,
-            agent: publicAgent(managedAgent),
-          });
-        }
-      }
+      const nativeRoot = messageThreadId ? nativeAgentRootByThread.get(messageThreadId) : null;
+      if (nativeRoot) scheduleNativeAgentRefresh(nativeRoot);
       const memorySettings = localMemoryStore?.state();
       if (memorySettings?.generate && finalText && message.params?.turn?.status !== "failed") {
         try {
@@ -3517,6 +4186,11 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     if (message.method === "thread/goal/cleared" && messageThreadId) {
       goalsByThread.delete(messageThreadId);
       threadContexts.update(messageThreadId, { goal: null });
+    }
+    } catch (error) {
+      // A throw here would propagate through readline's emit and crash the
+      // main process on every subsequent notification — record and continue.
+      recordRuntimeEvent("warning", "通知处理失败", `${message?.method || "unknown"}: ${error.message}`);
     }
   });
   try {
@@ -3598,6 +4272,7 @@ function createWorkbenchWindow(threadId = null) {
   });
   window.on("closed", () => {
     terminateOwnedTerminals(webContentsId);
+    browserBridge?.detachOwner(webContentsId);
     taskWindows.delete(window);
     threadContexts.unbindWindow(webContentsId);
     windowThreadIds.delete(webContentsId);
@@ -3619,9 +4294,10 @@ function handleOnPeopleUrl(rawUrl) {
   try {
     const target = new URL(rawUrl);
     if (target.protocol !== "onpeople:") return;
-    if (target.hostname === "task") return void openTaskWindow(target.pathname.split("/").filter(Boolean)[0] || null);
-    if (target.hostname === "settings") return void openTaskWindow(null, target.pathname.split("/").filter(Boolean)[0] || "config");
-    if (target.hostname === "new") return void openTaskWindow(null);
+    const reportFailure = (error) => recordRuntimeEvent("warning", "无法打开 OnPeople 链接", error.message);
+    if (target.hostname === "task") return void openTaskWindow(target.pathname.split("/").filter(Boolean)[0] || null).catch(reportFailure);
+    if (target.hostname === "settings") return void openTaskWindow(null, target.pathname.split("/").filter(Boolean)[0] || "config").catch(reportFailure);
+    if (target.hostname === "new") return void openTaskWindow(null).catch(reportFailure);
   } catch (error) { recordRuntimeEvent("warning", "无法打开 OnPeople 链接", error.message); }
 }
 
@@ -3654,6 +4330,7 @@ async function createWindow() {
   petStateStore = new PetStateStore(path.join(app.getPath("userData"), "pet-settings.json"));
   scheduledTaskStore = new ScheduledTaskStore(path.join(app.getPath("userData"), "scheduled-tasks.json"));
   agentProfileStore = new AgentProfileStore(path.join(app.getPath("userData"), "agent-profiles.json"));
+  agentTaskBoardStore = new AgentTaskBoardStore(path.join(app.getPath("userData"), "agent-task-board.json"));
   localMemoryStore = new LocalMemoryStore(path.join(app.getPath("userData"), "local-memories.json"));
   usageLedger = new UsageLedger(path.join(app.getPath("userData"), "usage-ledger.json"));
   secretStore = new SecretStore(path.join(app.getPath("userData"), "secure-variables.json"), safeStorage);
@@ -3661,25 +4338,14 @@ async function createWindow() {
     filePath: path.join(app.getPath("userData"), "cloud-account.json"),
     safeStorage,
     defaultServiceUrl: DEFAULT_CLOUD_SERVICE_URL,
+    // Credential mutations that bypass the IPC handlers (401 clearCredentials,
+    // refreshSession, ensureDesktopApiKey) must also drop cached onpeople settings.
+    onCredentialsChanged: invalidateProviderSettingsCaches,
   });
+  // onpeople settings cached before the account client existed are stale.
+  invalidateProviderSettingsCaches();
   agentRuntime = new AgentRuntimeCoordinator({ stateFile: path.join(app.getPath("userData"), "runtime-sessions.json") });
   mainWindow = createWorkbenchWindow(null);
-
-  const publishBrowserState = () => {
-    if (!browserBridge?.webContents || browserBridge.webContents.isDestroyed()) return;
-    const target = browserBridge.webContents;
-    const raw = target.getURL();
-    let host = "";
-    try { host = new URL(raw).hostname; } catch {}
-    sendToRenderer("browser:state", {
-      url: raw,
-      title: target.getTitle(),
-      host,
-      approved: host ? browserBridge?.allowedHosts.has(host) : false,
-      canGoBack: target.canGoBack(),
-      canGoForward: target.canGoForward(),
-    });
-  };
   browserBridge = new EmbeddedBrowserBridge();
   await browserBridge.start();
   browserSessionManager = new BrowserSessionManager(() => browserBridge?.target().session);
@@ -3699,6 +4365,12 @@ async function createWindow() {
   await modelGateway.start();
 
   await mainWindow.loadFile(path.join(__dirname, "index.html"));
+  // electron-updater costs ~90ms to require and is only used by the packaged
+  // non-Store Windows updater; AppUpdateService never dereferences the updater
+  // when unsupported, so null is safe everywhere else.
+  const { autoUpdater } = process.platform === "win32" && app.isPackaged && !process.windowsStore
+    ? require("electron-updater")
+    : { autoUpdater: null };
   appUpdateService = new AppUpdateService({
     updater: autoUpdater,
     platform: process.platform,
@@ -3808,6 +4480,8 @@ ipcMain.handle("pet:skin:delete", async (_event, skinId) => {
 ipcMain.handle("pet:open-thread", async (_event, threadId = null) => {
   const id = String(threadId || "").trim();
   if (id) {
+    petStateStore.removeTask(id);
+    publishPetState();
     for (const window of taskWindows) {
       if (!window.isDestroyed() && windowThreadIds.get(window.webContents.id) === id) {
         window.show();
@@ -3824,37 +4498,55 @@ ipcMain.handle("pet:open-thread", async (_event, threadId = null) => {
   return { opened: true, threadId: null };
 });
 
-ipcMain.handle("browser:attach", async (_event, webContentsId) => {
-  const target = webContents.fromId(webContentsId);
-  browserBridge.attach(target);
-  target.setWindowOpenHandler(({ url }) => {
-    void loadWebContentsUrl(target, url);
-    return { action: "deny" };
-  });
-  const publish = () => {
-    const raw = target.getURL();
-    let host = "";
-    try { host = new URL(raw).hostname; } catch {}
-    sendToRenderer("browser:state", {
-      url: raw,
-      title: target.getTitle(),
-      host,
-      approved: host ? browserBridge.allowedHosts.has(host) : false,
-      canGoBack: target.canGoBack(),
-      canGoForward: target.canGoForward(),
+ipcMain.handle("browser:attach", async (event, payload = {}) => {
+  const routeId = String(payload.routeId || "").trim();
+  const target = webContents.fromId(Number(payload.webContentsId));
+  if (!routeId) throw new Error("缺少浏览器任务路由");
+  if (!/^browser-tab-[0-9a-f-]{36}$/i.test(routeId)) throw new Error("浏览器任务路由无效");
+  const existingRoute = browserBridge.targets.get(routeId);
+  if (existingRoute && existingRoute.ownerWebContentsId !== event.sender.id) throw new Error("浏览器任务路由属于另一个窗口");
+  if (!target || target.isDestroyed() || target.getType() !== "webview") throw new Error("浏览器页面无效");
+  if (target.hostWebContents?.id !== event.sender.id) throw new Error("不能绑定其他窗口的浏览器页面");
+  if (target.session !== session.fromPartition(EMBEDDED_BROWSER_PARTITION)) throw new Error("浏览器页面不属于 OnPeople 隔离会话");
+  browserBridge.attach(target, routeId, event.sender.id);
+  if (!target._onPeopleBrowserBound) {
+    target._onPeopleBrowserBound = true;
+    target.setWindowOpenHandler(({ url }) => {
+      const record = browserBridge.targets.recordForTarget(target);
+      if (record) {
+        const owner = webContents.fromId(record.ownerWebContentsId);
+        if (owner && !owner.isDestroyed()) owner.send("browser:new-tab-requested", { routeId: record.routeId, url });
+      }
+      return { action: "deny" };
     });
-  };
-  target.on("did-navigate", publish);
-  target.on("did-navigate-in-page", publish);
-  target.on("page-title-updated", publish);
-  publish();
-  if (START_URL) await browserBridge.userNavigate(START_URL);
+    target.on("did-navigate", () => publishBrowserTarget(target));
+    target.on("did-navigate-in-page", () => publishBrowserTarget(target));
+    target.on("page-title-updated", () => publishBrowserTarget(target));
+  }
+  publishBrowserTarget(target);
+  if (START_URL) await browserBridge.withRoute(routeId, () => browserBridge.userNavigate(START_URL));
   void maybeRunSmokePrompt();
-  return { attached: true };
+  return { attached: true, routeId };
 });
 
-ipcMain.handle("browser:navigate", async (_event, url) => browserBridge.userNavigate(url));
-ipcMain.handle("workspace:quick-suggestions", async (_event, cwd) => collectWorkspaceSuggestions(cwd, browserBridge.target().getURL()));
+ipcMain.handle("browser:navigate", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, () => browserBridge.userNavigate(payload.url)));
+ipcMain.handle("browser:tab:activate", async (event, payload = {}) => {
+  const tabRouteId = browserRouteForEvent(event, payload.routeId);
+  const threadId = senderThreadId(event, payload.threadId);
+  if (threadId) {
+    browserBridge.bindRoute(threadId, tabRouteId);
+    const context = contextForThread(threadId);
+    if (context?.gatewayRouteId) browserBridge.bindRoute(context.gatewayRouteId, tabRouteId);
+  }
+  publishBrowserTarget(browserBridge.target(tabRouteId));
+  return { active: true, threadId: threadId || null, routeId: tabRouteId };
+});
+ipcMain.handle("browser:tab:detach", async (event, routeId) => {
+  const ownedRoute = browserRouteForEvent(event, routeId);
+  browserBridge.clearPreviewRoute(ownedRoute);
+  return { detached: browserBridge.targets.detach(ownedRoute), routeId: ownedRoute };
+});
+ipcMain.handle("workspace:quick-suggestions", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, () => collectWorkspaceSuggestions(payload.cwd, browserBridge.target().getURL())));
 ipcMain.handle("workspace:files:list", async (_event, cwd, relative) => listProjectDirectory(cwd, relative));
 ipcMain.handle("workspace:files:search", async (_event, cwd, query) => searchProjectFiles(cwd, query));
 ipcMain.handle("workspace:project-actions", async (_event, cwd) => discoverProjectActions(cwd));
@@ -3866,49 +4558,51 @@ ipcMain.handle("workspace:project-action:authorize", async (_event, payload) => 
   appendAudit("project.action.authorized", { cwd: result.root, id: action.id, source: action.source, fingerprint: action.fingerprint });
   return action;
 });
-ipcMain.handle("browser:open-workspace-file", async (_event, payload) => {
-  const result = await browserBridge.openWorkspaceFile(payload?.cwd, payload?.path);
+ipcMain.handle("browser:open-workspace-file", async (event, payload) => {
+  const result = await withBrowserRoute(event, payload?.routeId, () => browserBridge.openWorkspaceFile(payload?.cwd, payload?.path));
   appendAudit("browser.workspace-file.opened", { path: result.path });
   return result;
 });
-ipcMain.handle("browser:back", async () => browserBridge.target().canGoBack() && browserBridge.target().goBack());
-ipcMain.handle("browser:forward", async () => browserBridge.target().canGoForward() && browserBridge.target().goForward());
-ipcMain.handle("browser:reload", async () => browserBridge.target().reload());
-ipcMain.handle("browser:visual-snapshot", async () => browserBridge.visualSnapshot());
-ipcMain.handle("browser:developer-inspect", async () => {
+ipcMain.handle("browser:back", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.target().canGoBack() && browserBridge.target().goBack()));
+ipcMain.handle("browser:forward", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.target().canGoForward() && browserBridge.target().goForward()));
+ipcMain.handle("browser:reload", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.target().reload()));
+ipcMain.handle("browser:visual-snapshot", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.visualSnapshot()));
+ipcMain.handle("browser:developer-inspect", async (event, routeId) => withBrowserRoute(event, routeId, async () => {
   const result = await browserBridge.developerInspect();
   appendAudit("browser.developer.inspect", { url: result.dom?.url, consoleEntries: result.console.length, networkEntries: result.network.length });
   return result;
-});
-ipcMain.handle("browser:annotation:begin", async () => browserBridge.beginAnnotationSelection());
-ipcMain.handle("browser:annotation:cancel", async () => browserBridge.finishAnnotationSelection());
-ipcMain.handle("browser:annotation:list", async (_event, options) => browserBridge.listAnnotations(options));
-ipcMain.handle("browser:annotation:save", async (_event, draft) => {
-  const result = await browserBridge.saveAnnotation(draft);
+}));
+ipcMain.handle("browser:annotation:begin", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.beginAnnotationSelection()));
+ipcMain.handle("browser:annotation:cancel", async (event, routeId) => withBrowserRoute(event, routeId, () => browserBridge.finishAnnotationSelection()));
+ipcMain.handle("browser:annotation:list", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, () => browserBridge.listAnnotations(payload.options)));
+ipcMain.handle("browser:annotation:save", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, async () => {
+  const result = await browserBridge.saveAnnotation(payload.draft);
   appendAudit("browser.annotation.save", { id: result.id, url: result.url, selector: result.selector });
   return result;
-});
-ipcMain.handle("browser:annotation:delete", async (_event, annotationId) => browserBridge.deleteAnnotation(String(annotationId || "")));
-ipcMain.handle("browser:session:status", async () => browserSessionManager.summary());
-ipcMain.handle("browser:session:sign-in", async (_event, providerId) => {
+}));
+ipcMain.handle("browser:annotation:delete", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, () => browserBridge.deleteAnnotation(String(payload.annotationId || ""))));
+ipcMain.handle("browser:session:status", async (event, routeId) => withBrowserRoute(event, routeId, () => browserSessionManager.summary()));
+ipcMain.handle("browser:session:sign-in", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, async () => {
+  const providerId = payload.providerId;
   const target = browserSessionManager.signInTarget(providerId);
   appendAudit("browser.session.sign-in-opened", { provider: target.provider });
   await browserBridge.userNavigate(target.url);
   return target;
-});
-ipcMain.handle("browser:session:clear", async (_event, providerId) => {
+}));
+ipcMain.handle("browser:session:clear", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, async () => {
+  const providerId = payload.providerId;
   const result = await browserSessionManager.clearProvider(providerId);
   appendAudit("browser.session.cleared", { provider: providerId });
   await browserBridge.userNavigate("https://www.google.com/");
   return result;
-});
-ipcMain.handle("browser:session:clear-all", async () => {
+}));
+ipcMain.handle("browser:session:clear-all", async (event, routeId) => withBrowserRoute(event, routeId, async () => {
   const result = await browserSessionManager.clearAll();
   appendAudit("browser.session.cleared", { provider: "all" });
   await loadWebContentsUrl(browserBridge.target(), "about:blank");
   return result;
-});
-ipcMain.handle("browser:credentials:fill", async () => {
+}));
+ipcMain.handle("browser:credentials:fill", async (event, routeId) => withBrowserRoute(event, routeId, async () => {
   const target = browserBridge.target();
   const credential = browserCredentialVault.findForUrl(target.getURL());
   if (!credential) return { found: false, filled: false };
@@ -3917,9 +4611,9 @@ ipcMain.handle("browser:credentials:fill", async () => {
   try { host = new URL(target.getURL()).hostname; } catch {}
   appendAudit("browser.credential.fill", { host, filled: result.filled === true });
   return { found: true, filled: result.filled === true, reason: result.reason || null };
-});
+}));
 ipcMain.handle("browser:profile-import:list", async () => browserProfileImporter.listProfiles());
-ipcMain.handle("browser:profile-import:run", async (_event, payload = {}) => {
+ipcMain.handle("browser:profile-import:run", async (event, payload = {}) => withBrowserRoute(event, payload.routeId, async () => {
   const result = await browserProfileImporter.importProfile({
     profileId: typeof payload.profileId === "string" ? payload.profileId : "",
     importCookies: payload.importCookies === true,
@@ -3932,7 +4626,7 @@ ipcMain.handle("browser:profile-import:run", async (_event, payload = {}) => {
     passwordsImported: result.passwords?.imported || result.passwords?.profile?.imported || 0,
   });
   return result;
-});
+}));
 ipcMain.handle("agent:status", async (event) => {
   const hasWindowThread = windowThreadIds.has(event.sender.id);
   const threadId = hasWindowThread ? windowThreadIds.get(event.sender.id) : null;
@@ -3971,18 +4665,18 @@ ipcMain.handle("runtime:snapshot", async (_event, threadId) => agentRuntime?.sna
 ipcMain.handle("runtime:restart", async () => restartAppServer("manual"));
 ipcMain.handle("workspace:open-editor", async (_event, payload) => openEditorLocation(payload));
 ipcMain.handle("generated-image:read", async (event, imagePath, threadId = null) => {
-  const ownerThreadId = String(threadId || windowThreadIds.get(event.sender.id) || "");
-  return generatedImagePath(ownerThreadId, imagePath);
+  const ownerThreadId = senderThreadId(event, threadId, { allowUnbound: false });
+  return await generatedImagePath(ownerThreadId, imagePath);
 });
 ipcMain.handle("generated-image:reveal", async (event, imagePath, threadId = null) => {
-  const ownerThreadId = String(threadId || windowThreadIds.get(event.sender.id) || "");
-  const image = generatedImagePath(ownerThreadId, imagePath);
+  const ownerThreadId = senderThreadId(event, threadId, { allowUnbound: false });
+  const image = await generatedImagePath(ownerThreadId, imagePath);
   shell.showItemInFolder(image.path);
   return { revealed: true, path: image.path };
 });
 ipcMain.handle("generated-image:copy", async (event, imagePath, threadId = null) => {
-  const ownerThreadId = String(threadId || windowThreadIds.get(event.sender.id) || "");
-  const image = generatedImagePath(ownerThreadId, imagePath);
+  const ownerThreadId = senderThreadId(event, threadId, { allowUnbound: false });
+  const image = await generatedImagePath(ownerThreadId, imagePath);
   const value = nativeImage.createFromPath(image.path);
   if (value.isEmpty()) throw new Error("无法读取生成图片");
   clipboard.writeImage(value);
@@ -3994,7 +4688,7 @@ ipcMain.handle("git:review-comments", async (event, payload) => submitInlineRevi
 }));
 
 ipcMain.handle("agent:send", async (event, payload) => {
-  const threadId = String(payload?.threadId || "").trim();
+  const threadId = senderThreadId(event, payload?.threadId);
   if (threadId && !runtimeLoadedThreadIds.has(threadId)) {
     const restorePromise = runtimeThreadLoadPromises.get(threadId)
       || ensureRuntimeThread(threadId, {
@@ -4010,7 +4704,7 @@ ipcMain.handle("agent:send", async (event, payload) => {
       clientMessageId,
     };
   }
-  const result = await dispatchAgentPrompt(payload);
+  const result = await dispatchAgentPrompt({ ...payload, threadId });
   bindWindowThread(event.sender.id, result.threadId);
   return { ...result, clientMessageId: payload?.clientMessageId || null, delivery: "sent" };
 });
@@ -4197,6 +4891,7 @@ ipcMain.handle("models:validate", async (_event, providerType, modelId) => detec
 ipcMain.handle("cloud:account:status", async () => cloudAccount.status());
 ipcMain.handle("cloud:account:login", async (_event, payload) => {
   const result = await cloudAccount.login(payload || {});
+  invalidateProviderSettingsCaches();
   refreshOnPeopleRoutes();
   sendToRenderer("cloud:account:updated", result);
   return result;
@@ -4204,18 +4899,21 @@ ipcMain.handle("cloud:account:login", async (_event, payload) => {
 ipcMain.handle("cloud:account:register-code", async (_event, payload) => cloudAccount.sendRegistrationCode(payload || {}));
 ipcMain.handle("cloud:account:register", async (_event, payload) => {
   const result = await cloudAccount.register(payload || {});
+  invalidateProviderSettingsCaches();
   refreshOnPeopleRoutes();
   sendToRenderer("cloud:account:updated", result);
   return result;
 });
 ipcMain.handle("cloud:account:logout", async () => {
   const result = await cloudAccount.logout();
+  invalidateProviderSettingsCaches();
   refreshOnPeopleRoutes();
   sendToRenderer("cloud:account:updated", result);
   return result;
 });
 ipcMain.handle("cloud:account:redeem", async (_event, code) => {
   const result = await cloudAccount.redeem(code);
+  invalidateProviderSettingsCaches();
   sendToRenderer("cloud:account:updated", result.state);
   return result;
 });
@@ -4223,14 +4921,27 @@ ipcMain.handle("cloud:account:open-console", async () => {
   await shell.openExternal(cloudAccount.serviceUrl());
   return { opened: true };
 });
-ipcMain.handle("agents:list", async () => ({ agents: [...managedAgents.values()].map(publicAgent), maxAgents: readP0Settings().policy.maxAgents }));
+ipcMain.handle("cloud:groups:list", async () => cloudAccount.listGroups());
+ipcMain.handle("cloud:groups:select", async (_event, groupId) => {
+  const state = await cloudAccount.selectGroup(groupId);
+  invalidateProviderSettingsCaches();
+  refreshOnPeopleRoutes();
+  sendToRenderer("cloud:account:updated", state);
+  return state;
+});
+ipcMain.handle("cloud:usage:profile", async (_event, payload) => cloudAccount.usageProfile(payload || {}));
+ipcMain.handle("cloud:usage:leaderboard-preference", async (_event, payload) => cloudAccount.updateLeaderboardPreference(payload || {}));
+ipcMain.handle("agents:list", async (event) => listNativeAgents(windowThreadIds.get(event.sender.id) || null));
+ipcMain.handle("agents:tasks:create", async (event, payload) => createNativeBoardTask(windowThreadIds.get(event.sender.id) || null, payload));
+ipcMain.handle("agents:tasks:dispatch", async (event, taskId) => dispatchNativeBoardTask(windowThreadIds.get(event.sender.id) || null, taskId));
+ipcMain.handle("agents:tasks:remove", async (event, taskId) => removeNativeBoardTask(windowThreadIds.get(event.sender.id) || null, taskId));
 ipcMain.handle("agent-profiles:list", async () => ({ profiles: agentProfileStore.list() }));
 ipcMain.handle("agent-profiles:save", async (_event, profile) => ({ profile: agentProfileStore.save(profile), profiles: agentProfileStore.list() }));
 ipcMain.handle("agent-profiles:delete", async (_event, profileId) => ({ ...agentProfileStore.remove(profileId), profiles: agentProfileStore.list() }));
-ipcMain.handle("agents:spawn", async (_event, payload) => spawnManagedAgent(payload));
-ipcMain.handle("agents:message", async (_event, agentId, text) => sendManagedAgentMessage(agentId, text));
-ipcMain.handle("agents:stop", async (_event, agentId) => stopManagedAgent(agentId));
-ipcMain.handle("agents:read", async (_event, agentId) => readManagedAgent(agentId));
+ipcMain.handle("agents:spawn", async (event, payload) => dispatchNativeAgent(windowThreadIds.get(event.sender.id) || null, payload));
+ipcMain.handle("agents:message", async (event, agentId, text) => messageNativeAgent(windowThreadIds.get(event.sender.id) || null, agentId, text));
+ipcMain.handle("agents:stop", async (event, agentId) => stopNativeAgent(windowThreadIds.get(event.sender.id) || null, agentId));
+ipcMain.handle("agents:read", async (event, agentId) => readNativeAgent(windowThreadIds.get(event.sender.id) || null, agentId));
 ipcMain.handle("worktrees:list", async (_event, cwd) => listWorktrees(cwd));
 ipcMain.handle("worktrees:create", async (_event, payload) => createWorktree(payload));
 ipcMain.handle("worktrees:handoff", async (event, worktreePath) => handoffWorktree(worktreePath, windowThreadIds.get(event.sender.id) || null));
@@ -4241,7 +4952,10 @@ ipcMain.handle("context:compact", async (event) => compactThread(windowThreadIds
 ipcMain.handle("context:steer", async (event, text) => steerTurn(windowThreadIds.get(event.sender.id) || null, text));
 ipcMain.handle("context:queue", async (event, text) => queueThreadMessage(windowThreadIds.get(event.sender.id) || null, text));
 ipcMain.handle("policy:get", async () => ({ policy: readP0Settings().policy, audit: readAudit(100) }));
-ipcMain.handle("policy:save", async (_event, threadId, policy) => ({ policy: await applyPolicy(policy, threadId), audit: readAudit(100) }));
+ipcMain.handle("policy:save", async (event, threadId, policy) => ({
+  policy: await applyPolicy(policy, senderThreadId(event, threadId)),
+  audit: readAudit(100),
+}));
 ipcMain.handle("config:effective", async (_event, payload = {}) => inspectEffectiveConfig({
   cwd: payload.cwd || DEFAULT_CWD,
   provider: publicProviderSettings(),
@@ -4344,13 +5058,18 @@ ipcMain.handle("agent:image:paste", async () => {
   };
 });
 ipcMain.handle("agent:goal:set", async (event, payload) => {
-  const result = await setGoal(payload);
+  const threadId = senderThreadId(event, payload?.threadId);
+  const result = await setGoal({ ...payload, threadId });
   bindWindowThread(event.sender.id, result.threadId);
   return result;
 });
-ipcMain.handle("agent:goal:update", async (_event, threadId, action, value) => updateGoal(threadId, action, value));
+ipcMain.handle("agent:goal:update", async (event, threadId, action, value) => updateGoal(
+  senderThreadId(event, threadId, { allowUnbound: false }),
+  action,
+  value,
+));
 ipcMain.handle("agent:provider:get", async (event, requestedType, requestedThreadId = null) => {
-  const threadId = String(requestedThreadId || windowThreadIds.get(event.sender.id) || "").trim() || null;
+  const threadId = senderThreadId(event, requestedThreadId);
   const settings = Object.hasOwn(PROVIDERS, requestedType)
     ? providerProfileForThread(threadId, requestedType)
     : providerContextForThread(threadId).settings;
@@ -4358,10 +5077,12 @@ ipcMain.handle("agent:provider:get", async (event, requestedType, requestedThrea
 });
 ipcMain.handle("agent:provider:save", async (event, input) => {
   if (runtimeStartPromise) throw new Error("Agent 运行时正在重连，请稍后再试");
-  if (input?.type === "onpeople" && !cloudAccount?.apiKey()) {
-    throw new Error("请先登录 Sub2API 账号，再选择 OnPeople 模型");
+  if (input?.type === "onpeople") {
+    if (!cloudAccount?.accessToken()) throw new Error("请先登录 OnPeople 账号，再选择模型");
+    await cloudAccount.ensureModelAccess(input.model);
+    invalidateProviderSettingsCaches();
   }
-  const threadId = String(input?.threadId || windowThreadIds.get(event.sender.id) || "").trim() || null;
+  const threadId = senderThreadId(event, input?.threadId);
   const before = providerContextForThread(threadId).settings;
   const normalized = normalizeProviderSettings(input, before);
   const changed = before.type !== normalized.type
@@ -4394,11 +5115,11 @@ ipcMain.handle("agent:provider:save", async (event, input) => {
 });
 ipcMain.handle("agent:new-task", async (event) => {
   bindWindowThread(event.sender.id, null);
-  return { created: true };
+  return { created: true, cwd: DEFAULT_CWD };
 });
 
-ipcMain.handle("agent:interrupt", async (_event, threadId) => {
-  const id = String(threadId || "").trim();
+ipcMain.handle("agent:interrupt", async (event, threadId) => {
+  const id = senderThreadId(event, threadId, { allowUnbound: false });
   const turnId = activeTurnIdsByThread.get(id);
   if (!id || !turnId) return { interrupted: false };
   const goal = goalsByThread.get(id);
@@ -4407,7 +5128,10 @@ ipcMain.handle("agent:interrupt", async (_event, threadId) => {
   return { interrupted: true };
 });
 
-ipcMain.handle("agent:approval", async (_event, requestId, decision) => {
+ipcMain.handle("agent:approval", async (event, requestId, decision) => {
+  const pending = appServer?.serverRequests?.get(String(requestId));
+  const requestThreadId = pending?.params?.threadId || pending?.params?.thread?.id || null;
+  if (requestThreadId) senderThreadId(event, requestThreadId, { allowUnbound: false });
   const result = appServer.resolveServerRequest(requestId, decision);
   appendAudit("approval.resolve", { requestId, decision });
   return result;
@@ -4458,6 +5182,7 @@ app.on("before-quit", () => {
   }
   agentRuntime?.close();
   if (scheduledRunsByThread.size) failActiveScheduledRuns("OnPeople 在计划任务完成前退出", false);
+  usageLedger?.flush();
   appServer?.stop();
   browserBridge?.stop();
   modelGateway?.stop();

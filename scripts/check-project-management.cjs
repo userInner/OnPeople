@@ -60,7 +60,7 @@ assert.ok(openEditorBody.includes("resolveOpenableWorkspaceFile"), "file links m
 assert.ok(!openEditorBody.includes("gitRoot("), "opening a file must not require a Git repository");
 assert.ok(openEditorBody.includes("shouldUseSystemPreview"), "images and documents must open with the system preview");
 assert.ok(renderer.includes('timeline.classList.add("instant-scroll")'), "thread switching must disable visible scroll animation");
-assert.ok(renderer.includes("if (!renderingThreadHistory) timeline.scrollTop"), "history construction must not scroll once per item");
+assert.ok(renderer.includes("if (!renderingThreadHistory) scrollTimelineToBottom"), "history construction must not scroll once per item");
 assert.ok(!renderer.includes("window.prompt("), "Electron renderer must not use the unsupported window.prompt API");
 assert.ok(renderer.includes("function requestText("), "rename and goal editing must use the in-app text dialog");
 assert.ok(html.includes('id="text-input-dialog"'), "the in-app text dialog must be present");

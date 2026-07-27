@@ -7,12 +7,13 @@
     <title>OnPeople</title>
     <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="ui-controls.css" />
   </head>
   <body>
     <div id="app-shell" class="app-shell">
       <aside id="app-sidebar" class="app-sidebar" aria-label="任务侧栏">
         <div class="sidebar-brand">
-          <img class="brand-mark" src="../assets/onpeople-app-icon.png" alt="" aria-hidden="true" />
+          <span class="brand-mark" aria-hidden="true"><img src="../assets/onpeople-app-icon.png" alt="" /></span>
           <strong>OnPeople</strong>
           <button id="sidebar-toggle" class="icon-button sidebar-hide" type="button" aria-label="收起侧栏">◧</button>
         </div>
@@ -126,16 +127,8 @@
             <img src="../assets/onpeople-app-icon.png" alt="" />
             <span>宠物</span>
           </button>
-          <label class="boundary-badge permission-control" title="任务执行权限">
-            <i></i>
-            <select id="permission-preset" aria-label="任务执行权限" disabled>
-              <option value="ask">请求批准</option>
-              <option value="auto_review">替我审批</option>
-              <option value="full_access">完全访问</option>
-            </select>
-          </label>
           <div class="tool-switcher" role="tablist" aria-label="工具舱">
-            <button class="panel-toggle active" type="button" data-tool-view="browser" aria-pressed="true">浏览器</button>
+            <button class="panel-toggle" type="button" data-tool-view="browser" aria-pressed="false">浏览器</button>
             <button class="panel-toggle" type="button" data-tool-view="terminal" aria-pressed="false">终端</button>
             <button class="panel-toggle" type="button" data-tool-view="changes" aria-pressed="false">变更</button>
             <button class="panel-toggle" type="button" data-tool-view="files" aria-pressed="false">文件</button>
@@ -145,7 +138,7 @@
         </div>
       </header>
 
-      <main id="content-area" class="content-area">
+      <main id="content-area" class="content-area utility-collapsed">
         <section id="primary-workspace" class="primary-workspace">
           <section class="conversation-panel">
           <section id="goal-panel" class="goal-panel" hidden>
@@ -164,7 +157,7 @@
 
           <div id="timeline" class="timeline">
             <div class="welcome-card">
-              <img class="welcome-mark" src="../assets/onpeople-app-icon.png" alt="" aria-hidden="true" />
+              <span class="welcome-mark" aria-hidden="true"><img src="../assets/onpeople-app-icon.png" alt="" /></span>
               <h1>今天要完成什么？</h1>
               <p>让本机 Agent 操作代码、终端、浏览器或桌面应用。任务执行会留在可审阅的轨迹里。</p>
               <div class="capability-row" aria-label="可用能力">
@@ -175,45 +168,64 @@
 
           <div class="composer-dock">
             <form id="composer" class="composer">
-              <div id="image-attachments" class="image-attachments" hidden></div>
-              <div id="capability-selection" class="capability-selection" hidden></div>
-              <div id="capability-menu" class="capability-menu" hidden role="menu" aria-label="添加内容和能力">
-                <span class="capability-heading">添加</span>
-                <button type="button" data-capability-action="attachments"><i>⌕</i><span><strong>文件和文件夹</strong><small>作为当前任务的本地上下文</small></span></button>
-                <button type="button" data-capability-action="chrome"><i class="chrome-dot"></i><span><strong>附加 Google Chrome</strong><small>导入 Cookie 与本地加密密码</small></span></button>
-                <button type="button" data-capability-action="goal"><i>◎</i><span><strong>目标</strong><small>设置要持续追求的结果</small></span></button>
-                <button type="button" data-capability-action="plan"><i>☼</i><span><strong>计划模式</strong><small>先调查并制定实施计划</small></span></button>
-                <span class="capability-heading">内嵌能力</span>
-                <button type="button" data-capability="documents"><i class="capability-icon document">▤</i><span><strong>Documents</strong><small>创建 DOCX 文档</small></span></button>
-                <button type="button" data-capability="pdf"><i class="capability-icon pdf">PDF</i><span><strong>PDF</strong><small>创建和验证 PDF 文件</small></span></button>
-                <button type="button" data-capability="spreadsheets"><i class="capability-icon sheet">▦</i><span><strong>Spreadsheets</strong><small>创建 XLSX 工作簿</small></span></button>
-                <button type="button" data-capability="presentations"><i class="capability-icon slides">▣</i><span><strong>Presentations</strong><small>创建 PPTX 演示文稿</small></span></button>
-                <button type="button" data-capability="imagegen"><i class="capability-icon imagegen">✦</i><span><strong>Image generation</strong><small>生成图片并保存到当前项目</small></span></button>
-                <button type="button" data-capability="templates"><i class="capability-icon template">◆</i><span><strong>Template Creator</strong><small>创建和复用产物模板</small></span></button>
-                <button type="button" data-capability="sites"><i class="capability-icon sites">◫</i><span><strong>Sites</strong><small>构建可直接预览的网站</small></span></button>
-                <button type="button" data-capability="browser"><i class="capability-icon browser">⌁</i><span><strong>浏览器</strong><small>控制 OnPeople 内嵌浏览器</small></span></button>
-                <button type="button" data-capability="computer"><i class="capability-icon computer">✦</i><span><strong>电脑</strong><small id="computer-capability-copy">控制 macOS 原生应用</small></span></button>
-                <button type="button" data-capability="visualize"><i class="capability-icon visualize">✧</i><span><strong>Visualize</strong><small>生成交互式数据可视化</small></span></button>
-                <button type="button" data-capability="default-templates"><i class="capability-icon defaults">◇</i><span><strong>Default templates</strong><small>生成文档、表格、演示和网站模板</small></span></button>
-                <span class="capability-heading">应用</span>
-                <button type="button" data-capability-action="apps"><i>⊞</i><span><strong>应用与连接器</strong><small>从 Plugins 与 MCP 管理中心安装</small></span></button>
-              </div>
-              <textarea id="prompt" rows="2" placeholder="描述一个任务…"></textarea>
-              <div class="composer-bottom">
-                <div class="mode-row" role="radiogroup" aria-label="任务模式">
-                  <button type="button" class="mode-option active" data-mode="default" aria-pressed="true">执行</button>
-                  <button type="button" class="mode-option" data-mode="plan" aria-pressed="false">Plan</button>
-                  <button type="button" class="mode-option" data-mode="goal" aria-pressed="false">Goal</button>
-                  <label id="goal-budget-wrap" class="goal-budget" hidden>预算
-                    <select id="goal-budget-mode" aria-label="Goal 预算模式"><option value="unlimited">∞ 无限</option><option value="limited">自定义</option></select>
-                    <input id="goal-budget" type="number" min="1" step="1000" placeholder="tokens" aria-label="Goal Token 预算" hidden />
-                  </label>
+              <div class="composer-surface">
+                <div id="image-attachments" class="image-attachments" hidden></div>
+                <div id="capability-selection" class="capability-selection" hidden></div>
+                <div id="capability-menu" class="capability-menu" hidden role="menu" aria-label="添加内容和能力">
+                  <span class="capability-heading">添加</span>
+                  <button type="button" data-capability-action="attachments"><i>⌕</i><span><strong>文件和文件夹</strong><small>作为当前任务的本地上下文</small></span></button>
+                  <button type="button" data-capability-action="chrome"><i class="chrome-dot"></i><span><strong>附加 Google Chrome</strong><small>导入 Cookie 与本地加密密码</small></span></button>
+                  <button type="button" data-capability-action="goal"><i>◎</i><span><strong>目标</strong><small>设置要持续追求的结果</small></span></button>
+                  <button type="button" data-capability-action="plan"><i>☼</i><span><strong>计划模式</strong><small>先调查并制定实施计划</small></span></button>
+                  <span class="capability-heading">内嵌能力</span>
+                  <button type="button" data-capability="documents"><i class="capability-icon document">▤</i><span><strong>Documents</strong><small>创建 DOCX 文档</small></span></button>
+                  <button type="button" data-capability="pdf"><i class="capability-icon pdf">PDF</i><span><strong>PDF</strong><small>创建和验证 PDF 文件</small></span></button>
+                  <button type="button" data-capability="spreadsheets"><i class="capability-icon sheet">▦</i><span><strong>Spreadsheets</strong><small>创建 XLSX 工作簿</small></span></button>
+                  <button type="button" data-capability="presentations"><i class="capability-icon slides">▣</i><span><strong>Presentations</strong><small>创建 PPTX 演示文稿</small></span></button>
+                  <button type="button" data-capability="imagegen"><i class="capability-icon imagegen">✦</i><span><strong>Image generation</strong><small>生成图片并保存到当前项目</small></span></button>
+                  <button type="button" data-capability="templates"><i class="capability-icon template">◆</i><span><strong>Template Creator</strong><small>创建和复用产物模板</small></span></button>
+                  <button type="button" data-capability="sites"><i class="capability-icon sites">◫</i><span><strong>Sites</strong><small>构建可直接预览的网站</small></span></button>
+                  <button type="button" data-capability="browser"><i class="capability-icon browser">⌁</i><span><strong>浏览器</strong><small>控制 OnPeople 内嵌浏览器</small></span></button>
+                  <button type="button" data-capability="computer"><i class="capability-icon computer">✦</i><span><strong>电脑</strong><small id="computer-capability-copy">控制 macOS 原生应用</small></span></button>
+                  <button type="button" data-capability="visualize"><i class="capability-icon visualize">✧</i><span><strong>Visualize</strong><small>生成交互式数据可视化</small></span></button>
+                  <button type="button" data-capability="default-templates"><i class="capability-icon defaults">◇</i><span><strong>Default templates</strong><small>生成文档、表格、演示和网站模板</small></span></button>
+                  <span class="capability-heading">应用</span>
+                  <button type="button" data-capability-action="apps"><i>⊞</i><span><strong>应用与连接器</strong><small>从 Plugins 与 MCP 管理中心安装</small></span></button>
                 </div>
-                <div class="composer-actions">
+                <textarea id="prompt" rows="3" placeholder="今天帮你做些什么？  通过＋添加文件、技能与能力"></textarea>
+                <div class="composer-bottom">
                   <button id="attach-image" type="button" class="attach-button" aria-label="添加内容和能力" title="添加内容和能力" aria-expanded="false">＋</button>
-                  <button id="stop" type="button" class="stop-button" aria-label="停止">■</button>
-                  <button id="send" type="submit" class="send-button" aria-label="运行任务">↑</button>
+                  <div class="composer-primary-actions">
+                    <div class="mode-row" role="radiogroup" aria-label="任务模式">
+                      <button type="button" class="mode-option active" data-mode="default" aria-pressed="true">执行</button>
+                      <button type="button" class="mode-option" data-mode="plan" aria-pressed="false">Plan</button>
+                      <button type="button" class="mode-option" data-mode="goal" aria-pressed="false">Goal</button>
+                      <label id="goal-budget-wrap" class="goal-budget" hidden>预算
+                        <select id="goal-budget-mode" aria-label="Goal 预算模式"><option value="unlimited">∞ 无限</option><option value="limited">自定义</option></select>
+                        <input id="goal-budget" type="number" min="1" step="1000" placeholder="tokens" aria-label="Goal Token 预算" hidden />
+                      </label>
+                    </div>
+                    <div class="composer-actions">
+                      <button id="stop" type="button" class="stop-button" aria-label="停止">■</button>
+                      <button id="send" type="submit" class="send-button" aria-label="运行任务">↑</button>
+                    </div>
+                  </div>
                 </div>
+              </div>
+              <div class="composer-context-row">
+                <button id="composer-workspace" class="composer-context-button" type="button" title="选择工作空间">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8v.7M3.5 7.5h17v8.8a3.7 3.7 0 0 1-3.7 3.7H7.2a3.7 3.7 0 0 1-3.7-3.7Z"/></svg>
+                  <span id="composer-workspace-label">选择工作空间</span>
+                  <b aria-hidden="true">⌄</b>
+                </button>
+                <label class="boundary-badge permission-control composer-permission" title="任务执行权限">
+                  <span class="composer-context-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.5c0 4.3-2.8 7.7-7 9.3-4.2-1.6-7-5-7-9.3V6Z"/><path d="m9.2 12 1.8 1.8 3.9-4"/></svg></span>
+                  <select id="permission-preset" aria-label="任务执行权限" disabled>
+                    <option value="ask">请求批准</option>
+                    <option value="auto_review">替我审批</option>
+                    <option value="full_access">完全访问</option>
+                  </select>
+                </label>
               </div>
             </form>
             <span id="composer-hint" class="composer-hint">Enter 发送 · Shift Enter 换行 · ⌘V 粘贴图片 · 原生工具操作会按策略请求批准</span>
@@ -233,7 +245,7 @@
 
         <div id="workspace-resizer" class="panel-resizer workspace-resizer" role="separator" aria-label="调整工具舱宽度" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="900" tabindex="0"></div>
 
-        <section id="utility-panel" class="utility-panel">
+        <section id="utility-panel" class="utility-panel" aria-hidden="true">
           <div class="utility-heading">
             <div><strong id="utility-title">浏览器</strong><span id="utility-subtitle">Agent 工具舱</span></div>
             <div class="utility-heading-actions">
@@ -254,6 +266,10 @@
           </div>
 
           <section class="utility-view browser-view active" data-view="browser">
+            <div class="browser-tabs-shell">
+              <div id="browser-tab-strip" class="browser-tab-strip" role="tablist" aria-label="浏览器标签页"></div>
+              <button id="browser-new-tab" class="browser-new-tab" type="button" aria-label="新建浏览器标签" title="新建标签">＋</button>
+            </div>
             <div class="browser-toolbar">
               <div class="browser-navigation" aria-label="页面导航">
                 <button id="back" type="button" aria-label="后退" title="后退">‹</button>
@@ -270,7 +286,10 @@
               </div>
             </div>
             <div class="browser-meta">
-              <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
+              <div class="browser-context">
+                <span id="browser-task-tab" class="browser-task-tab">新任务 · 独立页面</span>
+                <div id="site-permission" class="site-permission"><i></i><span>未载入</span></div>
+              </div>
               <div class="browser-inspection-actions" aria-label="浏览器检查工具">
                 <button id="browser-snapshot" type="button">快照</button>
                 <button id="browser-annotate" type="button">批注 <small id="browser-annotation-count">0</small></button>
@@ -426,8 +445,8 @@
 
           <section class="utility-view control-view" data-view="control">
             <div class="control-tabs" role="tablist" aria-label="P0 控制中心">
-              <button class="active" type="button" data-control-view="agents">Agents</button>
-              <button type="button" data-control-view="scheduled">Scheduled</button>
+              <button type="button" data-control-view="agents" hidden>Agents</button>
+              <button class="active" type="button" data-control-view="scheduled">Scheduled</button>
               <button type="button" data-control-view="diagnostics">Diagnostics</button>
               <button id="control-advanced-toggle" type="button" aria-expanded="false">高级设置⌄</button>
               <select id="control-advanced-select" class="advanced-control-item" aria-label="高级控制面板" hidden>
@@ -436,18 +455,27 @@
               <button id="control-refresh" type="button" class="control-refresh">刷新</button>
             </div>
 
-            <div class="control-panel active" data-control-panel="agents">
+            <div class="control-panel" data-control-panel="agents" hidden>
               <div class="agent-overview">
-                <div><strong>子 Agent</strong><span id="agent-capacity">0 / 4 ACTIVE</span><p>直接在对话中说明如何分工。运行中的任务和结果会出现在这里。</p></div>
-                <button id="agent-advanced-open" type="button">高级派发</button>
+                <div><strong>共享任务</strong><span id="agent-capacity">0 / 4 ACTIVE</span><p>父任务负责调度，Codex Core 执行。依赖、状态与子 Agent 图会随任务恢复。</p></div>
+                <button id="agent-advanced-open" type="button">新建任务</button>
+              </div>
+              <div id="agent-board-filters" class="agent-board-filters" role="tablist" aria-label="共享任务状态">
+                <button class="pending" type="button" data-agent-board-state="pending"><i></i><span>待领取</span><strong>0</strong></button>
+                <button class="running" type="button" data-agent-board-state="running"><i></i><span>运行中</span><strong>0</strong></button>
+                <button class="blocked" type="button" data-agent-board-state="blocked"><i></i><span>被依赖阻塞</span><strong>0</strong></button>
+                <button class="waiting" type="button" data-agent-board-state="waiting"><i></i><span>等待用户</span><strong>0</strong></button>
+                <button class="completed" type="button" data-agent-board-state="completed"><i></i><span>已完成</span><strong>0</strong></button>
+                <button class="failed" type="button" data-agent-board-state="failed"><i></i><span>失败</span><strong>0</strong></button>
               </div>
               <form id="agent-create" class="control-form agent-form" hidden>
-                <div class="control-form-heading"><strong>高级派发</strong><button id="agent-advanced-close" type="button">收起</button></div>
+                <div class="control-form-heading"><strong>新建共享任务</strong><button id="agent-advanced-close" type="button">收起</button></div>
                 <label>Agent 配置<select id="agent-profile"><option value="default">Default</option></select></label>
                 <div class="form-pair"><input id="agent-name" placeholder="名称，如 Security" /><select id="agent-role"><option value="worker">Worker</option><option value="reviewer">Reviewer</option><option value="researcher">Researcher</option><option value="tester">Tester</option></select></div>
                 <div class="form-pair"><input id="agent-model" placeholder="模型；留空继承" /><select id="agent-effort"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="xhigh">XHigh</option><option value="max">Max</option></select></div>
                 <textarea id="agent-prompt" rows="3" placeholder="描述这个 Agent 独立负责的任务…"></textarea>
-                <button type="submit" class="primary-control">开始并行任务</button>
+                <label class="agent-dependency-field">依赖任务<select id="agent-dependencies" multiple size="3" aria-label="选择上游依赖"></select><small>按住 ⌘ 可多选；上游完成前任务保持阻塞。</small></label>
+                <div class="agent-create-actions"><button type="submit" data-agent-action="queue">加入看板</button><button type="submit" data-agent-action="dispatch" class="primary-control">立即派发</button></div>
               </form>
               <details class="control-disclosure">
                 <summary>管理自定义 Agent</summary>
@@ -455,13 +483,14 @@
                   <input id="profile-agent-id" type="hidden" />
                   <div class="form-pair"><input id="profile-agent-name" placeholder="Agent 名称" /><input id="profile-agent-role" placeholder="角色，如 Security" /></div>
                   <div class="form-pair"><input id="profile-agent-model" placeholder="模型；留空继承" /><select id="profile-agent-effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div>
-                  <label>默认权限<select id="profile-agent-sandbox"><option value="inherit">继承父任务</option><option value="read-only">只读</option><option value="workspace-write">工作区可写</option><option value="danger-full-access">完全访问</option></select></label>
+                  <label>权限策略<select id="profile-agent-sandbox"><option value="inherit">继承父任务（原生默认）</option><option value="read-only">只读（仅保存偏好）</option><option value="workspace-write">工作区可写（仅保存偏好）</option><option value="danger-full-access">完全访问（仅保存偏好）</option></select></label>
                   <textarea id="profile-agent-instructions" rows="3" placeholder="这个 Agent 的长期职责和边界…"></textarea>
                   <div class="control-actions"><button type="submit" class="primary-control">保存 Agent</button><button id="profile-agent-new" type="button">新建</button><button id="profile-agent-delete" type="button" class="danger-outline">删除</button></div>
                 </form>
                 <div id="agent-profile-list" class="control-list compact-list"></div>
               </details>
-              <div id="agent-list" class="control-list"><span class="control-empty">还没有派发子 Agent。</span></div>
+              <div id="agent-dependency-summary" class="agent-dependency-summary">任务依赖会显示在每张卡片上。</div>
+              <div id="agent-list" class="control-list agent-task-board"><span class="control-empty">还没有共享任务。</span></div>
             </div>
 
             <div class="control-panel" data-control-panel="worktrees">
@@ -551,7 +580,7 @@
               <div id="hook-runs" class="audit-list"></div>
             </div>
 
-            <div class="control-panel" data-control-panel="scheduled">
+            <div class="control-panel active" data-control-panel="scheduled">
               <form id="scheduled-create" class="control-form scheduled-form">
                 <div class="control-form-heading"><strong>新建计划任务</strong><span>应用运行期间自动执行</span></div>
                 <input id="scheduled-name" maxlength="100" placeholder="名称，如 每日项目巡检" />
@@ -662,6 +691,9 @@
             <button id="cloud-account-refresh" type="button" aria-label="刷新余额" title="刷新余额">↻</button>
           </div>
           <div class="cloud-source-line"><i></i><span id="cloud-route-label">OnPeople 模型</span><b>按任务选择</b></div>
+          <label class="cloud-group-row">默认模型分组
+            <select id="cloud-group-select"><option value="">正在读取分组…</option></select>
+          </label>
           <div class="cloud-package-heading"><strong>兑换额度</strong><span>充值到当前账户</span></div>
           <div class="cloud-redeem-row">
             <input id="cloud-redeem-code" autocomplete="off" placeholder="输入兑换码" />
@@ -675,6 +707,105 @@
       </section>
     </dialog>
 
+    <dialog id="usage-profile-dialog" class="usage-profile-dialog" aria-labelledby="usage-profile-title">
+      <section class="usage-profile-shell">
+        <header class="usage-profile-topbar">
+          <div class="usage-profile-brand">
+            <img src="../assets/onpeople-app-icon-256.png" alt="" />
+            <div>
+              <span>ONPEOPLE ACTIVITY</span>
+              <strong id="usage-profile-title">我的 Agent 档案</strong>
+            </div>
+          </div>
+          <nav class="usage-profile-tabs" aria-label="Token 档案视图">
+            <button class="active" type="button" data-usage-profile-view="profile">使用档案</button>
+            <button type="button" data-usage-profile-view="leaderboard">Token 排行</button>
+          </nav>
+          <button id="usage-profile-close" class="usage-profile-close" type="button" aria-label="关闭">×</button>
+        </header>
+
+        <div id="usage-profile-view" class="usage-profile-view">
+          <section class="usage-profile-hero">
+            <div class="usage-avatar">
+              <img src="../assets/onpeople-app-icon-256.png" alt="" />
+              <i aria-hidden="true"></i>
+            </div>
+            <div class="usage-profile-person">
+              <strong id="usage-profile-name">OnPeople 用户</strong>
+              <span id="usage-profile-handle">本机 Agent 活动</span>
+              <small>本机统计包含所有 Router；云端统计仅包含 OnPeople 模型。</small>
+            </div>
+            <button id="usage-profile-refresh" type="button">刷新数据</button>
+          </section>
+
+          <section class="usage-metric-strip" aria-label="使用数据摘要">
+            <article><strong id="usage-total-tokens">0</strong><span>累计 Token</span><small>本机全部模型</small></article>
+            <article><strong id="usage-peak-tokens">0</strong><span>单日峰值</span><small id="usage-peak-day">暂无记录</small></article>
+            <article><strong id="usage-longest-task">0 秒</strong><span>最长任务</span><small>已完成 Turn</small></article>
+            <article><strong id="usage-current-streak">0 天</strong><span>当前连续</span><small id="usage-longest-streak">最长 0 天</small></article>
+            <article><strong id="usage-task-count">0</strong><span>任务轮次</span><small id="usage-active-days">活跃 0 天</small></article>
+          </section>
+
+          <section class="usage-activity-card">
+            <header>
+              <div><strong>Token 活动</strong><span>过去 365 天</span></div>
+              <div class="usage-heat-legend"><span>少</span><i></i><i></i><i></i><i></i><span>多</span></div>
+            </header>
+            <div id="usage-heatmap" class="usage-heatmap" role="img" aria-label="过去 365 天 Token 使用热力图"></div>
+            <div id="usage-heat-months" class="usage-heat-months" aria-hidden="true"></div>
+          </section>
+
+          <section class="usage-insights-grid">
+            <article>
+              <header><strong>活动洞察</strong><span>LOCAL</span></header>
+              <dl>
+                <div><dt>活跃天数</dt><dd id="usage-insight-days">0</dd></div>
+                <div><dt>已完成 Turn</dt><dd id="usage-insight-turns">0</dd></div>
+                <div><dt>平均每个活跃日</dt><dd id="usage-insight-average">0 Token</dd></div>
+                <div><dt>数据来源</dt><dd>本机账本</dd></div>
+              </dl>
+            </article>
+            <article>
+              <header><strong>最常用的工具</strong><span>TOP 5</span></header>
+              <ol id="usage-top-tools" class="usage-top-tools"><li class="empty">运行任务后会在这里出现。</li></ol>
+            </article>
+          </section>
+        </div>
+
+        <div id="usage-leaderboard-view" class="usage-leaderboard-view" hidden>
+          <section class="leaderboard-heading">
+            <div>
+              <span>ONPEOPLE COMMUNITY</span>
+              <h2>Token 排行</h2>
+              <p>排行榜只使用 OnPeople 云端模型的服务端真实记录，不包含第三方 Router。</p>
+            </div>
+            <div class="leaderboard-period" role="group" aria-label="排行榜周期">
+              <button type="button" data-leaderboard-period="week">本周</button>
+              <button type="button" data-leaderboard-period="month">本月</button>
+              <button class="active" type="button" data-leaderboard-period="all">累计</button>
+            </div>
+          </section>
+
+          <section class="leaderboard-consent">
+            <div>
+              <strong>参与公开排行榜</strong>
+              <span>默认关闭；榜单不会显示你的邮箱。</span>
+            </div>
+            <input id="leaderboard-display-name" type="text" maxlength="40" placeholder="公开昵称（可选）" />
+            <label class="leaderboard-toggle"><input id="leaderboard-participating" type="checkbox" /><span></span></label>
+          </section>
+
+          <section class="leaderboard-card">
+            <header><span>排名</span><span>用户</span><span>Token</span><span>任务请求</span></header>
+            <div id="leaderboard-list" class="leaderboard-list">
+              <p class="leaderboard-empty">正在读取排行榜…</p>
+            </div>
+          </section>
+          <p id="leaderboard-status" class="leaderboard-status">只有登录后才能查看和参与排行榜。</p>
+        </div>
+      </section>
+    </dialog>
+
     <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
@@ -682,6 +813,7 @@
     <script src="../node_modules/dompurify/dist/purify.min.js"></script>
     <script src="../node_modules/marked/lib/marked.umd.js"></script>
     <script src="task-trace.js"></script>
+    <script src="ui-controls.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

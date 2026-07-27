@@ -38,7 +38,16 @@ class LocalMemoryStore {
     const content = sanitize(input.content, 4_000);
     if (!content) throw new Error("记忆内容不能为空");
     const entry = { id, scope, projectPath: scope === "project" ? path.resolve(input.projectPath || process.cwd()) : null, content, enabled: input.enabled !== false, source: sanitize(input.source, 120) || "user", updatedAt: new Date().toISOString() };
-    state.entries = [...state.entries.filter((item) => item.id !== id), entry].slice(-500);
+    let entries = [...state.entries.filter((item) => item.id !== id), entry];
+    // Auto-generated candidates arrive after every turn — cap them separately
+    // so they can never evict the user's explicitly saved memories.
+    const isCandidate = (item) => !item.enabled && String(item.source || "").startsWith("candidate:");
+    const candidates = entries.filter(isCandidate);
+    if (candidates.length > 100) {
+      const stale = new Set(candidates.slice(0, candidates.length - 100).map((item) => item.id));
+      entries = entries.filter((item) => !stale.has(item.id));
+    }
+    state.entries = entries.slice(-500);
     this.write(state);
     return entry;
   }

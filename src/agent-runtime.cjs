@@ -5,6 +5,8 @@ const path = require("node:path");
 
 const MAX_PERSISTED_TURNS = 40;
 const MAX_PERSISTED_ITEMS = 200;
+const MAX_PERSISTED_SESSIONS = 200;
+const PERSIST_EVENTS = new Set(["turn/started", "item/started", "item/completed", "turn/completed"]);
 
 function identifier(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -82,7 +84,7 @@ class AgentRuntimeCoordinator extends EventEmitter {
     } catch {}
   }
 
-  rememberSession(thread = {}, metadata = {}) {
+  rememberSession(thread = {}, metadata = {}, { persist = true } = {}) {
     const id = identifier(thread.id) || identifier(metadata.threadId);
     if (!id) return null;
     const existing = this.sessions.get(id) || { id, turns: new Map(), status: "idle" };
@@ -93,7 +95,7 @@ class AgentRuntimeCoordinator extends EventEmitter {
       updatedAt: new Date().toISOString(),
     });
     this.sessions.set(id, existing);
-    this.schedulePersist();
+    if (persist) this.schedulePersist();
     return existing;
   }
 
@@ -101,7 +103,7 @@ class AgentRuntimeCoordinator extends EventEmitter {
     const event = publicTurnEvent(message);
     if (!event) return null;
     const { threadId, turnId, itemId, name, params } = event;
-    const session = threadId ? this.rememberSession(params.thread || {}, { threadId }) : null;
+    const session = threadId ? this.rememberSession(params.thread || {}, { threadId }, { persist: false }) : null;
 
     if (session && name === "turn/started" && turnId) {
       const turn = session.turns.get(turnId) || { id: turnId, items: new Map() };
@@ -109,17 +111,27 @@ class AgentRuntimeCoordinator extends EventEmitter {
       session.turns.set(turnId, turn);
       session.activeTurnId = turnId;
       session.status = "running";
+      // A turn that never completed (runtime died mid-turn) leaves its full
+      // payloads in inFlight — sweep the thread's stale entries on a new turn.
+      for (const key of this.inFlight.keys()) {
+        if (key.startsWith(`${threadId}:`) && !key.startsWith(`${threadId}:${turnId}:`)) this.inFlight.delete(key);
+      }
     }
 
     const activeTurnId = turnId || session?.activeTurnId || null;
     const turn = session && activeTurnId ? session.turns.get(activeTurnId) : null;
     if (turn && name === "item/started" && itemId) {
       const item = { ...params.item, id: itemId, status: params.item?.status || "running", startedAt: event.at };
-      turn.items.set(itemId, item);
+      // Full payloads (tool output etc.) live only in inFlight; turn.items keeps the slim persisted shape.
+      turn.items.set(itemId, { id: itemId, type: item.type || null, status: item.status, startedAt: item.startedAt });
       this.inFlight.set(`${threadId}:${activeTurnId}:${itemId}`, item);
     } else if (turn && name === "item/completed" && itemId) {
       const item = turn.items.get(itemId) || { id: itemId, startedAt: event.at };
-      Object.assign(item, params.item || {}, { status: params.item?.status || "completed", completedAt: event.at });
+      Object.assign(item, {
+        type: params.item?.type || item.type || null,
+        status: params.item?.status || "completed",
+        completedAt: event.at,
+      });
       turn.items.set(itemId, item);
       this.inFlight.delete(`${threadId}:${activeTurnId}:${itemId}`);
     }
@@ -135,10 +147,13 @@ class AgentRuntimeCoordinator extends EventEmitter {
       for (const key of this.inFlight.keys()) {
         if (key.startsWith(`${threadId}:${activeTurnId}:`)) this.inFlight.delete(key);
       }
+      // Keep the live maps at the persisted caps so long sessions do not grow without bound.
+      while (completedTurn.items.size > MAX_PERSISTED_ITEMS) completedTurn.items.delete(completedTurn.items.keys().next().value);
+      while (session.turns.size > MAX_PERSISTED_TURNS) session.turns.delete(session.turns.keys().next().value);
     }
 
     if (session) session.updatedAt = event.at;
-    this.schedulePersist();
+    if (PERSIST_EVENTS.has(name)) this.schedulePersist();
     this.emit("event", event);
     return event;
   }
@@ -159,11 +174,23 @@ class AgentRuntimeCoordinator extends EventEmitter {
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       this.persist();
-    }, 80);
+    }, 1000);
+  }
+
+  pruneSessions() {
+    if (this.sessions.size <= MAX_PERSISTED_SESSIONS) return;
+    const removable = [...this.sessions.values()]
+      .filter((session) => session.status !== "running" && !session.activeTurnId)
+      .sort((left, right) => String(left.updatedAt || "").localeCompare(String(right.updatedAt || "")));
+    for (const session of removable) {
+      if (this.sessions.size <= MAX_PERSISTED_SESSIONS) break;
+      this.sessions.delete(session.id);
+    }
   }
 
   persist() {
     if (!this.stateFile) return;
+    this.pruneSessions();
     fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
     const temporary = `${this.stateFile}.tmp`;
     fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, sessions: [...this.sessions.values()].map(cleanSession) }, null, 2)}\n`, { mode: 0o600 });

@@ -14,8 +14,10 @@ const { isNavigationAbort, loadWebContentsUrl, resolveAddressInput } = require("
   assert.equal(resolveAddressInput("?freelancer").url.toString(), "https://www.google.com.hk/search?q=freelancer");
   assert.equal(resolveAddressInput("google.com.hk").url.toString(), "https://google.com.hk/");
   assert.equal(resolveAddressInput("google.com.hk/search?q=123").url.toString(), "https://google.com.hk/search?q=123");
-  assert.equal(resolveAddressInput("localhost:3000").url.toString(), "https://localhost:3000/");
-  assert.equal(resolveAddressInput("127.0.0.1:5173/app").url.toString(), "https://127.0.0.1:5173/app");
+  assert.equal(resolveAddressInput("localhost:3000").url.toString(), "http://localhost:3000/");
+  assert.equal(resolveAddressInput("127.0.0.1:5173/app").url.toString(), "http://127.0.0.1:5173/app");
+  assert.equal(resolveAddressInput("app.localhost:8443").url.toString(), "http://app.localhost:8443/");
+  assert.equal(resolveAddressInput("192.168.1.10:8080").url.toString(), "https://192.168.1.10:8080/");
   assert.equal(resolveAddressInput("https://example.com/path").url.toString(), "https://example.com/path");
   assert.throws(() => resolveAddressInput("file:///tmp/private"), /Only HTTP/);
 

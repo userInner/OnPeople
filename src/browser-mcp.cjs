@@ -2,8 +2,9 @@ const readline = require("node:readline");
 
 const bridgeUrl = process.env.INTERNAL_BROWSER_BRIDGE_URL;
 const bridgeToken = process.env.INTERNAL_BROWSER_BRIDGE_TOKEN;
+const bridgeRouteId = process.env.INTERNAL_BROWSER_ROUTE_ID;
 
-if (!bridgeUrl || !bridgeToken) {
+if (!bridgeUrl || !bridgeToken || !bridgeRouteId) {
   process.stderr.write("Browser bridge configuration is missing.\n");
   process.exit(1);
 }
@@ -139,6 +140,7 @@ async function callBridge(action, args = {}) {
     headers: {
       "content-type": "application/json",
       "x-internal-browser-token": bridgeToken,
+      "x-internal-browser-route-id": bridgeRouteId,
     },
     body: JSON.stringify({ action, args }),
   });

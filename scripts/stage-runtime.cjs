@@ -43,15 +43,19 @@ function downloadPublicCodex() {
   const packageVersion = `${version}-${targetPlatform}-${targetArch}`;
   const packageSpec = `@openai/codex@${packageVersion}`;
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-codex-"));
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  // Spawning npm.cmd without a shell throws EINVAL on Node >= 22
+  // (CVE-2024-27980 hardening); quote shell args that may contain spaces.
+  const useShell = process.platform === "win32";
+  const npmCommand = useShell ? "npm.cmd" : "npm";
+  const shellArg = (value) => useShell && /\s/.test(value) ? `"${value}"` : value;
   try {
     const packed = JSON.parse(execFileSync(npmCommand, [
       "pack",
       packageSpec,
       "--json",
       "--pack-destination",
-      temporaryRoot,
-    ], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }))[0];
+      shellArg(temporaryRoot),
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], shell: useShell }))[0];
     if (!packed?.filename) throw new Error(`npm did not return an archive for ${packageSpec}`);
     execFileSync("tar", [
       "-xzf",

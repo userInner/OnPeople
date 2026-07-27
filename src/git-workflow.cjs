@@ -76,8 +76,8 @@ function parseUnifiedDiff(diff, area = "unstaged") {
       area,
       title,
       detail: title.replace(/^@@[^@]*@@\s*/, "") || "代码块",
-      additions: current.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length,
-      deletions: current.filter((line) => line.startsWith("-") && !line.startsWith("---")).length,
+      additions: current.filter((line) => line.startsWith("+")).length,
+      deletions: current.filter((line) => line.startsWith("-")).length,
       lines: current,
       patch,
     });

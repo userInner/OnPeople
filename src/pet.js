@@ -70,9 +70,14 @@ function renderSkin(skin) {
     remove.className = "pet-skin-delete";
     remove.textContent = "×";
     remove.title = "删除自定义皮肤";
-    remove.addEventListener("click", (event) => {
+    remove.addEventListener("click", async (event) => {
       event.stopPropagation();
-      if (window.confirm(`删除自定义皮肤“${skin.name}”？`)) void window.petAPI.deleteSkin(skin.id);
+      if (!await window.OnPeopleUI.confirm(`自定义皮肤“${skin.name}”将被永久移除。`, {
+        title: "删除这套皮肤？",
+        confirmLabel: "删除皮肤",
+        tone: "danger",
+      })) return;
+      await window.petAPI.deleteSkin(skin.id);
     });
     card.append(remove);
   }

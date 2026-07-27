@@ -18,7 +18,9 @@ store.updateTask({ threadId: "ready", title: "已完成", status: "completed" })
 store.updateTask({ threadId: "blocked", title: "失败任务", status: "failed" });
 store.updateTask({ threadId: "input", title: "需要确认", status: "waiting-input" });
 assert.equal(store.snapshot().activeThreadId, "input");
-assert.deepEqual(store.snapshot().tasks.map((item) => item.threadId), ["input", "blocked", "ready", "running"]);
+assert.deepEqual(store.snapshot().tasks.map((item) => item.threadId), ["input", "blocked", "running", "ready"]);
+store.tasks.get("ready").expiresAt = Date.now() - 1;
+assert.equal(store.snapshot().tasks.some((item) => item.threadId === "ready"), false);
 
 store.saveSettings({
   visible: true,

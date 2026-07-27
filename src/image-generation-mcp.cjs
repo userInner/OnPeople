@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
 const crypto = require("node:crypto");
+const { resolveWorkspaceOutput } = require("./workspace-boundary.cjs");
 
 const workspaceRoot = path.resolve(process.env.ONPEOPLE_WORKSPACE_ROOT || process.cwd());
 const baseUrl = String(process.env.ONPEOPLE_IMAGE_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -22,6 +23,8 @@ const generationWaiters = [];
 function imageEndpoint(value = baseUrl) {
   const parsed = new URL(String(value || ""));
   if (!new Set(["http:", "https:"]).has(parsed.protocol)) throw new Error("Image API Base URL must use HTTP(S)");
+  const loopback = new Set(["localhost", "127.0.0.1", "::1"]).has(parsed.hostname);
+  if (parsed.protocol !== "https:" && !loopback) throw new Error("Remote Image API Base URL must use HTTPS");
   const cleanPath = parsed.pathname.replace(/\/+$/, "");
   if (/\/images\/generations$/i.test(cleanPath)) return parsed.toString().replace(/\/+$/, "");
   parsed.pathname = `${cleanPath}/images/generations`.replace(/\/{2,}/g, "/");
@@ -42,8 +45,10 @@ function outputPath(requested, format, index = 0) {
   const suffix = index ? `-${index + 1}` : "";
   const defaultName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
   const requestedName = safeName(path.basename(String(requested || defaultName), path.extname(String(requested || ""))), defaultName);
-  fs.mkdirSync(outputRoot, { recursive: true, mode: 0o700 });
-  return path.join(outputRoot, `${requestedName}${suffix}${extension}`);
+  const candidate = resolveWorkspaceOutput(workspaceRoot, path.join(".onpeople", "generated-images", `${requestedName}${suffix}${extension}`));
+  // A caller-supplied stem must not silently overwrite an earlier generation.
+  if (!fs.existsSync(candidate)) return candidate;
+  return resolveWorkspaceOutput(workspaceRoot, path.join(".onpeople", "generated-images", `${requestedName}${suffix}-${crypto.randomUUID().slice(0, 8)}${extension}`));
 }
 
 function decodeImage(value) {

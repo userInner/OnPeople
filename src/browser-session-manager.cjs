@@ -8,6 +8,8 @@ const SESSION_PROVIDERS = Object.freeze({
     loginUrl: "https://accounts.google.com/",
     services: ["Gmail", "Drive", "Docs", "Calendar", "YouTube"],
     cookieDomains: [".google.com", ".google.com.hk", ".googleusercontent.com", ".youtube.com"],
+    // clearData({ origins }) deletes by registrable domain — keep every domain
+    // listed in cookieDomains represented here, or "clear" leaves cookies behind.
     origins: [
       "https://accounts.google.com",
       "https://www.google.com",
@@ -17,6 +19,7 @@ const SESSION_PROVIDERS = Object.freeze({
       "https://docs.google.com",
       "https://calendar.google.com",
       "https://www.youtube.com",
+      "https://lh3.googleusercontent.com",
     ],
   }),
 });

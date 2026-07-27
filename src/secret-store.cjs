@@ -1,18 +1,18 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 const NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 class SecretStore {
   constructor(filePath, safeStorage) { this.filePath = filePath; this.safeStorage = safeStorage; }
   read() {
-    try { const value = JSON.parse(fs.readFileSync(this.filePath, "utf8")); return Array.isArray(value.secrets) ? value.secrets : []; }
+    try { const value = readJsonWithBackup(this.filePath, { secrets: [] }); return Array.isArray(value.secrets) ? value.secrets : []; }
     catch { return []; }
   }
   write(secrets) {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify({ version: 1, secrets }, null, 2)}\n`, { mode: 0o600 });
+    atomicWriteFile(this.filePath, `${JSON.stringify({ version: 1, secrets }, null, 2)}\n`, { mode: 0o600 });
   }
   list() { return this.read().map(({ encryptedValue, ...item }) => ({ ...item, configured: Boolean(encryptedValue) })); }
   save(input = {}) {
@@ -20,7 +20,11 @@ class SecretStore {
     const name = String(input.name || "").trim().toUpperCase();
     if (!NAME.test(name)) throw new Error("变量名只能使用大写字母、数字和下划线");
     const value = String(input.value || "");
-    const previous = this.read().find((item) => item.id === input.id || item.name === name);
+    const existing = this.read();
+    const byId = input.id ? existing.find((item) => item.id === input.id) : null;
+    const byName = existing.find((item) => item.name === name);
+    if (byId && byName && byName.id !== byId.id) throw new Error("已存在同名变量，请先删除或改用其他名称");
+    const previous = byId || byName;
     if (!value && !previous?.encryptedValue) throw new Error("密钥值不能为空");
     const record = {
       id: previous?.id || crypto.randomUUID(), name,
