@@ -16,6 +16,22 @@ for (const method of ["updateProject", "revealProject", "archiveProjectTasks"]) 
 for (const label of ["置顶项目", "在 Finder 中显示", "重命名项目", "归档任务", "移除"]) assert.ok(renderer.includes(label), `missing ${label}`);
 assert.ok(renderer.includes("closeProjectMenus"));
 assert.ok(styles.includes(".project-menu-item"));
+assert.ok(
+  renderer.includes("const pinnedThreads = showingArchived ? [] : threads.filter((thread) => thread.pinned)"),
+  "project filters must not hide global pinned tasks",
+);
+assert.ok(
+  renderer.includes("const regularThreads = showingArchived ? threads : threads.filter((thread) => !thread.pinned)"),
+  "selecting a project must keep the global recent task list scrollable",
+);
+assert.ok(
+  !renderer.includes("const visible = selectedProjectPath ? threads.filter"),
+  "project selection must not collapse the task list to one project",
+);
+assert.ok(styles.includes("overscroll-behavior: contain"), "the combined task/project sidebar must remain independently scrollable");
+assert.ok(main.includes("let refreshPending = !appServer?.ready"), "startup task listing must fall back to local state before App Server is ready");
+assert.ok(main.includes('recordRuntimeEvent("warning", "实时任务列表暂不可用"'), "live thread-list failures must be diagnosable without breaking the sidebar");
+assert.ok(renderer.includes("任务暂时无法载入，连接恢复后会自动刷新。"), "the sidebar must not expose raw IPC errors");
 const resumeBody = renderer.match(/async function resumeThread\(threadId\) \{([\s\S]*?)\n\}/)?.[1] || "";
 assert.ok(resumeBody.includes("++threadSwitchSequence"), "task switching must use last-selection-wins sequencing");
 assert.ok(resumeBody.includes("sequence !== threadSwitchSequence"), "stale task responses must not replace the latest selection");
@@ -48,6 +64,17 @@ assert.ok(renderer.includes("const wasRunning = running"), "composer submission 
 assert.ok(renderer.includes('promptInput.placeholder = value ? "补充指令；发送后会加入当前运行任务…"'), "running tasks must expose follow-up input");
 assert.ok(!renderer.includes("promptInput.disabled = value"), "running tasks must not disable the composer");
 assert.ok(renderer.includes("setUserMessageDelivery"), "optimistic user messages must expose pending, sent, queued, and failed delivery states");
+assert.ok(main.includes("resolveNewThreadWorkspace(payload)"), "new tasks must materialize their workspace before thread/start");
+assert.ok(main.includes('workspaceMode: "isolated"'), "a blank new task must default to an isolated workspace");
+assert.ok(!main.includes('return { created: true, cwd: DEFAULT_CWD };'), "new tasks must not inherit the global default directory");
+assert.ok(renderer.includes('let selectedWorkspaceMode = "isolated"'), "the composer must keep draft workspace mode separate from active tasks");
+assert.ok(renderer.includes("workspaceMode: selectedWorkspaceMode"), "the first submission must send the selected workspace mode");
+assert.ok(html.includes('id="composer-workspace-menu"'), "the composer must expose a custom workspace picker");
+assert.ok(html.includes('id="composer-workspace-search"'), "the workspace picker must expose workspace search");
+assert.ok(html.includes('id="composer-workspace-recents"'), "the workspace picker must expose recent workspaces");
+assert.ok(!renderer.includes("composerWorkspace.disabled = Boolean(currentThreadId)"), "existing tasks must keep the workspace picker interactive");
+assert.ok(renderer.includes('await startFreshTask({ workspaceMode: "local"'), "selecting a workspace from an existing task must create a new task draft");
+assert.ok(styles.includes(".composer-workspace-menu"), "the custom workspace picker must be styled");
 assert.ok(renderer.includes("event.type === \"thread-lifecycle\""), "the UI must subscribe to lifecycle events instead of inferring restore state");
 assert.ok(renderer.includes('row.addEventListener("contextmenu"'), "task rows must expose a native right-click menu");
 for (const label of ["置顶任务", "重命名任务", "归档任务", "标记为未读", "在 Finder 中显示", "复制工作目录", "复制会话 ID", "复制深度链接", "在新窗口中打开"]) {

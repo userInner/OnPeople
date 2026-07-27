@@ -57,6 +57,10 @@ async function main() {
   const gateway = new ModelGateway();
   await gateway.start();
   const baseUrl = `http://127.0.0.1:${port}/v1`;
+  assert.throws(
+    () => gateway.registerRoute("missing-onpeople-key", { type: "onpeople", baseUrl, apiKey: "", protocol: "responses" }),
+    /credentials are unavailable/,
+  );
   const routeA = gateway.registerRoute("thread-a", { baseUrl, apiKey: "alpha" });
   const routeB = gateway.registerRoute("thread-b", { baseUrl, apiKey: "beta" });
   const routeC = gateway.registerRoute("thread-c", { baseUrl, apiKey: "gamma", protocol: "responses" });

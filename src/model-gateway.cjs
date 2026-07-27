@@ -306,6 +306,9 @@ class ModelGateway {
   registerRoute(routeId, settings) {
     const id = String(routeId || "").trim();
     if (!id) throw new Error("Model gateway route id is required");
+    if (settings?.type === "onpeople" && !String(settings.apiKey || "").trim()) {
+      throw new Error("OnPeople route credentials are unavailable");
+    }
     this.routes.set(id, { ...settings });
     return this.url ? `${this.url}/routes/${encodeURIComponent(id)}/v1` : null;
   }

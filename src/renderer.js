@@ -78,6 +78,9 @@ const modelSourceIndicator = $("#model-source-indicator");
 const modelSourceAccount = $("#model-source-account");
 const modelInput = $("#model");
 const modelOptions = $("#model-options");
+const modelInputWrap = $("#model-input-wrap");
+const onpeopleModelWrap = $("#onpeople-model-wrap");
+const onpeopleModelSelect = $("#onpeople-model");
 const baseUrlInput = $("#base-url");
 const apiKeyInput = $("#api-key");
 const providerStatus = $("#provider-status");
@@ -89,6 +92,18 @@ const appUpdateProgress = $("#app-update-progress");
 const cloudAccountDialog = $("#cloud-account-dialog");
 const cloudAccountStatus = $("#cloud-account-status");
 const usageProfileDialog = $("#usage-profile-dialog");
+const settingsCenter = $("#settings-center");
+const settingsGeneralPage = $("#settings-general-page");
+const settingsProfilePage = $("#settings-profile-page");
+const settingsRuntimePage = $("#settings-runtime-page");
+const settingsAppearancePage = $("#settings-appearance-page");
+const settingsPersonalizationPage = $("#settings-personalization-page");
+const settingsPetPage = $("#settings-pet-page");
+const settingsShortcutsPage = $("#settings-shortcuts-page");
+const settingsBrowserPage = $("#settings-browser-page");
+const settingsLivePage = $("#settings-live-page");
+const settingsLiveHost = $("#settings-live-host");
+const settingsFeaturePage = $("#settings-feature-page");
 const attachImageButton = $("#attach-image");
 const imageAttachments = $("#image-attachments");
 const capabilityMenu = $("#capability-menu");
@@ -96,10 +111,20 @@ const capabilitySelection = $("#capability-selection");
 const cwdInput = $("#cwd");
 const composerWorkspace = $("#composer-workspace");
 const composerWorkspaceLabel = $("#composer-workspace-label");
+const composerWorkspaceMenu = $("#composer-workspace-menu");
+const composerWorkspaceDetail = $("#composer-workspace-detail");
+const composerWorkspaceSearch = $("#composer-workspace-search");
+const composerWorkspaceSection = $(".composer-workspace-section");
+const composerWorkspaceRecents = $("#composer-workspace-recents");
 const appShell = $("#app-shell");
 const contentArea = $("#content-area");
 const primaryWorkspace = $("#primary-workspace");
 const utilityPanel = $("#utility-panel");
+const controlViewContainer = $(".control-view");
+let activeSettingsLivePanel = null;
+let activeSettingsLivePanelOrigin = null;
+let activeSettingsLiveUtilityView = null;
+let activeSettingsPreviousControlView = null;
 const terminalDock = $("#terminal-dock");
 const terminalResizer = $("#terminal-resizer");
 const workspaceResizer = $("#workspace-resizer");
@@ -134,24 +159,19 @@ const goalPause = $("#goal-pause");
 const initialTimeline = timeline.innerHTML;
 const traceFormatter = window.OnPeopleTrace;
 
+$("#settings-profile-tabs-host").append($(".usage-profile-tabs"));
+$("#settings-usage-host").append($("#usage-profile-view"), $("#usage-leaderboard-view"));
+const runtimeSettingsPanel = $(".runtime-settings");
+runtimeSettingsPanel.open = true;
+$("#settings-runtime-host").append(runtimeSettingsPanel);
+
 const PROVIDER_PRESETS = {
-  onpeople: { model: "", baseUrl: "https://sub2api.aibro.vip/v1", vision: true, protocol: "Sub2API Responses API", models: [] },
+  onpeople: { model: "", baseUrl: "https://sub2api.aibro.vip/v1", vision: true, protocol: "OnPeople Responses API", models: [] },
   openai: { model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1", vision: true, protocol: "Responses API" },
   deepseek: { model: "deepseek-v4-pro", baseUrl: "https://api.deepseek.com", vision: false, protocol: "内嵌 Chat 适配" },
   minimax: { model: "MiniMax-M2.7", baseUrl: "https://api.minimaxi.com/v1", vision: true, protocol: "内嵌 Chat 适配" },
   kimi: { model: "kimi-k2.6", baseUrl: "https://api.moonshot.cn/v1", vision: true, protocol: "内嵌 Chat 适配" },
   grok: { model: "grok-4.5", baseUrl: "https://api.x.ai/v1", vision: true, protocol: "Responses API" },
-  sub2api: {
-    model: "gpt-5.6-sol",
-    baseUrl: "https://sub2api.aibro.vip/v1",
-    vision: true,
-    protocol: "Responses API",
-    models: [
-      { id: "gpt-5.6-sol", name: "5.6 Sol" },
-      { id: "gpt-5.6-terra", name: "5.6 Terra" },
-      { id: "gpt-5.6-luna", name: "5.6 Luna" },
-    ],
-  },
   compatible: { model: "", baseUrl: "https://api.openai.com/v1", vision: true, protocol: "Responses API" },
   ollama: { model: "", baseUrl: "", vision: false, protocol: "本地运行时" },
   lmstudio: { model: "", baseUrl: "", vision: false, protocol: "本地运行时" },
@@ -159,7 +179,7 @@ const PROVIDER_PRESETS = {
 
 const MODEL_SOURCE_PROVIDERS = {
   onpeople: ["onpeople"],
-  router: ["openai", "deepseek", "minimax", "kimi", "grok", "sub2api", "compatible"],
+  router: ["openai", "deepseek", "minimax", "kimi", "grok", "compatible"],
   local: ["ollama", "lmstudio"],
 };
 const lastProviderBySource = { router: "openai", local: "ollama" };
@@ -197,7 +217,14 @@ let activeBrowserTaskId = draftBrowserTaskId;
 let activeBrowserRouteId = null;
 const browserTabs = new Map();
 const browserTaskGroups = new Map();
-let cloudAccountState = { signedIn: false, serviceUrl: "https://sub2api.aibro.vip", account: null, models: [] };
+let cloudAccountState = {
+  signedIn: false,
+  serviceUrl: "https://sub2api.aibro.vip",
+  account: null,
+  models: [],
+  modelsLive: false,
+  modelsError: null,
+};
 let cloudUsageProfile = null;
 let activeUsageProfileView = "profile";
 let activeLeaderboardPeriod = "all";
@@ -228,6 +255,8 @@ let threadListRequestSequence = 0;
 let agentRequestSequence = 0;
 let workspaceStateEpoch = 0;
 let defaultWorkspaceCwd = "";
+let selectedWorkspaceMode = "isolated";
+let selectedWorkspaceBaseCwd = null;
 let terminal = null;
 let terminalProcessId = null;
 let activeTerminalId = null;
@@ -248,6 +277,22 @@ let agentBoardState = { tasks: [], counts: {}, states: [] };
 let activeAgentBoardFilter = "all";
 let agentSurfaceExplicitlyRequested = false;
 let policyState = null;
+let appPreferences = {
+  defaultFileOpener: "smart",
+  language: "auto",
+  preventSleepWhileRunning: false,
+  showComposerFooter: true,
+  showSuggestions: true,
+  keepInMenuBar: false,
+  theme: "system",
+  density: "comfortable",
+  reduceMotion: false,
+  customInstructions: "",
+  browserEnabled: true,
+  browserOpenLinks: "tab",
+  downloadDirectory: "",
+  askDownloadLocation: false,
+};
 let auditState = [];
 let activeControlView = "scheduled";
 let pendingBrowserAnnotationTarget = null;
@@ -351,15 +396,109 @@ function setRuntime(state, label) {
   runtimeLabel.textContent = label;
 }
 
+const WORKSPACE_MODE_LABELS = {
+  isolated: "独立空间",
+  local: "本地项目",
+  worktree: "Git Worktree",
+};
+
+function setWorkspaceMenu(open) {
+  const visible = Boolean(open);
+  if (visible) renderWorkspaceRecents();
+  composerWorkspaceMenu.hidden = !visible;
+  composerWorkspace.setAttribute("aria-expanded", String(visible));
+  if (visible) window.setTimeout(() => {
+    const target = composerWorkspaceSearch.parentElement.hidden
+      ? composerWorkspaceMenu.querySelector('[aria-checked="true"]')
+      : composerWorkspaceSearch;
+    target?.focus();
+  }, 0);
+  else composerWorkspaceSearch.value = "";
+}
+
+function recentWorkspaceEntries() {
+  const entries = new Map();
+  const remember = (candidate, name = null, pinned = false) => {
+    const workspacePath = String(candidate || "").trim();
+    if (!workspacePath) return;
+    const existing = entries.get(workspacePath);
+    entries.set(workspacePath, {
+      path: workspacePath,
+      name: name || existing?.name || workspacePath.split("/").filter(Boolean).at(-1) || "Workspace",
+      pinned: Boolean(pinned || existing?.pinned),
+    });
+  };
+  for (const project of loadedProjects) {
+    if (!project?.hidden) remember(project?.path, project?.name, project?.pinned);
+  }
+  for (const thread of loadedThreads) {
+    if (thread?.workspaceMode === "local") remember(thread.workspaceBaseCwd || thread.cwd, thread.projectName);
+    else if (thread?.workspaceMode === "worktree") remember(thread.workspaceBaseCwd, thread.projectName);
+  }
+  return [...entries.values()]
+    .sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.name.localeCompare(right.name, "zh-CN"))
+    .slice(0, 8);
+}
+
+function renderWorkspaceRecents() {
+  const query = composerWorkspaceSearch.value.trim().toLocaleLowerCase();
+  const selectedPath = selectedWorkspaceBaseCwd || cwdInput.value.trim();
+  const allEntries = recentWorkspaceEntries();
+  composerWorkspaceSearch.parentElement.hidden = allEntries.length < 5;
+  composerWorkspaceSection.hidden = allEntries.length === 0;
+  const entries = allEntries.filter((entry) => (
+    !query || entry.name.toLocaleLowerCase().includes(query) || entry.path.toLocaleLowerCase().includes(query)
+  ));
+  composerWorkspaceRecents.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("span");
+    empty.className = "composer-workspace-empty";
+    empty.textContent = query ? "没有匹配的工作空间" : "还没有最近使用的工作空间";
+    composerWorkspaceRecents.append(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.setAttribute("role", "menuitemradio");
+    option.setAttribute("aria-checked", String(selectedWorkspaceMode === "local" && selectedPath === entry.path));
+    option.dataset.workspacePath = entry.path;
+    option.innerHTML = `<i aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 8V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8V17a3 3 0 0 1-3 3h-11a3 3 0 0 1-3-3Z"/></svg></i><span><strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml(entry.path)}</small></span><b>✓</b>`;
+    composerWorkspaceRecents.append(option);
+  }
+}
+
+function renderWorkspaceSelection() {
+  const cwd = cwdInput.value.trim();
+  const mode = WORKSPACE_MODE_LABELS[selectedWorkspaceMode] ? selectedWorkspaceMode : (cwd ? "local" : "isolated");
+  selectedWorkspaceMode = mode;
+  const baseName = (selectedWorkspaceBaseCwd || cwd).split("/").filter(Boolean).at(-1);
+  composerWorkspaceLabel.textContent = mode === "isolated"
+    ? "独立空间"
+    : `${WORKSPACE_MODE_LABELS[mode]}${baseName ? ` · ${baseName}` : ""}`;
+  composerWorkspace.title = currentThreadId
+    ? `当前任务工作空间：${cwd || "未设置"}；选择其他空间会新建任务`
+    : mode === "isolated"
+      ? "首次发送时创建独立工作空间"
+      : `${WORKSPACE_MODE_LABELS[mode]}：${selectedWorkspaceBaseCwd || cwd || "请选择项目"}`;
+  for (const option of composerWorkspaceMenu.querySelectorAll("[data-workspace-mode]")) {
+    option.setAttribute("aria-checked", String(option.dataset.workspaceMode === mode));
+  }
+  renderWorkspaceRecents();
+  composerWorkspaceDetail.textContent = mode === "isolated"
+    ? (currentThreadId ? "当前任务的目录保持不变；选择其他空间会创建新任务。" : "首次发送时创建独立目录，不读取其他任务的文件。")
+    : mode === "worktree"
+      ? (selectedWorkspaceBaseCwd ? `将从 ${selectedWorkspaceBaseCwd} 的 HEAD 创建隔离副本。` : "选择一个 Git 项目作为 Worktree 起点。")
+      : (cwd ? `将直接在 ${cwd} 中工作。` : "选择一个现有项目文件夹。");
+}
+
 function updateProject(cwd) {
   const value = String(cwd || "").replace(/\/$/, "");
-  const projectName = value.split("/").filter(Boolean).pop() || "选择工作空间";
   const pathLabel = $("#project-path");
   const nameLabel = $("#project-name");
   if (pathLabel) pathLabel.textContent = value || "未设置工作目录";
   if (nameLabel) nameLabel.textContent = value.split("/").filter(Boolean).pop() || "Workspace";
-  if (composerWorkspaceLabel) composerWorkspaceLabel.textContent = projectName;
-  if (composerWorkspace) composerWorkspace.title = value ? `工作空间：${value}` : "选择工作空间";
+  renderWorkspaceSelection();
   if (!nameLabel && $("#project-list")) renderProjects(loadedThreads);
 }
 
@@ -754,18 +893,25 @@ function setThreadHeader(thread = null) {
   const previousThreadId = currentThreadId;
   const previousCwd = cwdInput.value.trim();
   currentThreadId = thread?.id || null;
+  setWorkspaceMenu(false);
   activateBrowserTask(currentThreadId);
   const title = thread ? titleFrom(thread.name || thread.preview) : "新任务";
   taskTitle.textContent = title;
   $("#browser-task-tab").textContent = `${title} · 独立页面`;
   $("#browser-task-tab").title = thread?.id ? `任务 ${thread.id} 的独立浏览器页面` : "新任务的独立浏览器页面";
   threadLabel.textContent = thread?.id ? thread.id.slice(0, 13).toUpperCase() : "NEW THREAD";
-  const nextCwd = thread?.cwd || (!thread ? defaultWorkspaceCwd : "");
-  if (nextCwd) {
-    cwdInput.value = nextCwd;
-    updateProject(nextCwd);
-    void refreshProjectActions();
+  const nextCwd = thread?.cwd || "";
+  if (thread) {
+    selectedWorkspaceMode = thread.workspaceMode || "local";
+    selectedWorkspaceBaseCwd = thread.workspaceBaseCwd || (selectedWorkspaceMode === "local" ? nextCwd : null);
+  } else {
+    selectedWorkspaceMode = "isolated";
+    selectedWorkspaceBaseCwd = null;
   }
+  cwdInput.value = nextCwd;
+  cwdInput.disabled = Boolean(thread);
+  updateProject(nextCwd);
+  if (nextCwd) void refreshProjectActions();
   if (previousThreadId !== currentThreadId || (nextCwd && previousCwd !== nextCwd)) {
     resetTaskScopedUtilityState();
   }
@@ -848,11 +994,15 @@ function setTerminalVisible(visible) {
 }
 
 async function selectToolView(view, options = {}) {
+  if (view === "browser" && appPreferences.browserEnabled === false) {
+    addEvent("error", "BROWSER", "内嵌浏览器已在设置中停用。可前往“设置 → 浏览器”重新启用。");
+    return false;
+  }
   if (view === "terminal") {
     setTerminalVisible(true);
     await ensureTerminal();
     terminal?.focus();
-    return;
+    return true;
   }
   activeToolView = view;
   setUtilityVisible(true, options);
@@ -864,6 +1014,7 @@ async function selectToolView(view, options = {}) {
   if (view === "files") await refreshProjectFiles();
   if (view === "extensions") await refreshExtensions();
   if (view === "control") await refreshControl();
+  return true;
 }
 
 function restoreUtilityStateForTask(taskId) {
@@ -1840,7 +1991,12 @@ function renderProjects(threads, savedProjects = loadedProjects) {
     row.addEventListener("click", () => {
       closeProjectMenus();
       selectedProjectPath = selectedProjectPath === project.path ? null : project.path;
-      cwdInput.value = project.path;
+      if (!currentThreadId) {
+        selectedWorkspaceMode = "local";
+        selectedWorkspaceBaseCwd = project.path;
+        cwdInput.value = project.path;
+        updateProject(project.path);
+      }
       renderThreads(threads);
       void refreshProjectActions();
       currentFilePath = "";
@@ -1944,9 +2100,8 @@ function closeProjectMenus() {
 }
 
 function renderThreads(threads) {
-  const visible = selectedProjectPath ? threads.filter((thread) => thread.projectPath === selectedProjectPath) : threads;
-  const pinnedThreads = showingArchived ? [] : visible.filter((thread) => thread.pinned);
-  const regularThreads = showingArchived ? visible : visible.filter((thread) => !thread.pinned);
+  const pinnedThreads = showingArchived ? [] : threads.filter((thread) => thread.pinned);
+  const regularThreads = showingArchived ? threads : threads.filter((thread) => !thread.pinned);
   pinnedTaskList.replaceChildren(...pinnedThreads.map(buildThreadRow));
   pinnedSection.hidden = pinnedThreads.length === 0;
   taskList.replaceChildren();
@@ -1970,7 +2125,10 @@ async function loadThreads() {
     loadedProjects = result.projects || [];
     renderThreads(loadedThreads);
   } catch (error) {
-    if (sequence === threadListRequestSequence) taskList.innerHTML = `<span class="empty-list">${escapeHtml(error.message)}</span>`;
+    if (sequence === threadListRequestSequence) {
+      taskList.innerHTML = '<span class="empty-list">任务暂时无法载入，连接恢复后会自动刷新。</span>';
+      console.warn("Task list refresh failed", error);
+    }
   }
 }
 
@@ -2062,9 +2220,16 @@ function updateProviderFields() {
   const preset = PROVIDER_PRESETS[providerSelect.value];
   const remote = !new Set(["ollama", "lmstudio"]).has(providerSelect.value);
   const cloud = providerSelect.value === "onpeople";
+  modelInputWrap.hidden = cloud;
+  onpeopleModelWrap.hidden = !cloud;
   $("#base-url-wrap").hidden = !remote || cloud;
   $("#api-key-wrap").hidden = !remote || cloud;
   $("#discover-models").hidden = cloud;
+  $("#save-provider").disabled = cloud && (
+    !cloudAccountState.signedIn
+    || !cloudAccountState.modelsLive
+    || !onpeopleModelSelect.value
+  );
   const vision = selectedModelVision ?? preset.vision;
   const imageGenerationButton = capabilityMenu.querySelector('[data-capability="imagegen"]');
   if (imageGenerationButton) {
@@ -2102,6 +2267,40 @@ function renderPresetModelOptions(preset = {}) {
   }));
 }
 
+function renderOnPeopleModelOptions(models = []) {
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  if (!cloudAccountState.signedIn) placeholder.textContent = "登录后读取实时模型";
+  else if (!cloudAccountState.modelsLive) placeholder.textContent = "实时模型暂不可用";
+  else if (!models.length) placeholder.textContent = "服务未返回可用模型";
+  else placeholder.textContent = "选择模型";
+  const groups = new Map();
+  for (const model of models) {
+    const groupName = model.groupName || "其他模型";
+    if (!groups.has(groupName)) {
+      const group = document.createElement("optgroup");
+      group.label = groupName;
+      groups.set(groupName, group);
+    }
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.name || model.id;
+    option.label = model.name || model.id;
+    option.dataset.description = "OnPeople 服务实时返回";
+    groups.get(groupName).append(option);
+  }
+  const selected = modelInput.value.trim();
+  onpeopleModelSelect.replaceChildren(placeholder, ...groups.values());
+  onpeopleModelSelect.disabled = !cloudAccountState.signedIn
+    || !cloudAccountState.modelsLive
+    || !models.length;
+  onpeopleModelSelect.value = models.some((model) => model.id === selected) ? selected : "";
+  if (providerSelect.value === "onpeople" && selected && !onpeopleModelSelect.value) {
+    modelInput.value = "";
+  }
+  window.OnPeopleUI?.syncSelect?.(onpeopleModelSelect);
+}
+
 let modelValidationSequence = 0;
 
 async function validateSelectedModel() {
@@ -2130,6 +2329,7 @@ function renderProvider(settings = {}) {
   const preset = PROVIDER_PRESETS[providerSelect.value] || PROVIDER_PRESETS.openai;
   renderPresetModelOptions(preset);
   modelInput.value = settings.model || "";
+  if (providerSelect.value === "onpeople") renderOnPeopleModelOptions(PROVIDER_PRESETS.onpeople.models);
   baseUrlInput.value = settings.baseUrl || "https://api.openai.com/v1";
   apiKeyInput.value = "";
   providerImageGeneration = {
@@ -2138,7 +2338,11 @@ function renderProvider(settings = {}) {
   };
   apiKeyInput.placeholder = settings.hasApiKey ? "已加密保存；留空保持不变" : "可选，取决于服务端";
   providerStatus.textContent = settings.type === "onpeople"
-    ? (settings.accountSignedIn ? "正在使用 OnPeople 模型与额度；第三方 Router 仍可随时切换" : "需要先登录 OnPeople")
+    ? (!settings.accountSignedIn
+      ? "需要先登录 OnPeople"
+      : !cloudAccountState.modelsLive
+        ? `${cloudAccountState.modelsError || "实时模型列表读取失败"}；未使用本地回退`
+        : `已从 OnPeople 服务实时读取 ${cloudAccountState.models.length} 个模型`)
     : (settings.hasApiKey ? "API Key 已按提供商加密保存" : "未保存 API Key");
   selectedModelVision = settings.vision ?? null;
   void validateSelectedModel();
@@ -2152,6 +2356,7 @@ async function selectProviderType(type) {
   renderModelSource(modelSourceForProvider(requestedType));
   renderPresetModelOptions(preset);
   modelInput.value = preset.model;
+  if (requestedType === "onpeople") renderOnPeopleModelOptions(PROVIDER_PRESETS.onpeople.models);
   baseUrlInput.value = preset.baseUrl;
   apiKeyInput.value = "";
   providerImageGeneration = { available: false, reason: "正在读取当前 Provider 的图片生成能力" };
@@ -2299,10 +2504,10 @@ function renderCloudAccount(state = cloudAccountState) {
     $("#cloud-account-description").textContent = "全部可用模型按任务独立选择，分组凭据会自动匹配。";
   }
   $("#cloud-service-url").value = cloudAccountState.serviceUrl || "https://sub2api.aibro.vip";
-  $("#cloud-account-label").textContent = signedIn ? cloudAccountState.account.email : "OnPeople 账号";
+  $("#cloud-account-label").textContent = "个人资料";
   $("#cloud-account-balance").textContent = signedIn
-    ? `${formatSub2APIBalance(cloudAccountState.account.balanceUSD)} · OnPeople`
-    : "未登录 · Router 可用";
+    ? `${cloudAccountState.account.email} · ${formatSub2APIBalance(cloudAccountState.account.balanceUSD)}`
+    : "未登录 · Router 仍可用";
   if (signedIn) {
     $("#cloud-account-email").textContent = cloudAccountState.account.email;
     $("#cloud-wallet-balance").textContent = formatSub2APIBalance(cloudAccountState.account.balanceUSD);
@@ -2314,22 +2519,23 @@ function renderCloudAccount(state = cloudAccountState) {
   }
   const models = (cloudAccountState.models || []).map((model) => ({
     id: model.id,
-    name: model.groupName
-      ? `${model.name || model.id} · ${model.groupName}`
-      : (model.name || model.id),
+    name: model.name || model.id,
+    groupName: model.groupName || "",
   }));
   PROVIDER_PRESETS.onpeople.baseUrl = cloudAccountState.apiBaseUrl || `${cloudAccountState.serviceUrl}/v1`;
   PROVIDER_PRESETS.onpeople.models = models;
-  if (models.length && !models.some((model) => model.id === PROVIDER_PRESETS.onpeople.model)) {
-    PROVIDER_PRESETS.onpeople.model = models[0].id;
-  }
+  PROVIDER_PRESETS.onpeople.model = "";
+  renderOnPeopleModelOptions(models);
   if (providerSelect.value === "onpeople") {
     baseUrlInput.value = PROVIDER_PRESETS.onpeople.baseUrl;
     renderPresetModelOptions(PROVIDER_PRESETS.onpeople);
-    if (!modelInput.value || !models.some((model) => model.id === modelInput.value)) modelInput.value = PROVIDER_PRESETS.onpeople.model;
-    providerStatus.textContent = signedIn
-      ? `可使用账号开放的全部 ${models.length} 个模型；每个任务独立选择`
-      : "需要先登录 OnPeople";
+    providerStatus.textContent = !signedIn
+      ? "需要先登录 OnPeople"
+      : cloudAccountState.modelsLive
+        ? (models.length
+          ? `已从 OnPeople 服务实时读取 ${models.length} 个模型`
+          : "OnPeople 服务当前没有返回可用模型")
+        : `${cloudAccountState.modelsError || "实时模型列表读取失败"}；未使用本地回退`;
     updateProviderFields();
   }
   renderModelSource(modelSourceForProvider(providerSelect.value));
@@ -2342,9 +2548,9 @@ async function refreshCloudAccount({ quiet = false } = {}) {
     renderCloudAccount(state);
     if (state.signedIn) {
       if (!quiet) {
-        setCloudStatus(state.offline
-          ? "当前网络不可用，已保留登录状态和上次同步的模型。"
-          : `已同步余额与 ${state.models?.length || 0} 个模型。`);
+        setCloudStatus(state.modelsLive
+          ? `已从 OnPeople 服务实时同步 ${state.models?.length || 0} 个模型。`
+          : `${state.modelsError || "实时模型列表读取失败"}；没有使用旧模型回退。`, !state.modelsLive);
       }
     } else if (!quiet) {
       setCloudStatus("登录是可选的；自定义 Router 和本地模型保持独立可用。");
@@ -2530,7 +2736,7 @@ async function refreshCloudUsageProfile() {
 }
 
 async function openUsageProfile() {
-  if (!usageProfileDialog.open) usageProfileDialog.showModal();
+  openSettingsCenter("profile");
   setUsageProfileView("profile");
   $("#usage-profile-name").textContent = shortProfileName();
   $("#usage-profile-handle").textContent = cloudAccountState.account?.email || "本机 Agent 活动";
@@ -2539,6 +2745,13 @@ async function openUsageProfile() {
   } catch (error) {
     $("#usage-profile-handle").textContent = `无法读取本机用量：${error.message}`;
   }
+}
+
+function openCloudAccountManagement() {
+  closeSettingsCenter();
+  if (!cloudAccountState.signedIn) setCloudAuthMode("login");
+  if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
+  void refreshCloudAccount().catch(() => {});
 }
 
 function renderImages() {
@@ -3876,9 +4089,23 @@ function renderSecrets(state) {
 async function refreshSecrets() { try { renderSecrets(await window.workbench.listSecrets()); } catch (error) { $("#secret-list").textContent = error.message; } }
 
 function renderWorktrees(result) {
-  $("#worktree-root").textContent = result.root;
+  const form = $("#worktree-create");
+  const submit = form.querySelector('button[type="submit"]');
+  const isRepository = result?.isRepository !== false;
+  for (const field of form.querySelectorAll("input")) field.disabled = !isRepository;
+  submit.disabled = !isRepository;
+  $("#worktree-root").textContent = isRepository
+    ? result.root
+    : "当前工作区不是 Git 项目";
   const list = $("#worktree-list");
   list.replaceChildren();
+  if (!isRepository) {
+    const empty = document.createElement("span");
+    empty.className = "control-empty worktree-empty";
+    empty.textContent = "请返回应用选择一个 Git 项目，或先在“Git”页面初始化当前目录。";
+    list.append(empty);
+    return;
+  }
   for (const worktree of result.worktrees || []) {
     const card = controlCard(worktree.branch, worktree.managed ? "managed" : "local", worktree.path, worktree.head || "");
     const actions = document.createElement("div");
@@ -3924,7 +4151,9 @@ function renderWorktrees(result) {
 
 async function refreshWorktrees() {
   try { renderWorktrees(await window.workbench.listWorktrees(cwdInput.value.trim())); }
-  catch (error) { $("#worktree-root").textContent = error.message; $("#worktree-list").replaceChildren(); }
+  catch {
+    renderWorktrees({ root: cwdInput.value.trim(), isRepository: false, worktrees: [] });
+  }
 }
 
 function renderContext(state) {
@@ -3985,6 +4214,9 @@ function renderPermissionPreset(policy) {
   control.classList.toggle("auto-review", preset === "auto_review");
   control.classList.toggle("full-access", preset === "full_access");
   control.title = preset === "ask" ? "工作区内自动执行，越界时请求你的批准" : preset === "auto_review" ? "工作区内自动执行，合格的越界请求交给审阅 Agent" : "无沙箱且不请求批准；仅用于受控环境";
+  for (const button of $$("[data-settings-permission]")) {
+    button.setAttribute("aria-checked", String(button.dataset.settingsPermission === preset));
+  }
 }
 
 function renderPolicy(result) {
@@ -4003,6 +4235,652 @@ function renderPolicy(result) {
 async function refreshPolicy() {
   try { renderPolicy(await window.workbench.getPolicy()); }
   catch (error) { addEvent("error", "POLICY", error.message); }
+}
+
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+function applyVisualPreferences(preferences = appPreferences) {
+  const theme = new Set(["system", "light", "dark"]).has(preferences.theme) ? preferences.theme : "system";
+  const resolvedTheme = theme === "system" ? (systemThemeQuery.matches ? "dark" : "light") : theme;
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.resolvedTheme = resolvedTheme;
+  document.documentElement.dataset.density = preferences.density === "compact" ? "compact" : "comfortable";
+  document.documentElement.dataset.reduceMotion = String(Boolean(preferences.reduceMotion));
+  document.documentElement.classList.toggle("browser-disabled", preferences.browserEnabled === false);
+}
+systemThemeQuery.addEventListener("change", () => {
+  if (appPreferences.theme === "system") applyVisualPreferences();
+});
+
+const SETTINGS_SHORTCUTS = [
+  { label: "打开命令面板", detail: "搜索任务、文件与操作", mac: "⌘K", windows: "Ctrl+K" },
+  { label: "新建任务", detail: "在当前窗口创建独立任务", mac: "⌥⌘S", windows: "Ctrl+Alt+S" },
+  { label: "新建浏览器标签", detail: "打开当前任务的内嵌浏览器", mac: "⌘T", windows: "Ctrl+T" },
+  { label: "搜索项目文件", detail: "打开文件工具并聚焦搜索框", mac: "⌘P", windows: "Ctrl+P" },
+  { label: "切换工具舱", detail: "浏览器、终端、变更、扩展、控制与文件", mac: "⌘1–6", windows: "Ctrl+1–6" },
+  { label: "发送消息", detail: "在输入框提交当前内容", mac: "Enter", windows: "Enter" },
+  { label: "输入框换行", detail: "在消息中插入新行", mac: "Shift Enter", windows: "Shift Enter" },
+];
+
+function renderSettingsShortcuts(query = "") {
+  const list = $("#settings-shortcuts-list");
+  const normalized = query.trim().toLocaleLowerCase();
+  const shortcuts = SETTINGS_SHORTCUTS.filter((item) => !normalized
+    || `${item.label} ${item.detail} ${item.mac} ${item.windows}`.toLocaleLowerCase().includes(normalized));
+  list.replaceChildren();
+  if (!shortcuts.length) {
+    list.innerHTML = '<span class="settings-shortcut-empty">没有匹配的快捷键</span>';
+    return;
+  }
+  for (const item of shortcuts) {
+    const row = document.createElement("div");
+    row.className = "settings-shortcut-row";
+    row.innerHTML = `<span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></span><kbd>${escapeHtml(isMacOS ? item.mac : item.windows)}</kbd>`;
+    list.append(row);
+  }
+}
+
+async function refreshSettingsMemory() {
+  try {
+    const state = await window.workbench.listMemories(cwdInput.value.trim());
+    memoryState = state;
+    $("#settings-memory-enabled").setAttribute("aria-checked", String(state.enabled !== false));
+    $("#settings-memory-generate").setAttribute("aria-checked", String(state.generate === true));
+    const enabledCount = (state.entries || []).filter((item) => item.enabled).length;
+    $("#settings-memory-summary").textContent = `${state.entries?.length || 0} 条记忆 · ${enabledCount} 条已启用`;
+  } catch (error) {
+    $("#settings-memory-summary").textContent = `无法读取：${error.message}`;
+  }
+}
+
+async function refreshSettingsPet() {
+  try {
+    const state = await window.workbench.getPetState();
+    $("#settings-pet-visible").setAttribute("aria-checked", String(Boolean(state.visible)));
+    const select = $("#settings-pet-skin");
+    select.replaceChildren();
+    for (const skin of state.skins || []) {
+      const option = document.createElement("option");
+      option.value = skin.id;
+      option.textContent = `${skin.name}${skin.builtIn ? "" : " · 自定义"}`;
+      select.append(option);
+    }
+    select.value = state.skinId || "onpeople";
+  } catch (error) {
+    addEvent("error", "PET SETTINGS", error.message);
+  }
+}
+
+function renderPreferences(preferences = {}) {
+  appPreferences = { ...appPreferences, ...preferences };
+  $("#settings-file-opener").value = appPreferences.defaultFileOpener;
+  $("#settings-theme").value = appPreferences.theme;
+  $("#settings-density").value = appPreferences.density;
+  $("#settings-browser-links").value = appPreferences.browserOpenLinks;
+  $("#settings-download-directory").textContent = appPreferences.downloadDirectory || "系统“下载”文件夹";
+  if (document.activeElement !== $("#settings-custom-instructions")) {
+    $("#settings-custom-instructions").value = appPreferences.customInstructions || "";
+  }
+  for (const button of $$("[data-settings-toggle]")) {
+    button.setAttribute("aria-checked", String(Boolean(appPreferences[button.dataset.settingsToggle])));
+  }
+  document.documentElement.classList.toggle("hide-composer-footer", !appPreferences.showComposerFooter);
+  document.documentElement.classList.toggle("hide-welcome-suggestions", !appPreferences.showSuggestions);
+  applyVisualPreferences(appPreferences);
+  syncComposerClearance();
+}
+
+async function refreshPreferences() {
+  try { renderPreferences(await window.workbench.getPreferences()); }
+  catch (error) { addEvent("error", "SETTINGS", error.message); }
+}
+
+async function savePreferences(patch) {
+  try {
+    renderPreferences(await window.workbench.savePreferences({ ...appPreferences, ...patch }));
+  } catch (error) {
+    addEvent("error", "SETTINGS", error.message);
+    renderPreferences(appPreferences);
+  }
+}
+
+const SETTINGS_FEATURES = {
+  profile: {
+    title: "个人资料", copy: "管理 OnPeople 登录身份、余额和云端使用记录。",
+    cardTitle: "OnPeople 账户", cardCopy: "打开账户中心查看当前登录状态与资料。", action: "打开账户",
+    run: () => $("#cloud-account-open").click(),
+  },
+  appearance: {
+    title: "外观", copy: "OnPeople 当前会跟随系统的字体渲染和浅色外观。",
+    cardTitle: "系统外观", cardCopy: "当前版本使用适配 macOS 与 Windows 的统一浅色界面。", action: null,
+  },
+  voice: {
+    title: "语音", copy: "输入框支持系统听写；麦克风权限由操作系统统一管理。",
+    cardTitle: "系统听写", cardCopy: "在输入框中使用 macOS 或 Windows 的系统听写能力。", action: null,
+  },
+  configuration: {
+    title: "配置", copy: "管理当前任务的模型来源、模型、API Router 与应用更新。",
+    cardTitle: "运行设置", cardCopy: "打开侧栏中的任务级模型和 Provider 配置。", action: "打开运行设置",
+    run: () => openSettingsCenter("configuration"),
+  },
+  personalization: {
+    title: "个性化", copy: "任务行为由项目指令、Skills 与当前会话上下文共同决定。",
+    cardTitle: "Skills 与项目指令", cardCopy: "前往扩展面板管理可用 Skills。", action: "管理 Skills",
+    run: async () => { await selectToolView("extensions"); $("[data-extension-view='skills']")?.click(); },
+  },
+  pet: {
+    title: "宠物", copy: "控制桌面小海獭，并让它显示当前任务状态。",
+    cardTitle: "OnPeople 小海獭", cardCopy: "显示或收起当前桌面宠物窗口。", action: "切换显示",
+    run: () => window.workbench.togglePet(),
+  },
+  shortcuts: {
+    title: "键盘快捷键", copy: "⌘/Ctrl+1–6 切换工具舱，⌘/Ctrl+P 搜索项目文件，Enter 发送消息。",
+    cardTitle: "系统快捷键", cardCopy: "快捷键会根据 macOS 或 Windows 自动切换修饰键。", action: null,
+  },
+  usage: {
+    title: "使用情况和计费", copy: "查看本机 Token 账本、OnPeople 云端额度与公开排行榜。",
+    cardTitle: "使用情况", cardCopy: "打开 Token 使用详情和云端账户余额。", action: "查看使用情况",
+    run: () => openUsageProfile(),
+  },
+  account: {
+    title: "账户", copy: "登录 OnPeople、查看余额并管理云端模型访问。",
+    cardTitle: "OnPeople 账户", cardCopy: "打开登录、注册和账户管理界面。", action: "管理账户",
+    run: () => openCloudAccountManagement(),
+  },
+  snapshots: {
+    title: "智能快照", copy: "使用内嵌浏览器生成可审阅的页面快照和批注。",
+    cardTitle: "浏览器快照", cardCopy: "打开当前任务独享的浏览器标签页。", action: "打开浏览器",
+    run: () => selectToolView("browser"),
+  },
+  plugins: {
+    title: "插件", copy: "管理 OnPeople Plugins、Skills 与 MCP 服务。",
+    cardTitle: "扩展中心", cardCopy: "查看已安装插件并进行安装或卸载。", action: "管理插件",
+    run: async () => { await selectToolView("extensions"); $("[data-extension-view='plugins']")?.click(); },
+  },
+  browser: {
+    title: "浏览器", copy: "管理任务独享的内嵌浏览器、登录资料和操作验证。",
+    cardTitle: "内嵌浏览器", cardCopy: "每个任务拥有隔离的标签与路由状态。", action: "打开浏览器",
+    run: () => selectToolView("browser"),
+  },
+  computer: {
+    title: "电脑操控", copy: "检查 Computer Use 驱动与本机自动化运行状态。",
+    cardTitle: "运行诊断", cardCopy: "打开诊断中心验证本机操控能力。", action: "打开诊断",
+    run: () => selectControlPanel("diagnostics"),
+  },
+  hooks: {
+    title: "钩子", copy: "管理项目生命周期 Hooks 与执行信任状态。",
+    cardTitle: "Hooks", cardCopy: "打开控制中心查看和创建项目 Hooks。", action: "管理 Hooks",
+    run: () => selectControlPanel("hooks"),
+  },
+  connections: {
+    title: "连接", copy: "查看模型路由、MCP 与 Codex Core 的有效连接配置。",
+    cardTitle: "有效配置", cardCopy: "检查当前任务实际使用的连接与运行参数。", action: "查看连接",
+    run: () => selectControlPanel("config"),
+  },
+  git: {
+    title: "Git", copy: "查看当前工作空间的变更、Diff、Review 与提交状态。",
+    cardTitle: "Git 变更", cardCopy: "打开当前项目的原生变更视图。", action: "打开 Git",
+    run: () => selectToolView("changes"),
+  },
+  environment: {
+    title: "环境", copy: "检查当前任务工作目录、运行时与模型配置。",
+    cardTitle: "运行环境", cardCopy: "打开有效配置和运行时诊断。", action: "检查环境",
+    run: () => selectControlPanel("config"),
+  },
+  worktrees: {
+    title: "工作树", copy: "管理 Git Worktree 隔离副本与任务交接。",
+    cardTitle: "Git Worktree", cardCopy: "创建、查看或移除任务隔离工作树。", action: "管理工作树",
+    run: () => selectControlPanel("worktrees"),
+  },
+  archived: {
+    title: "已归档任务", copy: "查看已经归档、仍可恢复的历史任务。",
+    cardTitle: "任务归档", cardCopy: "返回应用并切换到已归档任务列表。", action: "查看归档",
+    run: () => $(".task-filter [data-archived='true']")?.click(),
+  },
+};
+
+const SETTINGS_LIVE_CONTROLS = {
+  computer: { view: "diagnostics", kicker: "COMPUTER USE", title: "电脑操控", copy: "直接检查驱动、权限、运行时状态与恢复事件。" },
+  hooks: { view: "hooks", mode: "manager", kicker: "PROJECT HOOKS", title: "钩子", copy: "创建项目生命周期 Hook，并查看信任状态与最近运行记录。" },
+  connections: { view: "config", kicker: "EFFECTIVE CONFIG", title: "连接", copy: "直接查看当前任务最终生效的 Provider、MCP 与运行参数来源。" },
+  environment: { view: "config", kicker: "TASK ENVIRONMENT", title: "环境", copy: "直接核对当前任务的工作目录、模型、策略与环境配置。" },
+  worktrees: { view: "worktrees", kicker: "GIT WORKTREE", title: "工作树", copy: "直接创建、查看、交接或移除任务隔离工作树。" },
+};
+const SETTINGS_LIVE_UTILITIES = {
+  plugins: { view: "extensions", kicker: "PLUGINS · SKILLS · MCP", title: "插件", copy: "直接查看、刷新、安装或移除 OnPeople 扩展。" },
+  git: { view: "changes", mode: "manager", kicker: "GIT", title: "Git", copy: "查看仓库状态，并进入完整的变更、Diff、Review、提交与推送工具。" },
+};
+
+function restoreSettingsLivePanel() {
+  if (!activeSettingsLivePanel) return;
+  activeSettingsLivePanelOrigin?.append(activeSettingsLivePanel);
+  if (activeSettingsLiveUtilityView) {
+    activeSettingsLivePanel.classList.toggle("active", activeToolView === activeSettingsLiveUtilityView);
+  }
+  if (activeSettingsPreviousControlView) {
+    applyControlPanelSelection(activeSettingsPreviousControlView);
+  }
+  activeSettingsLivePanel = null;
+  activeSettingsLivePanelOrigin = null;
+  activeSettingsLiveUtilityView = null;
+  activeSettingsPreviousControlView = null;
+  settingsLiveHost.replaceChildren();
+}
+
+async function showSettingsLiveControl(route) {
+  const definition = SETTINGS_LIVE_CONTROLS[route];
+  if (!definition) return false;
+  if (definition.mode === "manager") return showSettingsHooksManager(definition);
+  restoreSettingsLivePanel();
+  activeSettingsPreviousControlView = activeControlView;
+  applyControlPanelSelection(definition.view);
+  const panel = $(`[data-control-panel="${definition.view}"]`);
+  if (!panel) return false;
+  $("#settings-live-kicker").textContent = definition.kicker;
+  $("#settings-live-title").textContent = definition.title;
+  $("#settings-live-copy").textContent = definition.copy;
+  activeSettingsLivePanelOrigin = controlViewContainer;
+  settingsLiveHost.append(panel);
+  activeSettingsLivePanel = panel;
+  await refreshControl();
+  return true;
+}
+
+function settingsRequestWithTimeout(request, message, timeoutMs = 8_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    Promise.resolve(request).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function createSettingsHooksManager() {
+  const panel = document.createElement("section");
+  panel.className = "settings-hooks-manager";
+  panel.innerHTML = `
+    <header>
+      <div><span>PROJECT LIFECYCLE</span><strong id="settings-hooks-heading">正在读取 Hooks…</strong><small id="settings-hooks-root"></small></div>
+      <button id="settings-hooks-refresh" type="button">刷新</button>
+    </header>
+    <div id="settings-hook-create">
+      <div class="settings-hooks-grid">
+        <label class="settings-hook-event-field"><span>事件</span><button id="settings-hook-event" class="settings-hook-event" type="button" aria-expanded="false"><strong>PreToolUse</strong><span>⌄</span></button><div id="settings-hook-event-menu" class="settings-hook-event-menu" hidden></div></label>
+        <label><span>Matcher</span><input id="settings-hook-matcher" placeholder="可留空" /></label>
+      </div>
+      <label><span>命令</span><textarea id="settings-hook-command" rows="3" placeholder="要执行的绝对路径命令；保存前请审阅…"></textarea></label>
+      <div class="settings-hooks-grid">
+        <label><span>运行提示</span><input id="settings-hook-status" placeholder="OnPeople Hook" /></label>
+        <label><span>超时（秒）</span><input id="settings-hook-timeout" inputmode="numeric" value="30" /></label>
+      </div>
+      <div class="settings-hooks-submit"><small>保存后仍需按当前命令哈希审阅并信任，修改后会重新进入待审阅状态。</small><button id="settings-hook-save" class="primary" type="button">保存 Hook</button></div>
+    </div>
+    <div id="settings-hooks-error" class="settings-hooks-error" hidden></div>
+    <div class="settings-hooks-columns">
+      <section><header><strong>已发现的 Hooks</strong><span id="settings-hooks-count">0</span></header><div id="settings-hooks-list" class="settings-hooks-list"></div></section>
+      <section><header><strong>最近运行</strong><span>START / COMPLETE</span></header><div id="settings-hooks-runs" class="settings-hooks-list"></div></section>
+    </div>
+  `;
+  panel.querySelector("#settings-hooks-refresh").addEventListener("click", () => void refreshSettingsHooksManager(panel));
+  const events = ["PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"];
+  const eventButton = panel.querySelector("#settings-hook-event");
+  const eventMenu = panel.querySelector("#settings-hook-event-menu");
+  for (const eventName of events) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.textContent = eventName;
+    option.classList.toggle("selected", eventName === "PreToolUse");
+    option.addEventListener("click", () => {
+      eventButton.dataset.value = eventName;
+      eventButton.querySelector("strong").textContent = eventName;
+      for (const item of eventMenu.children) item.classList.toggle("selected", item === option);
+      eventMenu.hidden = true;
+      eventButton.setAttribute("aria-expanded", "false");
+    });
+    eventMenu.append(option);
+  }
+  eventButton.dataset.value = "PreToolUse";
+  eventButton.addEventListener("click", () => {
+    eventMenu.hidden = !eventMenu.hidden;
+    eventButton.setAttribute("aria-expanded", String(!eventMenu.hidden));
+  });
+  panel.querySelector("#settings-hook-save").addEventListener("click", async () => {
+    const commandInput = panel.querySelector("#settings-hook-command");
+    const command = commandInput.value.trim();
+    if (!command || !await confirmAction(`保存后仍需按哈希审阅并信任，才会执行：\n\n${command}`, {
+      title: "保存命令 Hook？",
+      confirmLabel: "保存 Hook",
+      tone: "warning",
+    })) return;
+    const button = panel.querySelector("#settings-hook-save");
+    const error = panel.querySelector("#settings-hooks-error");
+    button.disabled = true;
+    button.textContent = "正在保存…";
+    error.hidden = true;
+    try {
+      await settingsRequestWithTimeout(window.workbench.createHook({
+        cwd: cwdInput.value.trim(),
+        event: eventButton.dataset.value,
+        matcher: panel.querySelector("#settings-hook-matcher").value.trim(),
+        command,
+        statusMessage: panel.querySelector("#settings-hook-status").value.trim(),
+        timeout: panel.querySelector("#settings-hook-timeout").value,
+      }), "保存 Hook 超时，请确认 Codex Core 已就绪");
+      commandInput.value = "";
+      await refreshSettingsHooksManager(panel);
+    } catch (saveError) {
+      error.hidden = false;
+      error.textContent = saveError.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = "保存 Hook";
+    }
+  });
+  return panel;
+}
+
+async function refreshSettingsHooksManager(panel) {
+  if (!panel?.isConnected) return;
+  const heading = panel.querySelector("#settings-hooks-heading");
+  const root = panel.querySelector("#settings-hooks-root");
+  const count = panel.querySelector("#settings-hooks-count");
+  const list = panel.querySelector("#settings-hooks-list");
+  const runs = panel.querySelector("#settings-hooks-runs");
+  const errors = panel.querySelector("#settings-hooks-error");
+  heading.textContent = "正在读取 Hooks…";
+  root.textContent = cwdInput.value.trim() || "当前任务工作区";
+  list.replaceChildren();
+  runs.replaceChildren();
+  errors.hidden = true;
+  try {
+    const result = await settingsRequestWithTimeout(
+      window.workbench.listLocalHooks(cwdInput.value.trim()),
+      "读取项目 Hooks 超时，请稍后重试",
+    );
+    if (!panel.isConnected) return;
+    const entries = result.entries || [];
+    const hooks = entries.flatMap((entry) => entry.hooks || []);
+    const allErrors = entries.flatMap((entry) => [
+      ...(entry.errors || []).map((item) => `${item.path}: ${item.message}`),
+      ...(entry.warnings || []),
+    ]);
+    heading.textContent = hooks.length ? `${hooks.length} 个 Hook 已载入` : "当前项目没有 Hooks";
+    count.textContent = String(hooks.length);
+    if (allErrors.length) {
+      errors.hidden = false;
+      errors.textContent = allErrors.join("\n");
+    }
+    if (!hooks.length) list.innerHTML = '<span class="control-empty">创建第一个 Hook，或在项目中添加 .codex/hooks.json。</span>';
+    for (const hook of hooks) {
+      const card = controlCard(
+        `${hook.eventName} · ${hook.handlerType}`,
+        hook.trustStatus,
+        hook.command || hook.statusMessage || "",
+        `${hook.matcher || "*"} · ${hook.sourcePath}`,
+      );
+      list.append(card);
+    }
+    const recentRuns = result.runs || [];
+    if (!recentRuns.length) runs.innerHTML = '<span class="control-empty">还没有 Hook 运行记录。</span>';
+    for (const run of recentRuns.slice(0, 20)) {
+      const row = document.createElement("div");
+      const title = document.createElement("strong");
+      const detail = document.createElement("small");
+      title.textContent = `${run.eventName} · ${run.status}`;
+      detail.textContent = `${run.durationMs ?? "…"} ms · ${new Date(run.startedAt || Date.now()).toLocaleString()}`;
+      row.append(title, detail);
+      runs.append(row);
+    }
+  } catch (loadError) {
+    if (!panel.isConnected) return;
+    heading.textContent = "Hooks 暂时不可用";
+    errors.hidden = false;
+    errors.textContent = loadError.message;
+    list.innerHTML = '<span class="control-empty">页面仍可切换；点击刷新可重新连接。</span>';
+    runs.innerHTML = '<span class="control-empty">尚未读取运行记录。</span>';
+  }
+}
+
+async function showSettingsHooksManager(definition) {
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  if (!$('[data-settings-route="hooks"]')?.classList.contains("active")) return false;
+  restoreSettingsLivePanel();
+  $("#settings-live-kicker").textContent = definition.kicker;
+  $("#settings-live-title").textContent = definition.title;
+  $("#settings-live-copy").textContent = definition.copy;
+  const panel = createSettingsHooksManager();
+  settingsLiveHost.append(panel);
+  activeSettingsLivePanel = panel;
+  void refreshSettingsHooksManager(panel);
+  return true;
+}
+
+function createSettingsGitManager() {
+  const panel = document.createElement("section");
+  panel.className = "settings-git-manager";
+  panel.innerHTML = `
+    <header>
+      <div><span>REPOSITORY STATUS</span><strong id="settings-git-heading">正在读取当前工作区…</strong><small id="settings-git-root"></small></div>
+      <button id="settings-git-refresh" type="button">刷新</button>
+    </header>
+    <div id="settings-git-summary" class="settings-git-summary" aria-live="polite"></div>
+    <div id="settings-git-files" class="settings-git-files"></div>
+    <footer>
+      <button id="settings-git-choose" type="button">选择 Git 项目</button>
+      <button id="settings-git-init" type="button">初始化仓库</button>
+      <button id="settings-git-open" class="primary" type="button">打开完整 Git 变更</button>
+    </footer>
+  `;
+  panel.querySelector("#settings-git-refresh").addEventListener("click", () => void refreshSettingsGitManager(panel));
+  panel.querySelector("#settings-git-choose").addEventListener("click", () => {
+    closeSettingsCenter();
+    $("#project-add").click();
+  });
+  panel.querySelector("#settings-git-open").addEventListener("click", () => {
+    closeSettingsCenter();
+    void selectToolView("changes");
+  });
+  panel.querySelector("#settings-git-init").addEventListener("click", async () => {
+    const cwd = cwdInput.value.trim();
+    if (!cwd) return;
+    if (!await confirmAction(`${cwd}\n\n这会创建 .git 文件夹，不会提交或上传任何文件。`, {
+      title: "初始化 Git 仓库？",
+      confirmLabel: "初始化仓库",
+      tone: "warning",
+    })) return;
+    const button = panel.querySelector("#settings-git-init");
+    button.disabled = true;
+    button.textContent = "正在初始化…";
+    try {
+      await window.workbench.initGitRepository(cwd);
+      await refreshSettingsGitManager(panel);
+    } catch (error) {
+      panel.querySelector("#settings-git-heading").textContent = "无法初始化 Git 仓库";
+      panel.querySelector("#settings-git-root").textContent = error.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = "初始化仓库";
+    }
+  });
+  return panel;
+}
+
+async function refreshSettingsGitManager(panel) {
+  if (!panel?.isConnected) return;
+  const heading = panel.querySelector("#settings-git-heading");
+  const root = panel.querySelector("#settings-git-root");
+  const summary = panel.querySelector("#settings-git-summary");
+  const files = panel.querySelector("#settings-git-files");
+  const init = panel.querySelector("#settings-git-init");
+  heading.textContent = "正在读取当前工作区…";
+  root.textContent = cwdInput.value.trim() || "尚未选择工作目录";
+  summary.replaceChildren();
+  files.replaceChildren();
+  try {
+    const state = await window.workbench.getGitState(cwdInput.value.trim());
+    if (!panel.isConnected) return;
+    heading.textContent = state.branch || "detached";
+    root.textContent = state.root;
+    init.hidden = true;
+    const metrics = [
+      ["工作区文件", String(state.files?.length || 0)],
+      ["上游分支", state.upstream || "尚未设置"],
+      ["远程仓库", state.remotes?.join(", ") || "尚未设置"],
+    ];
+    for (const [label, value] of metrics) {
+      const item = document.createElement("div");
+      const key = document.createElement("span");
+      const copy = document.createElement("strong");
+      key.textContent = label;
+      copy.textContent = value;
+      item.append(key, copy);
+      summary.append(item);
+    }
+    if (!state.files?.length) {
+      files.innerHTML = '<span class="control-empty">工作区干净，没有未提交变更。</span>';
+      return;
+    }
+    for (const file of state.files.slice(0, 16)) {
+      const row = document.createElement("div");
+      const status = document.createElement("span");
+      const path = document.createElement("strong");
+      status.textContent = file.code || (file.untracked ? "??" : "M");
+      path.textContent = file.path;
+      row.append(status, path);
+      files.append(row);
+    }
+    if (state.files.length > 16) {
+      const more = document.createElement("small");
+      more.textContent = `还有 ${state.files.length - 16} 个文件，请打开完整 Git 变更查看。`;
+      files.append(more);
+    }
+  } catch (error) {
+    if (!panel.isConnected) return;
+    const message = String(error?.message || error || "");
+    const notRepository = /not a git repository|rev-parse.+show-toplevel/i.test(message);
+    heading.textContent = notRepository ? "当前工作区不是 Git 项目" : "暂时无法读取 Git 状态";
+    root.textContent = notRepository
+      ? "可以选择现有 Git 项目，或在当前目录初始化仓库。"
+      : "请确认当前工作目录和 Git 环境可用。";
+    init.hidden = !notRepository;
+    const empty = document.createElement("span");
+    empty.className = "control-empty";
+    empty.textContent = notRepository ? "初始化只会创建 .git 文件夹，不会提交或上传文件。" : "稍后可以点击刷新重试。";
+    files.append(empty);
+  }
+}
+
+async function showSettingsGitManager(definition) {
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  if (!$('[data-settings-route="git"]')?.classList.contains("active")) return false;
+  restoreSettingsLivePanel();
+  $("#settings-live-kicker").textContent = definition.kicker;
+  $("#settings-live-title").textContent = definition.title;
+  $("#settings-live-copy").textContent = definition.copy;
+  const panel = createSettingsGitManager();
+  settingsLiveHost.append(panel);
+  activeSettingsLivePanel = panel;
+  await refreshSettingsGitManager(panel);
+  return true;
+}
+
+async function showSettingsLiveUtility(route) {
+  const definition = SETTINGS_LIVE_UTILITIES[route];
+  if (!definition) return false;
+  if (definition.mode === "manager") return showSettingsGitManager(definition);
+  restoreSettingsLivePanel();
+  const panel = $(`.utility-view[data-view="${definition.view}"]`);
+  if (!panel) return false;
+  $("#settings-live-kicker").textContent = definition.kicker;
+  $("#settings-live-title").textContent = definition.title;
+  $("#settings-live-copy").textContent = definition.copy;
+  activeSettingsLivePanelOrigin = panel.parentElement;
+  activeSettingsLiveUtilityView = definition.view;
+  panel.classList.add("active");
+  settingsLiveHost.append(panel);
+  activeSettingsLivePanel = panel;
+  if (definition.view === "extensions") {
+    $('[data-extension-view="plugins"]')?.click();
+    await refreshExtensions();
+  }
+  return true;
+}
+
+function closeSettingsCenter() {
+  restoreSettingsLivePanel();
+  settingsCenter.hidden = true;
+  appShell.removeAttribute("aria-hidden");
+}
+
+function openSettingsCenter(route = "general") {
+  settingsCenter.hidden = false;
+  appShell.setAttribute("aria-hidden", "true");
+  showSettingsRoute(route);
+  void Promise.all([refreshPolicy(), refreshPreferences()]);
+}
+
+function showSettingsRoute(route) {
+  restoreSettingsLivePanel();
+  for (const button of $$("[data-settings-route]")) button.classList.toggle("active", button.dataset.settingsRoute === route);
+  const isGeneral = route === "general";
+  const isProfile = route === "profile" || route === "usage";
+  const isRuntime = route === "configuration";
+  const functionalPages = new Map([
+    ["appearance", settingsAppearancePage],
+    ["personalization", settingsPersonalizationPage],
+    ["pet", settingsPetPage],
+    ["shortcuts", settingsShortcutsPage],
+    ["browser", settingsBrowserPage],
+  ]);
+  const functionalPage = functionalPages.get(route) || null;
+  const liveControl = SETTINGS_LIVE_CONTROLS[route] || null;
+  const liveUtility = SETTINGS_LIVE_UTILITIES[route] || null;
+  settingsGeneralPage.hidden = !isGeneral;
+  settingsProfilePage.hidden = !isProfile;
+  settingsRuntimePage.hidden = !isRuntime;
+  for (const page of functionalPages.values()) page.hidden = page !== functionalPage;
+  settingsLivePage.hidden = !liveControl && !liveUtility;
+  settingsFeaturePage.hidden = isGeneral || isProfile || isRuntime || Boolean(functionalPage) || Boolean(liveControl) || Boolean(liveUtility);
+  if (isGeneral) return;
+  if (isProfile) {
+    setUsageProfileView("profile");
+    void refreshLocalUsageProfile().catch((error) => {
+      $("#usage-profile-handle").textContent = `无法读取本机用量：${error.message}`;
+    });
+    return;
+  }
+  if (isRuntime) {
+    runtimeSettingsPanel.open = true;
+    return;
+  }
+  if (functionalPage) {
+    if (route === "personalization") void refreshSettingsMemory();
+    if (route === "pet") void refreshSettingsPet();
+    if (route === "shortcuts") renderSettingsShortcuts($("#settings-shortcuts-search").value);
+    return;
+  }
+  if (liveControl) {
+    void showSettingsLiveControl(route);
+    return;
+  }
+  if (liveUtility) {
+    void showSettingsLiveUtility(route);
+    return;
+  }
+  const feature = SETTINGS_FEATURES[route];
+  if (!feature) return showSettingsRoute("general");
+  $("#settings-feature-title").textContent = feature.title;
+  $("#settings-feature-copy").textContent = feature.copy;
+  $("#settings-feature-icon").textContent = feature.title.slice(0, 2);
+  $("#settings-feature-card-title").textContent = feature.cardTitle;
+  $("#settings-feature-card-copy").textContent = feature.cardCopy;
+  const action = $("#settings-feature-action");
+  action.hidden = !feature.action;
+  action.textContent = feature.action || "";
+  action.onclick = feature.run ? async () => {
+    closeSettingsCenter();
+    await feature.run();
+  } : null;
 }
 
 function renderHooks(result) {
@@ -4197,16 +5075,166 @@ providerSelect.addEventListener("change", () => {
   void selectProviderType(providerSelect.value);
 });
 modelInput.addEventListener("change", validateSelectedModel);
+onpeopleModelSelect.addEventListener("change", () => {
+  modelInput.value = onpeopleModelSelect.value;
+  void validateSelectedModel();
+});
 
 $("#cloud-account-open").addEventListener("click", () => {
-  if (cloudAccountState.signedIn) {
-    void openUsageProfile();
-    return;
-  }
-  setCloudAuthMode("login");
-  if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
-  void refreshCloudAccount().catch(() => {});
+  void openUsageProfile();
 });
+$("#settings-close").addEventListener("click", closeSettingsCenter);
+$("#settings-nav").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-settings-route]");
+  if (button) showSettingsRoute(button.dataset.settingsRoute);
+});
+$("#settings-search").addEventListener("input", (event) => {
+  const query = event.target.value.trim().toLocaleLowerCase();
+  for (const button of $$("[data-settings-route]")) {
+    button.hidden = Boolean(query) && !button.textContent.toLocaleLowerCase().includes(query);
+  }
+});
+$("#settings-file-opener").addEventListener("change", (event) => {
+  void savePreferences({ defaultFileOpener: event.target.value });
+});
+$("#settings-theme").addEventListener("change", (event) => {
+  void savePreferences({ theme: event.target.value });
+});
+$("#settings-density").addEventListener("change", (event) => {
+  void savePreferences({ density: event.target.value });
+});
+$("#settings-browser-links").addEventListener("change", (event) => {
+  void savePreferences({ browserOpenLinks: event.target.value });
+});
+for (const button of $$("[data-settings-toggle]")) {
+  button.addEventListener("click", () => {
+    const key = button.dataset.settingsToggle;
+    void savePreferences({ [key]: button.getAttribute("aria-checked") !== "true" });
+  });
+}
+$("#settings-personalization-save").addEventListener("click", async () => {
+  const button = $("#settings-personalization-save");
+  const status = $("#settings-personalization-status");
+  button.disabled = true;
+  status.textContent = "正在保存…";
+  try {
+    await savePreferences({ customInstructions: $("#settings-custom-instructions").value });
+    status.textContent = "已保存，将用于之后创建的任务";
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-memory-enabled").addEventListener("click", async () => {
+  const button = $("#settings-memory-enabled");
+  button.disabled = true;
+  try {
+    await window.workbench.saveMemorySettings({ enabled: button.getAttribute("aria-checked") !== "true" });
+    await refreshSettingsMemory();
+  } catch (error) {
+    addEvent("error", "MEMORY SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-memory-generate").addEventListener("click", async () => {
+  const button = $("#settings-memory-generate");
+  button.disabled = true;
+  try {
+    await window.workbench.saveMemorySettings({ generate: button.getAttribute("aria-checked") !== "true" });
+    await refreshSettingsMemory();
+  } catch (error) {
+    addEvent("error", "MEMORY SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-memory-manage").addEventListener("click", () => {
+  closeSettingsCenter();
+  void selectControlPanel("memory");
+});
+$("#settings-pet-visible").addEventListener("click", async () => {
+  const button = $("#settings-pet-visible");
+  button.disabled = true;
+  try {
+    await window.workbench.togglePet();
+    await refreshSettingsPet();
+  } catch (error) {
+    addEvent("error", "PET SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-pet-skin").addEventListener("change", async (event) => {
+  try {
+    await window.workbench.selectPetSkin(event.target.value);
+    await refreshSettingsPet();
+  } catch (error) {
+    addEvent("error", "PET SETTINGS", error.message);
+  }
+});
+$("#settings-pet-import").addEventListener("click", async () => {
+  const button = $("#settings-pet-import");
+  button.disabled = true;
+  try {
+    await window.workbench.importPetSkin();
+    await refreshSettingsPet();
+  } catch (error) {
+    addEvent("error", "PET SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-pet-open").addEventListener("click", async () => {
+  try {
+    const state = await window.workbench.getPetState();
+    if (!state.visible) await window.workbench.togglePet();
+    await refreshSettingsPet();
+  } catch (error) {
+    addEvent("error", "PET SETTINGS", error.message);
+  }
+});
+$("#settings-shortcuts-search").addEventListener("input", (event) => {
+  renderSettingsShortcuts(event.target.value);
+});
+$("#settings-download-pick").addEventListener("click", async () => {
+  const button = $("#settings-download-pick");
+  button.disabled = true;
+  try {
+    renderPreferences(await window.workbench.pickDownloadDirectory());
+  } catch (error) {
+    addEvent("error", "DOWNLOAD SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#settings-browser-clear").addEventListener("click", async () => {
+  if (!await confirmAction("清除 OnPeople 内嵌浏览器的 Cookie、缓存和站点数据？\n\n这会退出已登录的网站，但不会影响系统浏览器。", {
+    title: "清理浏览器数据？",
+    confirmLabel: "清理数据",
+    tone: "danger",
+  })) return;
+  const button = $("#settings-browser-clear");
+  const label = button.querySelector("em");
+  button.disabled = true;
+  label.textContent = "清理中…";
+  try {
+    await window.workbench.clearBrowserDataFromSettings();
+    label.textContent = "已清理";
+    window.setTimeout(() => { label.textContent = "清理"; }, 1_500);
+  } catch (error) {
+    label.textContent = "重试";
+    addEvent("error", "BROWSER SETTINGS", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+for (const button of $$("[data-settings-permission]")) {
+  button.addEventListener("click", () => {
+    const select = $("#permission-preset");
+    select.value = button.dataset.settingsPermission;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
 $("#cloud-account-close").addEventListener("click", () => {
   pendingCloudSourceSelection = false;
   cloudAccountDialog.close();
@@ -4224,6 +5252,7 @@ usageProfileDialog.addEventListener("click", (event) => {
 for (const button of $$("[data-usage-profile-view]")) {
   button.addEventListener("click", () => setUsageProfileView(button.dataset.usageProfileView));
 }
+$("#usage-profile-account").addEventListener("click", openCloudAccountManagement);
 $("#usage-profile-refresh").addEventListener("click", async () => {
   const button = $("#usage-profile-refresh");
   button.disabled = true;
@@ -4293,12 +5322,13 @@ async function finishCloudSignIn(state) {
   if (pendingCloudSourceSelection) {
     cloudAccountDialog.close();
     await selectModelSource("onpeople");
-    if (state.models?.length && !state.models.some((model) => model.id === modelInput.value)) {
-      modelInput.value = state.models[0].id;
-    }
-    providerStatus.textContent = "已登录 OnPeople；点击“应用到当前任务”后启用";
+    providerStatus.textContent = state.modelsLive
+      ? "已登录 OnPeople；请选择实时模型并应用到当前任务"
+      : `${state.modelsError || "实时模型列表读取失败"}；未使用本地回退`;
   }
-  setCloudStatus(`登录成功，已发现 ${state.models?.length || 0} 个模型。`);
+  setCloudStatus(state.modelsLive
+    ? `登录成功，实时发现 ${state.models?.length || 0} 个模型。`
+    : `${state.modelsError || "实时模型列表读取失败"}；未使用本地回退。`, !state.modelsLive);
 }
 
 $("#cloud-login").addEventListener("click", async () => {
@@ -4440,7 +5470,7 @@ $("#save-provider").addEventListener("click", async () => {
       ? `当前轮结束后切换至 ${result.settings.model}`
       : (result.changed ? `当前任务已切换至 ${result.settings.model}` : "当前任务模型配置已保存");
   } catch (error) { providerStatus.textContent = error.message; }
-  finally { button.disabled = false; }
+  finally { updateProviderFields(); }
 });
 
 appUpdateAction.addEventListener("click", async () => {
@@ -4515,23 +5545,83 @@ document.addEventListener("pointerdown", (event) => {
 });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !capabilityMenu.hidden) setCapabilityMenu(false); });
 
-composerWorkspace.addEventListener("click", () => $("#project-add").click());
+async function chooseComposerWorkspaceProject(mode = "local") {
+  const initialPath = selectedWorkspaceBaseCwd || cwdInput.value.trim() || defaultWorkspaceCwd;
+  const project = await window.workbench.pickProject(initialPath);
+  if (!project?.path) return false;
+  if (currentThreadId) {
+    await startFreshTask({ workspaceMode: mode, workspaceBaseCwd: project.path, cwd: project.path });
+    return true;
+  }
+  selectedWorkspaceMode = mode;
+  selectedWorkspaceBaseCwd = project.path;
+  cwdInput.value = project.path;
+  updateProject(project.path);
+  selectedProjectPath = project.path;
+  await loadThreads();
+  await refreshProjectActions();
+  currentFilePath = "";
+  if (activeToolView === "changes") await refreshGit();
+  if (activeToolView === "files") await refreshProjectFiles();
+  promptInput.focus();
+  return true;
+}
+
+composerWorkspace.addEventListener("click", () => setWorkspaceMenu(composerWorkspaceMenu.hidden));
+composerWorkspaceMenu.addEventListener("click", async (event) => {
+  const recent = event.target.closest("[data-workspace-path]");
+  if (recent) {
+    const workspacePath = recent.dataset.workspacePath;
+    if (currentThreadId) await startFreshTask({ workspaceMode: "local", workspaceBaseCwd: workspacePath, cwd: workspacePath });
+    else {
+      selectedWorkspaceMode = "local";
+      selectedWorkspaceBaseCwd = workspacePath;
+      cwdInput.value = workspacePath;
+      updateProject(workspacePath);
+      selectedProjectPath = workspacePath;
+      await refreshProjectActions();
+    }
+    setWorkspaceMenu(false);
+    promptInput.focus();
+    return;
+  }
+  const option = event.target.closest("[data-workspace-mode]");
+  if (!option) return;
+  const mode = option.dataset.workspaceMode;
+  if (mode === "isolated") {
+    if (currentThreadId) {
+      await startFreshTask({ workspaceMode: "isolated", workspaceBaseCwd: null, cwd: "" });
+      setWorkspaceMenu(false);
+      return;
+    }
+    selectedWorkspaceMode = "isolated";
+    selectedWorkspaceBaseCwd = null;
+    cwdInput.value = "";
+    updateProject("");
+    setWorkspaceMenu(false);
+    promptInput.focus();
+    return;
+  }
+  try {
+    if (await chooseComposerWorkspaceProject(mode)) setWorkspaceMenu(false);
+  } catch (error) {
+    addEvent("error", "WORKSPACE", error.message);
+  }
+});
+composerWorkspaceSearch.addEventListener("input", renderWorkspaceRecents);
+composerWorkspaceSearch.addEventListener("click", (event) => event.stopPropagation());
+document.addEventListener("pointerdown", (event) => {
+  if (!composerWorkspaceMenu.hidden && !event.target.closest(".composer-workspace-picker")) setWorkspaceMenu(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !composerWorkspaceMenu.hidden) setWorkspaceMenu(false);
+});
 
 $("#project-add").addEventListener("click", async () => {
   const button = $("#project-add");
   button.disabled = true;
   try {
-    const project = await window.workbench.pickProject(cwdInput.value.trim());
-    if (!project?.path) return;
-    cwdInput.value = project.path;
-    updateProject(project.path);
-    selectedProjectPath = project.path;
-    await loadThreads();
-    await refreshProjectActions();
-    currentFilePath = "";
-    if (activeToolView === "changes") await refreshGit();
-    if (activeToolView === "files") await refreshProjectFiles();
-    promptInput.focus();
+    await chooseComposerWorkspaceProject("local");
   } catch (error) {
     addEvent("error", "PROJECT", error.message);
   } finally {
@@ -4576,13 +5666,21 @@ for (const button of $$("[data-tool-view]")) button.addEventListener("click", ()
   else void selectToolView(button.dataset.toolView);
 });
 
-async function startFreshTask() {
+async function startFreshTask(options = {}) {
+  const requested = options && !(options instanceof Event) ? options : {};
   try {
     if (running && currentThreadId) setThreadRuntimeState(currentThreadId, "working");
-    const result = await window.workbench.newTask();
-    if (result?.cwd) defaultWorkspaceCwd = result.cwd;
+    await window.workbench.newTask();
     setRunning(false);
     setThreadHeader(null);
+    selectedWorkspaceMode = requested.workspaceMode || "isolated";
+    selectedWorkspaceBaseCwd = requested.workspaceBaseCwd || null;
+    cwdInput.value = requested.cwd || "";
+    updateProject(cwdInput.value);
+    if (cwdInput.value) {
+      selectedProjectPath = cwdInput.value;
+      await refreshProjectActions();
+    }
     setUtilityVisible(false);
     resetTimeline();
     renderGoal(null);
@@ -4699,7 +5797,8 @@ document.addEventListener("keydown", (event) => {
   if (commandModifier && !event.altKey && event.key.toLowerCase() === "t") {
     event.preventDefault();
     closeQuickLauncher();
-    void selectToolView("browser").then(() => {
+    void selectToolView("browser").then((opened) => {
+      if (!opened) return;
       createBrowserTab(activeBrowserTaskId, null, "新标签页", { activate: true });
       address.focus();
     });
@@ -4854,6 +5953,10 @@ $("#back").addEventListener("click", () => window.workbench.back(activeBrowserRo
 $("#forward").addEventListener("click", () => window.workbench.forward(activeBrowserRouteId));
 $("#reload").addEventListener("click", () => window.workbench.reload(activeBrowserRouteId));
 $("#browser-new-tab").addEventListener("click", () => {
+  if (appPreferences.browserEnabled === false) {
+    addEvent("error", "BROWSER", "内嵌浏览器已在设置中停用。");
+    return;
+  }
   createBrowserTab(activeBrowserTaskId, null, "新标签页", { activate: true });
   void selectToolView("browser").then(() => address.focus());
 });
@@ -5588,7 +6691,18 @@ composer.addEventListener("submit", async (event) => {
   activeAgentMessage = null;
   setSubmitting(true);
   try {
-    const common = { threadId: currentThreadId, browserRouteId: activeBrowserRouteId, clientMessageId, cwd: cwdInput.value.trim(), modelProvider: providerSelect.value, model: modelInput.value.trim(), baseUrl: baseUrlInput.value.trim(), apiKey: apiKeyInput.value };
+    const common = {
+      threadId: currentThreadId,
+      browserRouteId: activeBrowserRouteId,
+      clientMessageId,
+      cwd: cwdInput.value.trim(),
+      workspaceMode: selectedWorkspaceMode,
+      workspaceBaseCwd: selectedWorkspaceBaseCwd,
+      modelProvider: providerSelect.value,
+      model: modelInput.value.trim(),
+      baseUrl: baseUrlInput.value.trim(),
+      apiKey: apiKeyInput.value,
+    };
     const result = !wasRunning && selectedMode === "goal"
       ? await window.workbench.setGoal({ ...common, objective: prompt, tokenBudget: goalBudgetMode.value === "limited" ? goalBudget.value : null, attachments: selectedAttachments, capability: selectedCapability })
       : await window.workbench.sendPrompt({ ...common, prompt, mode: wasRunning ? "default" : selectedMode, images: wasRunning ? [] : selectedImages, attachments: wasRunning ? [] : selectedAttachments, capability: wasRunning ? null : selectedCapability });
@@ -5600,6 +6714,13 @@ composer.addEventListener("submit", async (event) => {
     renderImages();
     renderSelectedCapability();
     currentThreadId = result.threadId;
+    if (result.cwd) {
+      cwdInput.value = result.cwd;
+      selectedWorkspaceMode = result.workspaceMode || selectedWorkspaceMode;
+      selectedWorkspaceBaseCwd = result.workspaceBaseCwd || selectedWorkspaceBaseCwd;
+      cwdInput.disabled = true;
+      updateProject(result.cwd);
+    }
     await promoteBrowserTab(result.threadId);
     threadLabel.textContent = result.threadId.slice(0, 13).toUpperCase();
     if (result.goal) renderGoal(result.goal);
@@ -5803,7 +6924,9 @@ window.workbench.onRuntimeUpdated((state) => {
 window.workbench.onPetState((state) => {
   $("#pet-toggle").classList.toggle("active", Boolean(state?.visible));
   $("#pet-toggle").title = state?.visible ? "收起 OnPeople 宠物" : "显示 OnPeople 宠物";
+  if (!settingsPetPage.hidden) void refreshSettingsPet();
 });
+window.workbench.onPreferencesChanged(renderPreferences);
 window.workbench.onCloudAccountUpdated((state) => {
   renderCloudAccount(state);
 });
@@ -5818,17 +6941,25 @@ window.workbench.onDeepLink((target) => {
 });
 window.workbench.onCommandPalette(openCommandPalette);
 document.addEventListener("click", closeProjectMenus);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeProjectMenus(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  closeProjectMenus();
+  if (!settingsCenter.hidden) closeSettingsCenter();
+});
 
 window.workbench.agentStatus().then((status) => {
   defaultWorkspaceCwd = status.defaultCwd || "";
-  cwdInput.value ||= status.defaultCwd || "";
-  updateProject(cwdInput.value);
-  void refreshProjectActions();
   if (status.ready) setRuntime("ready", "Agent 已连接");
   // Application-level runtime state can point at a task running in another
   // window. Only the window-scoped binding proves this pane rendered it.
   currentThreadId = status.windowThreadId || null;
+  if (!currentThreadId) {
+    selectedWorkspaceMode = "isolated";
+    selectedWorkspaceBaseCwd = null;
+    cwdInput.value = "";
+  }
+  updateProject(cwdInput.value);
+  if (cwdInput.value.trim()) void refreshProjectActions();
   if (currentThreadId) threadLabel.textContent = currentThreadId.slice(0, 13).toUpperCase();
   renderGoal(status.goal);
   renderProvider(status.provider);
@@ -5853,8 +6984,13 @@ void refreshCloudAccount({ quiet: true }).catch(() => {});
 window.workbench.getAppUpdateState().then(renderAppUpdate).catch((error) => {
   renderAppUpdate({ supported: false, status: "error", message: error.message });
 });
+void refreshPreferences();
 
 cwdInput.addEventListener("change", (event) => {
+  if (!currentThreadId) {
+    selectedWorkspaceMode = event.target.value.trim() ? "local" : "isolated";
+    selectedWorkspaceBaseCwd = event.target.value.trim() || null;
+  }
   updateProject(event.target.value);
   void refreshProjectActions();
   resetTaskScopedUtilityState();

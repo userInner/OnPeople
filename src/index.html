@@ -10,6 +10,270 @@
     <link rel="stylesheet" href="ui-controls.css" />
   </head>
   <body>
+    <section id="settings-center" class="settings-center" hidden aria-label="OnPeople 设置">
+      <aside class="settings-sidebar">
+        <button id="settings-close" class="settings-back" type="button"><span aria-hidden="true">←</span> 返回应用</button>
+        <label class="settings-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="settings-search" type="search" placeholder="搜索设置…" aria-label="搜索设置" />
+        </label>
+        <nav id="settings-nav" class="settings-nav" aria-label="设置分类">
+          <span class="settings-nav-heading">个人</span>
+          <button class="active" type="button" data-settings-route="general"><i>⚙</i><span>常规</span></button>
+          <button type="button" data-settings-route="profile"><i>◎</i><span>个人资料</span></button>
+          <button type="button" data-settings-route="appearance"><i>☼</i><span>外观</span></button>
+          <button type="button" data-settings-route="voice"><i>♩</i><span>语音</span></button>
+          <button type="button" data-settings-route="configuration"><i>◫</i><span>配置</span></button>
+          <button type="button" data-settings-route="personalization"><i>◉</i><span>个性化</span></button>
+          <button type="button" data-settings-route="pet"><i>●</i><span>宠物</span></button>
+          <button type="button" data-settings-route="shortcuts"><i>⌨</i><span>键盘快捷键</span></button>
+          <button type="button" data-settings-route="usage"><i>◴</i><span>使用情况和计费</span></button>
+          <button type="button" data-settings-route="account"><i>◍</i><span>账户</span><small>↗</small></button>
+
+          <span class="settings-nav-heading">集成</span>
+          <button type="button" data-settings-route="snapshots"><i>⌗</i><span>智能快照</span></button>
+          <button type="button" data-settings-route="plugins"><i>◌</i><span>插件</span></button>
+          <button type="button" data-settings-route="browser"><i>▱</i><span>浏览器</span></button>
+          <button type="button" data-settings-route="computer"><i>⌁</i><span>电脑操控</span></button>
+
+          <span class="settings-nav-heading">编码</span>
+          <button type="button" data-settings-route="hooks"><i>♩</i><span>钩子</span></button>
+          <button type="button" data-settings-route="connections"><i>◎</i><span>连接</span></button>
+          <button type="button" data-settings-route="git"><i>⌘</i><span>Git</span></button>
+          <button type="button" data-settings-route="environment"><i>▣</i><span>环境</span></button>
+          <button type="button" data-settings-route="worktrees"><i>⌁</i><span>工作树</span></button>
+
+          <span class="settings-nav-heading">已归档</span>
+          <button type="button" data-settings-route="archived"><i>▤</i><span>已归档任务</span></button>
+        </nav>
+      </aside>
+
+      <main class="settings-content">
+        <section id="settings-general-page" class="settings-page">
+          <header class="settings-page-header">
+            <span>ONPEOPLE SETTINGS</span>
+            <h1>常规</h1>
+            <p>控制 OnPeople 的默认权限、文件打开方式与任务运行体验。</p>
+          </header>
+
+          <section class="settings-group" aria-labelledby="settings-permissions-title">
+            <h2 id="settings-permissions-title">权限</h2>
+            <div class="settings-card settings-permission-list">
+              <button type="button" data-settings-permission="ask" role="switch" aria-checked="false">
+                <span><strong>默认权限</strong><small>可读写当前工作空间；超出范围时向你请求批准。</small></span><i></i>
+              </button>
+              <button type="button" data-settings-permission="auto_review" role="switch" aria-checked="false">
+                <span><strong>自动审核</strong><small>工作空间内直接执行，额外访问由审阅 Agent 判断。</small></span><i></i>
+              </button>
+              <button type="button" data-settings-permission="full_access" role="switch" aria-checked="false">
+                <span><strong>完全访问权限</strong><small>不使用沙箱且不逐次请求批准；外部发布与购买仍需明确意图。</small></span><i></i>
+              </button>
+            </div>
+          </section>
+
+          <section class="settings-group" aria-labelledby="settings-general-title">
+            <h2 id="settings-general-title">常规</h2>
+            <div class="settings-card settings-option-list">
+              <label class="settings-option-row">
+                <span><strong>默认文件打开目标</strong><small>点击文件和行号时使用的应用</small></span>
+                <select id="settings-file-opener">
+                  <option value="smart">智能选择</option>
+                  <option value="system">系统默认应用</option>
+                </select>
+              </label>
+              <label class="settings-option-row">
+                <span><strong>语言</strong><small>应用界面语言</small></span>
+                <select id="settings-language" disabled><option value="auto">自动检测</option></select>
+              </label>
+              <button class="settings-option-row" type="button" data-settings-toggle="showComposerFooter" role="switch" aria-checked="true">
+                <span><strong>输入框底部控制栏</strong><small>显示工作空间、权限和键盘提示</small></span><i></i>
+              </button>
+              <button class="settings-option-row" type="button" data-settings-toggle="keepInMenuBar" role="switch" aria-checked="false">
+                <span><strong>在菜单栏中显示</strong><small>关闭主窗口后仍可从系统菜单栏恢复 OnPeople、创建任务或打开宠物</small></span><i></i>
+              </button>
+              <div class="settings-option-row">
+                <span><strong>默认终端位置</strong><small>终端位于任务内容下方，可拖动调整高度</small></span><em>底部</em>
+              </div>
+              <button class="settings-option-row" type="button" data-settings-toggle="preventSleepWhileRunning" role="switch" aria-checked="false">
+                <span><strong>运行时防止系统休眠</strong><small>仅在任务或计划任务运行时保持电脑唤醒</small></span><i></i>
+              </button>
+              <button class="settings-option-row" type="button" data-settings-toggle="showSuggestions" role="switch" aria-checked="true">
+                <span><strong>建议提示</strong><small>在空白任务中显示可用能力提示</small></span><i></i>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings-profile-page" class="settings-page settings-profile-page" hidden>
+          <header class="settings-profile-header">
+            <div>
+              <span>ONPEOPLE PROFILE</span>
+              <h1>个人资料</h1>
+              <p>账户、使用档案与 Token 排行集中在这里。</p>
+            </div>
+            <div id="settings-profile-tabs-host"></div>
+          </header>
+          <div id="settings-usage-host" class="settings-usage-host"></div>
+        </section>
+
+        <section id="settings-runtime-page" class="settings-page settings-runtime-page" hidden>
+          <header class="settings-page-header">
+            <span>TASK RUNTIME</span>
+            <h1>运行设置</h1>
+            <p>模型来源、Provider 和工作目录按当前任务独立保存。</p>
+          </header>
+          <div id="settings-runtime-host" class="settings-runtime-host"></div>
+        </section>
+
+        <section id="settings-appearance-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>APPEARANCE</span>
+            <h1>外观</h1>
+            <p>主题、信息密度与动效会立即应用到所有 OnPeople 任务窗口。</p>
+          </header>
+          <section class="settings-group">
+            <h2>界面</h2>
+            <div class="settings-card settings-option-list">
+              <label class="settings-option-row">
+                <span><strong>主题</strong><small>跟随系统，或固定使用浅色、深色外观</small></span>
+                <select id="settings-theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
+              </label>
+              <label class="settings-option-row">
+                <span><strong>信息密度</strong><small>调整列表、工具栏和设置项的间距</small></span>
+                <select id="settings-density"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select>
+              </label>
+              <button class="settings-option-row" type="button" data-settings-toggle="reduceMotion" role="switch" aria-checked="false">
+                <span><strong>减少动态效果</strong><small>关闭非必要的滚动、菜单和面板过渡动画</small></span><i></i>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings-personalization-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>PERSONALIZATION</span>
+            <h1>个性化</h1>
+            <p>这些设置会进入新建任务的 Agent 上下文，而不是只保存在界面中。</p>
+          </header>
+          <section class="settings-group">
+            <h2>个人指令</h2>
+            <div class="settings-card settings-form-card">
+              <label for="settings-custom-instructions"><strong>希望 OnPeople 如何协作？</strong><small>例如回复语言、代码风格、验证习惯或长期工作偏好。</small></label>
+              <textarea id="settings-custom-instructions" rows="7" maxlength="8000" placeholder="输入会应用到新任务的个人指令…"></textarea>
+              <div class="settings-form-actions"><small id="settings-personalization-status">仅影响之后创建的任务</small><button id="settings-personalization-save" type="button">保存个人指令</button></div>
+            </div>
+          </section>
+          <section class="settings-group">
+            <h2>记忆</h2>
+            <div class="settings-card settings-option-list">
+              <button id="settings-memory-enabled" class="settings-option-row" type="button" role="switch" aria-checked="true">
+                <span><strong>读取本地记忆</strong><small>新任务会读取已启用的全局和当前项目记忆</small></span><i></i>
+              </button>
+              <button id="settings-memory-generate" class="settings-option-row" type="button" role="switch" aria-checked="false">
+                <span><strong>生成候选记忆</strong><small>完成 Turn 后提取候选偏好，候选不会自动启用</small></span><i></i>
+              </button>
+              <button id="settings-memory-manage" class="settings-option-row settings-row-action" type="button">
+                <span><strong>管理记忆</strong><small id="settings-memory-summary">正在读取本机记忆…</small></span><em>打开</em>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings-pet-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>ONPEOPLE PET</span>
+            <h1>宠物</h1>
+            <p>直接控制桌面宠物窗口与皮肤，设置会跨启动保留。</p>
+          </header>
+          <section class="settings-group">
+            <h2>桌面宠物</h2>
+            <div class="settings-card settings-option-list">
+              <button id="settings-pet-visible" class="settings-option-row" type="button" role="switch" aria-checked="false">
+                <span><strong>显示桌面宠物</strong><small>在桌面显示当前任务状态和完成提醒</small></span><i></i>
+              </button>
+              <label class="settings-option-row">
+                <span><strong>宠物皮肤</strong><small>选择内置皮肤或导入自己的透明 PNG/WebP</small></span>
+                <select id="settings-pet-skin"></select>
+              </label>
+              <div class="settings-option-row settings-inline-actions">
+                <span><strong>自定义皮肤</strong><small>建议使用正方形透明图片，64–4096 像素</small></span>
+                <div><button id="settings-pet-import" type="button">导入皮肤</button><button id="settings-pet-open" type="button">打开宠物</button></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings-shortcuts-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>KEYBOARD</span>
+            <h1>键盘快捷键</h1>
+            <p>这里展示的是 OnPeople 当前真正监听的快捷键，可搜索核对。</p>
+          </header>
+          <label class="settings-list-search"><span>⌕</span><input id="settings-shortcuts-search" type="search" placeholder="搜索快捷键…" /></label>
+          <div id="settings-shortcuts-list" class="settings-card settings-shortcuts-list"></div>
+        </section>
+
+        <section id="settings-browser-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>INTERNAL BROWSER</span>
+            <h1>浏览器</h1>
+            <p>控制任务独享的内嵌浏览器、链接打开方式与下载位置。</p>
+          </header>
+          <section class="settings-group">
+            <h2>浏览器能力</h2>
+            <div class="settings-card settings-option-list">
+              <button class="settings-option-row" type="button" data-settings-toggle="browserEnabled" role="switch" aria-checked="true">
+                <span><strong>启用内嵌浏览器</strong><small>为新任务注册浏览器工具，并显示浏览器工具舱</small></span><i></i>
+              </button>
+              <label class="settings-option-row">
+                <span><strong>网页新窗口</strong><small>网页请求打开新窗口时的处理方式</small></span>
+                <select id="settings-browser-links"><option value="tab">在 OnPeople 新标签打开</option><option value="system">使用系统浏览器</option></select>
+              </label>
+            </div>
+          </section>
+          <section class="settings-group">
+            <h2>下载</h2>
+            <div class="settings-card settings-option-list">
+              <div class="settings-option-row settings-download-row">
+                <span><strong>下载位置</strong><small id="settings-download-directory">系统“下载”文件夹</small></span>
+                <button id="settings-download-pick" type="button">更改</button>
+              </div>
+              <button class="settings-option-row" type="button" data-settings-toggle="askDownloadLocation" role="switch" aria-checked="false">
+                <span><strong>下载前询问保存位置</strong><small>每次下载时显示系统保存对话框</small></span><i></i>
+              </button>
+              <button id="settings-browser-clear" class="settings-option-row settings-row-action" type="button">
+                <span><strong>清理浏览器数据</strong><small>清除 OnPeople 独立浏览器中的 Cookie、缓存和站点数据</small></span><em>清理</em>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <section id="settings-live-page" class="settings-page settings-live-page" hidden>
+          <header class="settings-page-header">
+            <span id="settings-live-kicker">LIVE SETTINGS</span>
+            <h1 id="settings-live-title">设置</h1>
+            <p id="settings-live-copy">这里直接显示 OnPeople 当前使用的真实管理器。</p>
+          </header>
+          <div id="settings-live-host" class="settings-live-host"></div>
+        </section>
+
+        <section id="settings-feature-page" class="settings-page settings-feature-page" hidden>
+          <header class="settings-page-header">
+            <span>ONPEOPLE SETTINGS</span>
+            <h1 id="settings-feature-title">设置</h1>
+            <p id="settings-feature-copy"></p>
+          </header>
+          <section class="settings-group">
+            <div class="settings-card settings-feature-card">
+              <span id="settings-feature-icon" aria-hidden="true">OP</span>
+              <div><strong id="settings-feature-card-title"></strong><small id="settings-feature-card-copy"></small></div>
+              <button id="settings-feature-action" type="button">打开</button>
+            </div>
+          </section>
+        </section>
+      </main>
+    </section>
+
     <div id="app-shell" class="app-shell">
       <aside id="app-sidebar" class="app-sidebar" aria-label="任务侧栏">
         <div class="sidebar-brand">
@@ -87,13 +351,17 @@
                 <option value="minimax">MiniMax（视觉）</option>
                 <option value="kimi">Kimi（视觉）</option>
                 <option value="grok">Grok / xAI（视觉）</option>
-                <option value="sub2api">Sub2API（5.6 系列）</option>
                 <option value="compatible">自定义 Responses API</option>
                 <option value="ollama">Ollama</option>
                 <option value="lmstudio">LM Studio</option>
               </select>
             </label>
-            <label>模型名称<input id="model" list="model-options" placeholder="使用默认模型" /><datalist id="model-options"></datalist></label>
+            <label id="model-input-wrap">模型名称<input id="model" list="model-options" placeholder="输入或发现模型" /><datalist id="model-options"></datalist></label>
+            <label id="onpeople-model-wrap" hidden><span>可选模型</span>
+              <select id="onpeople-model" aria-label="OnPeople 可选模型" disabled>
+                <option value="">正在读取实时模型…</option>
+              </select>
+            </label>
             <label id="base-url-wrap">API Base URL<input id="base-url" placeholder="https://api.openai.com/v1" /></label>
             <label id="api-key-wrap">API Key<input id="api-key" type="password" autocomplete="off" placeholder="留空则使用已保存密钥" /></label>
             <div id="model-capability" class="model-capability"></div>
@@ -213,11 +481,35 @@
                 </div>
               </div>
               <div class="composer-context-row">
-                <button id="composer-workspace" class="composer-context-button" type="button" title="选择工作空间">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8v.7M3.5 7.5h17v8.8a3.7 3.7 0 0 1-3.7 3.7H7.2a3.7 3.7 0 0 1-3.7-3.7Z"/></svg>
-                  <span id="composer-workspace-label">选择工作空间</span>
-                  <b aria-hidden="true">⌄</b>
-                </button>
+                <div class="composer-workspace-picker">
+                  <button id="composer-workspace" class="composer-context-button" type="button" title="选择任务工作空间" aria-haspopup="menu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8v.7M3.5 7.5h17v8.8a3.7 3.7 0 0 1-3.7 3.7H7.2a3.7 3.7 0 0 1-3.7-3.7Z"/></svg>
+                    <span id="composer-workspace-label">独立空间</span>
+                    <b aria-hidden="true">⌄</b>
+                  </button>
+                  <div id="composer-workspace-menu" class="composer-workspace-menu" role="menu" aria-label="任务工作空间" hidden>
+                    <label class="composer-workspace-search">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/></svg>
+                      <input id="composer-workspace-search" type="search" placeholder="搜索工作空间" autocomplete="off" aria-label="搜索工作空间" />
+                    </label>
+                    <div class="composer-workspace-section">
+                      <span class="composer-workspace-heading">最近</span>
+                      <div id="composer-workspace-recents" class="composer-workspace-recents"></div>
+                    </div>
+                    <div class="composer-workspace-actions">
+                    <button type="button" role="menuitemradio" data-workspace-mode="isolated" aria-checked="true">
+                      <i aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 8V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8V17a3 3 0 0 1-3 3h-11a3 3 0 0 1-3-3Z"/><path d="M12 10.5v6M9 13.5h6"/></svg></i><span><strong>新建工作空间</strong><small>首次发送时创建独立目录</small></span><b>✓</b>
+                    </button>
+                    <button type="button" role="menuitemradio" data-workspace-mode="local" aria-checked="false">
+                      <i aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 8V6.8A2.8 2.8 0 0 1 6.3 4h3.1l2 2h6.3a2.8 2.8 0 0 1 2.8 2.8V17a3 3 0 0 1-3 3h-11a3 3 0 0 1-3-3Z"/></svg></i><span><strong>打开本地文件夹</strong><small>使用已有项目目录</small></span><b>✓</b>
+                    </button>
+                    <button type="button" role="menuitemradio" data-workspace-mode="worktree" aria-checked="false">
+                      <i aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 9.5c4.2 0 4.2-1.5 8-1.5"/></svg></i><span><strong>Git Worktree</strong><small>基于 HEAD 创建隔离副本</small></span><b>✓</b>
+                    </button>
+                    </div>
+                    <p id="composer-workspace-detail">新任务不会读取其他任务的文件。</p>
+                  </div>
+                </div>
                 <label class="boundary-badge permission-control composer-permission" title="任务执行权限">
                   <span class="composer-context-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.5c0 4.3-2.8 7.7-7 9.3-4.2-1.6-7-5-7-9.3V6Z"/><path d="m9.2 12 1.8 1.8 3.9-4"/></svg></span>
                   <select id="permission-preset" aria-label="任务执行权限" disabled>
@@ -714,7 +1006,7 @@
             <img src="../assets/onpeople-app-icon-256.png" alt="" />
             <div>
               <span>ONPEOPLE ACTIVITY</span>
-              <strong id="usage-profile-title">我的 Agent 档案</strong>
+              <strong id="usage-profile-title">个人资料</strong>
             </div>
           </div>
           <nav class="usage-profile-tabs" aria-label="Token 档案视图">
@@ -735,7 +1027,10 @@
               <span id="usage-profile-handle">本机 Agent 活动</span>
               <small>本机统计包含所有 Router；云端统计仅包含 OnPeople 模型。</small>
             </div>
-            <button id="usage-profile-refresh" type="button">刷新数据</button>
+            <div class="usage-profile-actions">
+              <button id="usage-profile-account" type="button">账户管理</button>
+              <button id="usage-profile-refresh" type="button">刷新数据</button>
+            </div>
           </section>
 
           <section class="usage-metric-strip" aria-label="使用数据摘要">

@@ -1,7 +1,6 @@
 const IMAGE_MODELS = Object.freeze({
   onpeople: "gpt-image-2",
   openai: "gpt-image-2",
-  sub2api: "gpt-image-2",
   compatible: "gpt-image-2",
 });
 

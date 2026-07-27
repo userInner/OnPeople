@@ -20,6 +20,8 @@ class ThreadContextRegistry {
       reasoningEffort: null,
       name: null,
       cwd: null,
+      workspaceMode: null,
+      workspaceBaseCwd: null,
       provider: null,
       lifecycle: "idle",
       updatedAt: Date.now(),

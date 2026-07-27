@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, webContents } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray, webContents } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const { AsyncLocalStorage } = require("node:async_hooks");
@@ -43,8 +43,12 @@ const { createCodexMultiAgentAdapter } = require("./codex-multi-agent-adapter.cj
 const { imageGenerationCapability } = require("./provider-capabilities.cjs");
 const { isWithin, resolveWorkspaceInput } = require("./workspace-boundary.cjs");
 const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
-const { buildSkillInputItems, flattenSkillsResponse } = require("./skill-runtime.cjs");
+const {
+  buildSkillInputItems,
+  flattenSkillsResponse,
+} = require("./skill-runtime.cjs");
 const { watchSkillRoot } = require("./skill-watcher.cjs");
+const { materializeTaskWorkspace, normalizeTaskWorkspaceMode } = require("./task-workspaces.cjs");
 const {
   computerUseMcpArgs,
   editorCandidates,
@@ -145,29 +149,34 @@ const COMPUTER_USE_READ_TOOLS = [
   "get_window_state",
 ];
 const DEFAULT_CWD = process.env.INTERNAL_AGENT_WORKSPACE || path.join(os.homedir(), "Documents", "OnPeople");
+const TASK_WORKSPACES_ROOT = path.join(DEFAULT_CWD, "Workspaces");
 const START_URL = process.argv.find((value) => value.startsWith("--start-url="))?.slice("--start-url=".length) || null;
 const SMOKE_PROMPT = process.argv.find((value) => value.startsWith("--smoke-prompt="))?.slice("--smoke-prompt=".length) || null;
 const DEFAULT_CLOUD_SERVICE_URL = process.env.SUB2API_URL || process.env.ONPEOPLE_CLOUD_URL || "https://sub2api.aibro.vip";
 const PROVIDERS = {
-  onpeople: { name: "OnPeople · Sub2API", protocol: "responses", baseUrl: `${DEFAULT_CLOUD_SERVICE_URL.replace(/\/$/, "").replace(/\/api\/v1$/, "").replace(/\/v1$/, "")}/v1`, model: "", vision: true },
+  onpeople: { name: "OnPeople", protocol: "responses", baseUrl: `${DEFAULT_CLOUD_SERVICE_URL.replace(/\/$/, "").replace(/\/api\/v1$/, "").replace(/\/v1$/, "")}/v1`, model: "", vision: true },
   openai: { name: "OpenAI", protocol: "responses", baseUrl: "https://api.openai.com/v1", model: "gpt-5.6-terra", vision: true },
   deepseek: { name: "DeepSeek", protocol: "chat", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", vision: false },
   minimax: { name: "MiniMax", protocol: "chat", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-M2.7", vision: true },
   kimi: { name: "Kimi", protocol: "chat", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.6", vision: true },
   grok: { name: "Grok (xAI)", protocol: "responses", baseUrl: "https://api.x.ai/v1", model: "grok-4.5", vision: true },
-  sub2api: { name: "Sub2API", protocol: "responses", baseUrl: "https://sub2api.aibro.vip/v1", model: "gpt-5.6-sol", vision: true },
   compatible: { name: "自定义 Responses API", protocol: "responses", baseUrl: "https://api.openai.com/v1", model: "", vision: true },
   ollama: { name: "Ollama", protocol: "local", baseUrl: "", model: "", vision: false },
   lmstudio: { name: "LM Studio", protocol: "local", baseUrl: "", model: "", vision: false },
 };
 const DEVELOPER_INSTRUCTIONS = AGENT_BEHAVIOR_CONTRACT;
 function developerInstructionsFor(cwd, extra = "") {
-  const policy = readP0Settings().policy;
+  const p0 = readP0Settings();
+  const policy = p0.policy;
   const permission = policy.sandbox === "danger-full-access" && policy.approvalPolicy === "never"
     ? "The active permission profile is Full access. Do not ask for shell, filesystem, network, browser, or ordinary tool approval. This does not create user intent for a destructive or externally visible action; when the current user request already names the exact action, target, and content, do not ask for the same authorization twice."
     : "Follow the active sandbox and approval policy for tool execution.";
   const memory = localMemoryStore?.context(cwd || DEFAULT_CWD) || "";
-  return [DEVELOPER_INSTRUCTIONS, permission, memory, extra].filter(Boolean).join("\n\n");
+  const customInstructions = String(p0.preferences.customInstructions || "").trim();
+  const personalization = customInstructions
+    ? `<onpeople_personal_instructions>\n${customInstructions}\n</onpeople_personal_instructions>`
+    : "";
+  return [DEVELOPER_INSTRUCTIONS, permission, personalization, memory, extra].filter(Boolean).join("\n\n");
 }
 const CAPABILITY_INSTRUCTIONS = {
   documents: "Create or edit a DOCX document. Use workspace_artifacts.artifact_create_document for the final file.",
@@ -1362,6 +1371,7 @@ class EmbeddedBrowserBridge {
 
 let mainWindow;
 let petWindow;
+let statusTray;
 let petStateStore;
 let petMoveTimer;
 const taskWindows = new Set();
@@ -1500,6 +1510,7 @@ function senderThreadId(event, requestedThreadId = null, { allowUnbound = true }
 }
 
 function browserRouteForEvent(event, requestedRouteId = null) {
+  if (!readP0Settings().preferences.browserEnabled) throw new Error("内嵌浏览器已在设置中停用");
   const requested = String(requestedRouteId || "").trim();
   if (requested && browserBridge.targets.owns(requested, event.sender.id)) return requested;
   const threadId = windowThreadIds.get(event.sender.id);
@@ -1531,7 +1542,8 @@ function publishBrowserTarget(target) {
 }
 
 function updatePowerBlocker() {
-  const shouldBlock = activeTurnIdsByThread.size > 0 || scheduledRunsByThread.size > 0;
+  const preventSleep = readP0Settings().preferences.preventSleepWhileRunning;
+  const shouldBlock = preventSleep && (activeTurnIdsByThread.size > 0 || scheduledRunsByThread.size > 0);
   if (shouldBlock && activePowerBlockerId == null) {
     activePowerBlockerId = powerSaveBlocker.start("prevent-display-sleep");
   } else if (!shouldBlock && activePowerBlockerId != null) {
@@ -1703,6 +1715,22 @@ const P0_DEFAULTS = {
     multiAgentMode: "explicitRequestOnly",
     maxAgents: 4,
   },
+  preferences: {
+    defaultFileOpener: "smart",
+    language: "auto",
+    preventSleepWhileRunning: false,
+    showComposerFooter: true,
+    showSuggestions: true,
+    keepInMenuBar: false,
+    theme: "system",
+    density: "comfortable",
+    reduceMotion: false,
+    customInstructions: "",
+    browserEnabled: true,
+    browserOpenLinks: "tab",
+    downloadDirectory: "",
+    askDownloadLocation: false,
+  },
 };
 
 function p0SettingsPath() {
@@ -1715,7 +1743,12 @@ function readP0Settings() {
   if (p0SettingsCache) return structuredClone(p0SettingsCache);
   try {
     const stored = JSON.parse(fs.readFileSync(p0SettingsPath(), "utf8"));
-    p0SettingsCache = { ...P0_DEFAULTS, ...stored, policy: { ...P0_DEFAULTS.policy, ...(stored.policy || {}) } };
+    p0SettingsCache = {
+      ...P0_DEFAULTS,
+      ...stored,
+      policy: { ...P0_DEFAULTS.policy, ...(stored.policy || {}) },
+      preferences: { ...P0_DEFAULTS.preferences, ...(stored.preferences || {}) },
+    };
   } catch {
     p0SettingsCache = structuredClone(P0_DEFAULTS);
   }
@@ -1727,6 +1760,66 @@ function writeP0Settings(settings) {
   fs.writeFileSync(p0SettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
   p0SettingsCache = null;
   return settings;
+}
+
+function showPrimaryWindow() {
+  const target = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : [...taskWindows].find((window) => !window.isDestroyed());
+  if (!target) return;
+  target.show();
+  target.focus();
+}
+
+function syncStatusTray() {
+  if (!app.isReady()) return;
+  const enabled = Boolean(readP0Settings().preferences.keepInMenuBar);
+  if (!enabled) {
+    statusTray?.destroy();
+    statusTray = null;
+    return;
+  }
+  if (!statusTray) {
+    const icon = nativeImage.createFromPath(APP_ICON_PNG).resize({ width: process.platform === "darwin" ? 18 : 20, height: process.platform === "darwin" ? 18 : 20 });
+    if (process.platform === "darwin") icon.setTemplateImage(false);
+    statusTray = new Tray(icon);
+    statusTray.setToolTip("OnPeople");
+    statusTray.on("click", showPrimaryWindow);
+  }
+  statusTray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 OnPeople", click: showPrimaryWindow },
+    { label: "新建任务", click: () => void openTaskWindow(null) },
+    { label: "显示 / 收起宠物", click: () => togglePet() },
+    { type: "separator" },
+    { label: "退出 OnPeople", click: () => app.quit() },
+  ]));
+}
+
+function applyNativePreferences() {
+  const preferences = readP0Settings().preferences;
+  nativeTheme.themeSource = preferences.theme;
+  syncStatusTray();
+  sendToRenderer("preferences:changed", preferences);
+}
+
+let browserDownloadPolicyInstalled = false;
+function installBrowserDownloadPolicy() {
+  if (browserDownloadPolicyInstalled) return;
+  browserDownloadPolicyInstalled = true;
+  session.fromPartition(EMBEDDED_BROWSER_PARTITION).on("will-download", (_event, item) => {
+    const preferences = readP0Settings().preferences;
+    const configuredDirectory = String(preferences.downloadDirectory || "").trim();
+    const directory = configuredDirectory || app.getPath("downloads");
+    if (preferences.askDownloadLocation) {
+      item.setSaveDialogOptions({
+        title: "保存浏览器下载",
+        defaultPath: path.join(directory, path.basename(item.getFilename() || "download")),
+      });
+      return;
+    }
+    fs.mkdirSync(directory, { recursive: true });
+    item.setSavePath(path.join(directory, path.basename(item.getFilename() || "download")));
+  });
 }
 
 function auditPath() {
@@ -1939,7 +2032,13 @@ async function runScheduledTask(task) {
     run.cwd = taskCwd;
     scheduledTaskStore.save();
     publishScheduler();
-    const { settings, modelProvider, model } = providerContextForThread(task.destination?.threadId || null);
+    let providerContext = providerContextForThread(task.destination?.threadId || null);
+    if (providerContext.settings.type === "onpeople") {
+      await cloudAccount.ensureModelAccess(providerContext.model);
+      invalidateProviderSettingsCaches();
+      providerContext = providerContextForThread(task.destination?.threadId || null);
+    }
+    const { settings, modelProvider, model } = providerContext;
     const p0 = readP0Settings();
     const threadOptions = {
       cwd: taskCwd, model, modelProvider,
@@ -2189,6 +2288,26 @@ function normalizeProviderSettings(input = {}, saved = readProviderSettings()) {
   return { type, model, baseUrl, apiKey };
 }
 
+async function providerSettingsForExecution(input, { refresh = false } = {}) {
+  const settings = normalizeProviderSettings(input || {});
+  if (settings.type !== "onpeople") return settings;
+  if (!cloudAccount?.accessToken()) {
+    throw new Error("OnPeople 登录状态已失效，请重新登录后再运行任务");
+  }
+  let apiKey = settings.apiKey;
+  let baseUrl = settings.baseUrl;
+  if (refresh || !apiKey) {
+    const access = await cloudAccount.ensureModelAccess(settings.model);
+    invalidateProviderSettingsCaches();
+    apiKey = access?.apiKey || "";
+    baseUrl = access?.baseUrl || cloudAccount.apiBaseUrl();
+  }
+  if (!apiKey) {
+    throw new Error(`OnPeople 模型 ${settings.model} 的访问凭据尚未就绪，请刷新账号后重试`);
+  }
+  return { ...settings, baseUrl, apiKey };
+}
+
 function persistProviderSettings(input) {
   const settings = normalizeProviderSettings(input);
   const existing = readProviderStore();
@@ -2262,6 +2381,7 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
       },
     },
   };
+  if (!p0.preferences.browserEnabled) delete config.mcp_servers.internal_browser;
   const preset = PROVIDERS[providerSettings.type];
   const imageGeneration = imageGenerationCapability(providerSettings.type, Boolean(providerSettings.apiKey));
   if (preset.protocol !== "local") {
@@ -2308,17 +2428,28 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
   return config;
 }
 
+async function resolveNewThreadWorkspace(payload = {}) {
+  return materializeTaskWorkspace({
+    mode: payload.workspaceMode,
+    cwd: payload.cwd,
+    prompt: payload.prompt || payload.objective || "新任务",
+    workspaceRoot: TASK_WORKSPACES_ROOT,
+    createWorktree,
+  });
+}
+
 async function ensureThread(payload = {}) {
   if (!appServer?.ready) throw new Error("Codex App Server is still starting");
-  const cwd = payload.cwd || DEFAULT_CWD;
   const requestedThreadId = String(payload.threadId || "").trim();
   if (requestedThreadId) {
     const existing = contextForThread(requestedThreadId);
+    const workspace = knownThreadWorkspace(requestedThreadId);
+    const cwd = existing?.cwd || workspace.cwd;
     if (payload.browserRouteId) {
       browserBridge.bindRoute(requestedThreadId, payload.browserRouteId);
       if (existing?.gatewayRouteId) browserBridge.bindRoute(existing.gatewayRouteId, payload.browserRouteId);
     }
-    const resumed = await ensureRuntimeThread(requestedThreadId, { cwd, model: payload.model || existing?.model || null });
+    const resumed = await ensureRuntimeThread(requestedThreadId, { cwd, model: payload.model || null });
     return {
       threadId: requestedThreadId,
       cwd: resumed?.cwd || cwd,
@@ -2326,15 +2457,19 @@ async function ensureThread(payload = {}) {
       model: payload.model || resumed?.model || existing?.model || null,
       reasoningEffort: resumed?.reasoningEffort || existing?.reasoningEffort || null,
       provider: existing?.provider || null,
+      workspaceMode: workspace.workspaceMode,
+      workspaceBaseCwd: workspace.workspaceBaseCwd,
     };
   }
+  const workspace = await resolveNewThreadWorkspace(payload);
+  const cwd = workspace.cwd;
   const savedSettings = readProviderSettings();
-  const settings = normalizeProviderSettings({
+  const settings = await providerSettingsForExecution(normalizeProviderSettings({
     type: payload.modelProvider,
     model: payload.model,
     baseUrl: payload.baseUrl,
     apiKey: payload.apiKey,
-  }, savedSettings);
+  }, savedSettings), { refresh: true });
   if (settings.apiKey && settings.apiKey !== savedSettings.apiKey) {
     throw new Error("请先保存模型配置，让 Agent 安全加载新的 API Key");
   }
@@ -2367,10 +2502,21 @@ async function ensureThread(payload = {}) {
     reasoningEffort: result.reasoningEffort || null,
     provider: { ...settings },
     gatewayRouteId,
+    workspaceMode: workspace.workspaceMode,
+    workspaceBaseCwd: workspace.workspaceBaseCwd,
   });
-  rememberThread({ ...result.thread, cwd: threadCwd });
+  rememberThread({ ...result.thread, cwd: threadCwd, ...workspace });
   agentRuntime?.rememberSession(result.thread, { model: threadModel, cwd: threadCwd });
-  return { threadId: result.thread.id, cwd: threadCwd, created: true, model: threadModel, reasoningEffort: context.reasoningEffort, provider: context.provider };
+  return {
+    threadId: result.thread.id,
+    cwd: threadCwd,
+    created: true,
+    model: threadModel,
+    reasoningEffort: context.reasoningEffort,
+    provider: context.provider,
+    workspaceMode: workspace.workspaceMode,
+    workspaceBaseCwd: workspace.workspaceBaseCwd,
+  };
 }
 
 function setThreadLifecycle(threadId, phase, detail = {}) {
@@ -2433,7 +2579,10 @@ async function ensureRuntimeThread(threadId, options = {}) {
   threadRecovery.begin(id);
   setThreadLifecycle(id, "restoring");
   const promise = (async () => {
-    const { settings, modelProvider, model } = providerContextForThread(id);
+    const providerContext = providerContextForThread(id);
+    const settings = await providerSettingsForExecution(providerContext.settings, { refresh: true });
+    const modelProvider = PROVIDERS[settings.type].protocol === "local" ? settings.type : "onpeople";
+    const model = settings.model || null;
     const policy = readP0Settings().policy;
     const cwd = options.cwd || knownThreadCwd(id) || DEFAULT_CWD;
     let result;
@@ -2532,7 +2681,12 @@ async function setCollaborationMode(mode, threadId, selectedModel = null, reason
 async function startAgentTurn(payload) {
   const thread = await ensureThread(payload);
   const { cwd, threadId } = thread;
-  const settings = providerContextForThread(threadId, thread.provider || null).settings;
+  const authoritativeProvider = providerContextForThread(threadId).settings;
+  const settings = await providerSettingsForExecution({
+    ...authoritativeProvider,
+    model: payload.model || authoritativeProvider.model,
+  }, { refresh: authoritativeProvider.type === "onpeople" });
+  if (settings.type === "onpeople") await applyThreadProvider(threadId, settings);
   const images = Array.isArray(payload.images) ? payload.images : [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 20) : [];
   if (images.length && !PROVIDERS[settings.type].vision) throw new Error(`${PROVIDERS[settings.type].name} 当前配置不支持图片输入`);
@@ -2548,7 +2702,7 @@ async function startAgentTurn(payload) {
   const capabilityInstruction = CAPABILITY_INSTRUCTIONS[payload.capability] || "";
   const turnText = [capabilityInstruction, payload.prompt, attachmentLines.length ? `<onpeople_attachments>\n${attachmentLines.join("\n")}\n</onpeople_attachments>` : ""].filter(Boolean).join("\n\n");
   const mode = payload.mode === "plan" ? "plan" : "default";
-  await setCollaborationMode(mode, threadId, payload.model || thread.model, thread.reasoningEffort);
+  await setCollaborationMode(mode, threadId, payload.model || settings.model || thread.model, thread.reasoningEffort);
   const skillInputs = await skillInputItemsForPrompt(cwd, turnText);
   const result = await appServer.request("turn/start", {
     threadId,
@@ -2566,10 +2720,22 @@ async function startAgentTurn(payload) {
   if (thread.created) {
     const threadName = String(payload.prompt || "新任务").replace(/\s+/g, " ").trim().slice(0, 64) || "新任务";
     threadContexts.update(threadId, { name: threadName });
-    rememberThread({ id: threadId, name: threadName, cwd });
+    rememberThread({
+      id: threadId,
+      name: threadName,
+      cwd,
+      workspaceMode: thread.workspaceMode,
+      workspaceBaseCwd: thread.workspaceBaseCwd,
+    });
     void appServer.request("thread/name/set", { threadId, name: threadName }).catch(() => {});
   }
-  return { threadId, turnId };
+  return {
+    threadId,
+    turnId,
+    cwd,
+    workspaceMode: thread.workspaceMode,
+    workspaceBaseCwd: thread.workspaceBaseCwd,
+  };
 }
 
 async function dispatchAgentPrompt(payload) {
@@ -2652,7 +2818,13 @@ async function setGoal(payload) {
   goalsByThread.set(threadId, result.goal);
   threadContexts.update(threadId, { goal: result.goal });
   sendToTaskThread(threadId, "agent:event", { type: "goal-state", threadId, goal: result.goal });
-  return { threadId, goal: result.goal };
+  return {
+    threadId,
+    goal: result.goal,
+    cwd,
+    workspaceMode: thread.workspaceMode,
+    workspaceBaseCwd: thread.workspaceBaseCwd,
+  };
 }
 
 async function updateGoal(threadId, action, value) {
@@ -2709,7 +2881,11 @@ function refreshOnPeopleRoutes() {
     const settings = normalizeProviderSettings(context.provider, readProviderSettings("onpeople"));
     threadContexts.update(context.id, { provider: { ...settings } });
     if (context.gatewayRouteId) {
-      modelGateway.registerRoute(context.gatewayRouteId, { ...settings, protocol: PROVIDERS.onpeople.protocol });
+      if (settings.apiKey) {
+        modelGateway.registerRoute(context.gatewayRouteId, { ...settings, protocol: PROVIDERS.onpeople.protocol });
+      } else {
+        modelGateway.removeRoute(context.gatewayRouteId);
+      }
     }
   }
 }
@@ -2717,20 +2893,21 @@ function refreshOnPeopleRoutes() {
 async function applyThreadProvider(threadId, settings) {
   const id = String(threadId || "").trim();
   if (!id) return { applied: false, reason: "no-thread" };
+  const executableSettings = await providerSettingsForExecution(settings);
   const context = threadContexts.ensure(id);
   const routeId = context.gatewayRouteId || id;
-  const protocol = PROVIDERS[settings.type].protocol;
-  if (protocol !== "local") modelGateway.registerRoute(routeId, { ...settings, protocol });
+  const protocol = PROVIDERS[executableSettings.type].protocol;
+  if (protocol !== "local") modelGateway.registerRoute(routeId, { ...executableSettings, protocol });
   threadContexts.update(id, {
-    provider: { ...settings },
-    model: settings.model || null,
+    provider: { ...executableSettings },
+    model: executableSettings.model || null,
     gatewayRouteId: routeId,
     pendingProvider: null,
   });
   if (appServer?.ready && runtimeLoadedThreadIds.has(id)) {
     await appServer.request("thread/settings/update", {
       threadId: id,
-      model: settings.model || null,
+      model: executableSettings.model || null,
     });
   }
   return { applied: true, routeId };
@@ -2738,13 +2915,22 @@ async function applyThreadProvider(threadId, settings) {
 
 async function listThreads({ search = "", archived = false } = {}) {
   const searchTerm = String(search || "").trim();
-  const result = await appServer.request("thread/list", {
-    limit: 100,
-    archived: Boolean(archived),
-    searchTerm: searchTerm || null,
-    sortKey: "recency_at",
-    sortDirection: "desc",
-  });
+  let result = { data: [], nextCursor: null };
+  let refreshPending = !appServer?.ready;
+  if (appServer?.ready) {
+    try {
+      result = await appServer.request("thread/list", {
+        limit: 100,
+        archived: Boolean(archived),
+        searchTerm: searchTerm || null,
+        sortKey: "recency_at",
+        sortDirection: "desc",
+      }) || { data: [], nextCursor: null };
+    } catch (error) {
+      refreshPending = true;
+      recordRuntimeEvent("warning", "实时任务列表暂不可用", error.message);
+    }
+  }
   const uiState = readThreadUiState();
   const pinned = new Set(uiState.pinnedThreadIds);
   const unread = new Set(uiState.unreadThreadIds);
@@ -2802,7 +2988,7 @@ async function listThreads({ search = "", archived = false } = {}) {
     pinned: Boolean(metadata.get(projectPath)?.pinned),
     hidden: uiState.hiddenProjectPaths.includes(projectPath),
   }));
-  return { threads, projects, nextCursor: result.nextCursor || null };
+  return { threads, projects, nextCursor: result.nextCursor || null, refreshPending };
 }
 
 function threadUiStatePath() {
@@ -2843,6 +3029,18 @@ function knownThreadCwd(threadId) {
   const contextCwd = threadContexts.get(id)?.cwd;
   const saved = readThreadUiState().threads.find((thread) => thread.id === id)?.cwd;
   return contextCwd || saved || DEFAULT_CWD;
+}
+
+function knownThreadWorkspace(threadId) {
+  const id = String(threadId || "");
+  const context = threadContexts.get(id);
+  const saved = readThreadUiState().threads.find((thread) => thread.id === id) || {};
+  const cwd = context?.cwd || saved.cwd || DEFAULT_CWD;
+  return {
+    cwd,
+    workspaceMode: normalizeTaskWorkspaceMode(context?.workspaceMode || saved.workspaceMode, cwd),
+    workspaceBaseCwd: context?.workspaceBaseCwd || saved.workspaceBaseCwd || null,
+  };
 }
 
 async function generatedImagePath(threadId, candidate) {
@@ -2944,7 +3142,17 @@ async function readLocalThreadSnapshot(threadId) {
   const rolloutPath = await findLocalRolloutPath(id);
   if (!rolloutPath) return null;
   const saved = readThreadUiState().threads.find((thread) => thread.id === id) || {};
-  const thread = { id, name: saved.name || saved.preview || "未命名任务", preview: saved.preview || saved.name || "未命名任务", cwd: saved.cwd || DEFAULT_CWD, turns: [], status: { type: "saved" } };
+  const thread = {
+    id,
+    name: saved.name || saved.preview || "未命名任务",
+    preview: saved.preview || saved.name || "未命名任务",
+    cwd: saved.cwd || DEFAULT_CWD,
+    workspaceMode: normalizeTaskWorkspaceMode(saved.workspaceMode, saved.cwd),
+    workspaceBaseCwd: saved.workspaceBaseCwd || null,
+    worktree: saved.worktree || null,
+    turns: [],
+    status: { type: "saved" },
+  };
   const turnsById = new Map();
   let currentTurn = null;
   let goal = null;
@@ -3008,6 +3216,9 @@ function rememberThread(thread) {
     name: thread.name || thread.preview || previous.name || "未命名任务",
     preview: thread.preview || thread.name || previous.preview || "未命名任务",
     cwd: thread.cwd || thread.workingDirectory || previous.cwd || DEFAULT_CWD,
+    workspaceMode: normalizeTaskWorkspaceMode(thread.workspaceMode || previous.workspaceMode, thread.cwd || previous.cwd),
+    workspaceBaseCwd: thread.workspaceBaseCwd ?? previous.workspaceBaseCwd ?? null,
+    worktree: thread.worktree || previous.worktree || null,
     updatedAt: new Date().toISOString(),
     recencyAt: Math.floor(Date.now() / 1000),
   };
@@ -3134,7 +3345,8 @@ function applyActiveThread(result, requestedThreadId = null) {
   const threadId = result?.thread?.id || requestedThreadId;
   if (!threadId) throw new Error("任务恢复结果缺少 threadId");
   const previous = contextForThread(threadId);
-  const cwd = result?.thread?.cwd || previous?.cwd || knownThreadCwd(threadId) || DEFAULT_CWD;
+  const workspace = knownThreadWorkspace(threadId);
+  const cwd = result?.thread?.cwd || previous?.cwd || workspace.cwd;
   const context = threadContexts.ensure(threadId, {
     turnId: activeTurnIdsByThread.get(threadId) || null,
     name: result?.thread?.name || previous?.name || null,
@@ -3142,8 +3354,10 @@ function applyActiveThread(result, requestedThreadId = null) {
     model: result?.model || previous?.model || null,
     reasoningEffort: result?.reasoningEffort || previous?.reasoningEffort || null,
     goal: goalsByThread.get(threadId) || previous?.goal || null,
+    workspaceMode: workspace.workspaceMode,
+    workspaceBaseCwd: workspace.workspaceBaseCwd,
   });
-  rememberThread({ ...(result?.thread || {}), id: threadId, cwd });
+  rememberThread({ ...(result?.thread || {}), id: threadId, cwd, ...workspace });
   return context;
 }
 
@@ -3163,6 +3377,8 @@ async function resumeThread(threadId) {
       model,
       goal: local.goal || null,
       turnId: activeTurnIdsByThread.get(id) || null,
+      workspaceMode: local.thread.workspaceMode,
+      workspaceBaseCwd: local.thread.workspaceBaseCwd,
     });
     // An unfinished turn in a persisted rollout may simply mean the previous
     // app process exited mid-turn. Only live App Server events are allowed to
@@ -3176,7 +3392,12 @@ async function resumeThread(threadId) {
   }
   await ensureRuntimeThread(id, { cwd: knownThreadCwd(id), model });
   const result = await appServer.request("thread/read", { threadId: id, includeTurns: true }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
-  const thread = result.thread;
+  const workspace = knownThreadWorkspace(id);
+  const thread = {
+    ...result.thread,
+    workspaceMode: workspace.workspaceMode,
+    workspaceBaseCwd: workspace.workspaceBaseCwd,
+  };
   const threadCwd = thread.cwd || knownThreadCwd(thread.id) || DEFAULT_CWD;
   rememberThread({ ...thread, cwd: threadCwd });
   agentRuntime?.rememberSession(thread, { model: result.model || model, cwd: threadCwd });
@@ -3198,6 +3419,8 @@ async function resumeThread(threadId) {
     reasoningEffort: result.reasoningEffort || null,
     goal,
     turnId: activeTurnIdsByThread.get(thread.id) || null,
+    workspaceMode: thread.workspaceMode,
+    workspaceBaseCwd: thread.workspaceBaseCwd,
   });
   return { thread, goal, model: result.model || model, provider, running: statusIsActive || activeTurnIdsByThread.has(thread.id), restoring: false, turnId: activeTurnIdsByThread.get(thread.id) || null };
 }
@@ -3218,10 +3441,13 @@ async function forkThread(threadId) {
     ephemeral: false,
   });
   const thread = result.thread;
+  const sourceWorkspace = knownThreadWorkspace(threadId);
   runtimeLoadedThreadIds.add(thread.id);
   const threadName = thread.name ? `${thread.name} · 分叉` : "分叉任务";
   await appServer.request("thread/name/set", { threadId: thread.id, name: threadName });
   thread.name = threadName;
+  thread.workspaceMode = sourceWorkspace.workspaceMode;
+  thread.workspaceBaseCwd = sourceWorkspace.workspaceBaseCwd;
   rememberThread({ ...thread, cwd: thread.cwd || knownThreadCwd(threadId) || DEFAULT_CWD });
   goalsByThread.delete(thread.id);
   threadContexts.ensure(thread.id, {
@@ -3230,6 +3456,8 @@ async function forkThread(threadId) {
     model: result.model || model,
     reasoningEffort: result.reasoningEffort || null,
     provider: { ...settings },
+    workspaceMode: thread.workspaceMode,
+    workspaceBaseCwd: thread.workspaceBaseCwd,
   });
   return { thread, goal: null, model: result.model || model, provider: publicProviderSettings(settings) };
 }
@@ -3540,28 +3768,40 @@ function parseWorktrees(raw) {
 }
 
 async function listWorktrees(cwd) {
-  const root = await gitRoot(cwd || DEFAULT_CWD);
+  const selected = path.resolve(String(cwd || "").trim() || DEFAULT_CWD);
+  const root = await gitRoot(selected).catch(() => null);
+  if (!root) return { root: selected, isRepository: false, worktrees: [] };
   const { stdout } = await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"]);
-  return { root, worktrees: parseWorktrees(stdout) };
+  return { root, isRepository: true, worktrees: parseWorktrees(stdout) };
 }
 
 async function createWorktree(payload = {}) {
-  const root = await gitRoot(payload.cwd || DEFAULT_CWD);
+  const root = await gitRoot(payload.cwd || DEFAULT_CWD).catch(() => null);
+  if (!root) throw new Error("请先选择或初始化一个 Git 项目，再创建 Worktree");
   const slug = String(payload.name || "task").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 42) || "task";
   const suffix = Date.now().toString(36);
-  const branch = `onpeople/${slug}-${suffix}`;
-  await execFileAsync("git", ["check-ref-format", "--branch", branch]);
+  const detached = payload.detached === true;
+  const branch = detached ? "detached" : `onpeople/${slug}-${suffix}`;
+  if (!detached) await execFileAsync("git", ["check-ref-format", "--branch", branch]);
   const destination = path.join(managedWorktreeRoot(), path.basename(root), `${slug}-${suffix}`);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  await execFileAsync("git", ["-C", root, "worktree", "add", "-b", branch, destination, String(payload.ref || "HEAD")]);
-  appendAudit("worktree.create", { root, path: destination, branch });
-  return { root, path: destination, branch };
+  const args = detached
+    ? ["-C", root, "worktree", "add", "--detach", destination, String(payload.ref || "HEAD")]
+    : ["-C", root, "worktree", "add", "-b", branch, destination, String(payload.ref || "HEAD")];
+  await execFileAsync("git", args);
+  appendAudit("worktree.create", { root, path: destination, branch, detached });
+  return { root, path: destination, branch, detached };
 }
 
 async function openEditorLocation(payload = {}) {
   const file = resolveOpenableWorkspaceFile(payload.cwd || DEFAULT_CWD, payload.path);
   const line = Math.max(1, Math.min(10_000_000, Number(payload.line) || 1));
   const column = Math.max(1, Math.min(100_000, Number(payload.column) || 1));
+  if (readP0Settings().preferences.defaultFileOpener === "system") {
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    return { opened: true, file, line, editor: "system" };
+  }
   if (shouldUseSystemPreview(file)) {
     const error = await shell.openPath(file);
     if (error) throw new Error(error);
@@ -3710,12 +3950,100 @@ async function applyPolicy(input = {}, threadId = null) {
   return settings.policy;
 }
 
+function applyPreferences(input = {}) {
+  const settings = readP0Settings();
+  const current = settings.preferences;
+  settings.preferences = {
+    defaultFileOpener: new Set(["smart", "system"]).has(input.defaultFileOpener)
+      ? input.defaultFileOpener
+      : current.defaultFileOpener,
+    language: "auto",
+    preventSleepWhileRunning: Object.hasOwn(input, "preventSleepWhileRunning")
+      ? Boolean(input.preventSleepWhileRunning)
+      : current.preventSleepWhileRunning,
+    showComposerFooter: Object.hasOwn(input, "showComposerFooter")
+      ? Boolean(input.showComposerFooter)
+      : current.showComposerFooter,
+    showSuggestions: Object.hasOwn(input, "showSuggestions")
+      ? Boolean(input.showSuggestions)
+      : current.showSuggestions,
+    keepInMenuBar: Object.hasOwn(input, "keepInMenuBar")
+      ? Boolean(input.keepInMenuBar)
+      : current.keepInMenuBar,
+    theme: new Set(["system", "light", "dark"]).has(input.theme)
+      ? input.theme
+      : current.theme,
+    density: new Set(["comfortable", "compact"]).has(input.density)
+      ? input.density
+      : current.density,
+    reduceMotion: Object.hasOwn(input, "reduceMotion")
+      ? Boolean(input.reduceMotion)
+      : current.reduceMotion,
+    customInstructions: Object.hasOwn(input, "customInstructions")
+      ? String(input.customInstructions || "").replace(/\0/g, "").trim().slice(0, 8_000)
+      : current.customInstructions,
+    browserEnabled: Object.hasOwn(input, "browserEnabled")
+      ? Boolean(input.browserEnabled)
+      : current.browserEnabled,
+    browserOpenLinks: new Set(["tab", "system"]).has(input.browserOpenLinks)
+      ? input.browserOpenLinks
+      : current.browserOpenLinks,
+    downloadDirectory: Object.hasOwn(input, "downloadDirectory")
+      ? String(input.downloadDirectory || "").replace(/\0/g, "").trim().slice(0, 2_000)
+      : current.downloadDirectory,
+    askDownloadLocation: Object.hasOwn(input, "askDownloadLocation")
+      ? Boolean(input.askDownloadLocation)
+      : current.askDownloadLocation,
+  };
+  writeP0Settings(settings);
+  updatePowerBlocker();
+  applyNativePreferences();
+  appendAudit("preferences.update", settings.preferences);
+  return structuredClone(settings.preferences);
+}
+
 const HOOK_EVENTS = new Set(["PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"]);
 
 async function listHooks(cwd) {
   const workdir = path.resolve(cwd || DEFAULT_CWD);
   const result = await appServer.request("hooks/list", { cwds: [workdir] });
   return { entries: result.data || [], runs: [...hookRuns.values()].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0)).slice(0, 100) };
+}
+
+function listProjectHooksLocal(cwd) {
+  const workdir = path.resolve(cwd || DEFAULT_CWD);
+  const file = path.join(workdir, ".codex", "hooks.json");
+  const hooks = [];
+  const errors = [];
+  if (fs.existsSync(file)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(file, "utf8"));
+      for (const [eventName, groups] of Object.entries(config.hooks || {})) {
+        for (const group of Array.isArray(groups) ? groups : []) {
+          for (const handler of Array.isArray(group?.hooks) ? group.hooks : []) {
+            hooks.push({
+              eventName,
+              handlerType: handler.type || "command",
+              trustStatus: "待 Codex Core 审阅",
+              command: handler.command || "",
+              statusMessage: handler.statusMessage || "",
+              matcher: group.matcher || "",
+              source: "project",
+              sourcePath: file,
+              timeout: handler.timeout || null,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      errors.push({ path: file, message: `hooks.json 无法解析：${error.message}` });
+    }
+  }
+  return {
+    root: workdir,
+    entries: [{ path: file, source: "project", hooks, errors, warnings: [] }],
+    runs: [...hookRuns.values()].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0)).slice(0, 100),
+  };
 }
 
 async function createProjectHook(payload = {}) {
@@ -4346,6 +4674,8 @@ async function createWindow() {
   invalidateProviderSettingsCaches();
   agentRuntime = new AgentRuntimeCoordinator({ stateFile: path.join(app.getPath("userData"), "runtime-sessions.json") });
   mainWindow = createWorkbenchWindow(null);
+  applyNativePreferences();
+  installBrowserDownloadPolicy();
   browserBridge = new EmbeddedBrowserBridge();
   await browserBridge.start();
   browserSessionManager = new BrowserSessionManager(() => browserBridge?.target().session);
@@ -4512,6 +4842,10 @@ ipcMain.handle("browser:attach", async (event, payload = {}) => {
   if (!target._onPeopleBrowserBound) {
     target._onPeopleBrowserBound = true;
     target.setWindowOpenHandler(({ url }) => {
+      if (readP0Settings().preferences.browserOpenLinks === "system") {
+        void shell.openExternal(url);
+        return { action: "deny" };
+      }
       const record = browserBridge.targets.recordForTarget(target);
       if (record) {
         const owner = webContents.fromId(record.ownerWebContentsId);
@@ -4602,6 +4936,11 @@ ipcMain.handle("browser:session:clear-all", async (event, routeId) => withBrowse
   await loadWebContentsUrl(browserBridge.target(), "about:blank");
   return result;
 }));
+ipcMain.handle("browser:session:clear-settings", async () => {
+  const result = await browserSessionManager.clearAll();
+  appendAudit("browser.session.cleared", { provider: "all", source: "settings" });
+  return result;
+});
 ipcMain.handle("browser:credentials:fill", async (event, routeId) => withBrowserRoute(event, routeId, async () => {
   const target = browserBridge.target();
   const credential = browserCredentialVault.findForUrl(target.getURL());
@@ -4956,6 +5295,19 @@ ipcMain.handle("policy:save", async (event, threadId, policy) => ({
   policy: await applyPolicy(policy, senderThreadId(event, threadId)),
   audit: readAudit(100),
 }));
+ipcMain.handle("preferences:get", async () => readP0Settings().preferences);
+ipcMain.handle("preferences:save", async (_event, preferences) => applyPreferences(preferences));
+ipcMain.handle("preferences:pick-download-directory", async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const current = readP0Settings().preferences.downloadDirectory;
+  const result = await dialog.showOpenDialog(owner, {
+    title: "选择浏览器下载位置",
+    defaultPath: current || app.getPath("downloads"),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return readP0Settings().preferences;
+  return applyPreferences({ downloadDirectory: path.resolve(result.filePaths[0]) });
+});
 ipcMain.handle("config:effective", async (_event, payload = {}) => inspectEffectiveConfig({
   cwd: payload.cwd || DEFAULT_CWD,
   provider: publicProviderSettings(),
@@ -4974,6 +5326,7 @@ ipcMain.handle("secrets:list", async () => ({ secrets: secretStore.list() }));
 ipcMain.handle("secrets:save", async (_event, secret) => ({ secret: secretStore.save(secret), secrets: secretStore.list() }));
 ipcMain.handle("secrets:delete", async (_event, secretId) => ({ ...secretStore.remove(secretId), secrets: secretStore.list() }));
 ipcMain.handle("hooks:list", async (_event, cwd) => listHooks(cwd));
+ipcMain.handle("hooks:list-local", async (_event, cwd) => listProjectHooksLocal(cwd));
 ipcMain.handle("hooks:create", async (_event, payload) => createProjectHook(payload));
 ipcMain.handle("scheduler:list", async () => publishScheduler());
 ipcMain.handle("scheduler:create", async (_event, payload) => {
@@ -5115,7 +5468,7 @@ ipcMain.handle("agent:provider:save", async (event, input) => {
 });
 ipcMain.handle("agent:new-task", async (event) => {
   bindWindowThread(event.sender.id, null);
-  return { created: true, cwd: DEFAULT_CWD };
+  return { created: true, cwd: null, workspaceMode: "isolated", workspaceBaseCwd: null };
 });
 
 ipcMain.handle("agent:interrupt", async (event, threadId) => {
@@ -5169,6 +5522,8 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  statusTray?.destroy();
+  statusTray = null;
   for (const [, session] of terminalProcesses) {
     try { session.process.kill(); } catch {}
   }

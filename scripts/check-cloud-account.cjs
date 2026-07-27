@@ -9,9 +9,16 @@ const {
   normalizeServiceUrl,
 } = require("../src/cloud-account.cjs");
 
+const index = fs.readFileSync(path.join(__dirname, "..", "src", "index.html"), "utf8");
 const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "renderer.js"), "utf8");
+const mainSource = fs.readFileSync(path.join(__dirname, "..", "src", "main.cjs"), "utf8");
 assert.match(renderer, /async function refreshCloudGroups\(\)/, "cloud account UI must implement group refresh");
 assert.match(renderer, /\$\("#cloud-group-select"\)\.addEventListener\("change"/, "cloud group selection must update the active API key");
+assert.match(index, /<select id="onpeople-model"/, "OnPeople models must use the custom dynamic select");
+assert.doesNotMatch(index, /<option value="sub2api"/, "Sub2API must not appear as a duplicate Router provider");
+assert.doesNotMatch(renderer, /^\s*sub2api:\s*\{/m, "renderer must not keep a hard-coded Sub2API model fallback");
+assert.doesNotMatch(mainSource, /^\s*sub2api:\s*\{/m, "main process must not register Sub2API as a duplicate Router provider");
+assert.match(renderer, /未使用本地回退/, "model discovery failure must be explicit in the UI");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-sub2api-account-"));
 const safeStorage = {
@@ -92,6 +99,7 @@ async function main() {
   let createdKey = false;
   let createdOpenAiKey = false;
   let provisioningBlocked = false;
+  let modelDiscoveryBlocked = false;
   let redeemed = false;
   let leaderboardPreference = { participating: false, display_name: "" };
   const server = http.createServer(async (request, response) => {
@@ -122,6 +130,10 @@ async function main() {
     }
     if (url.pathname === "/v1/models") {
       response.setHeader("content-type", "application/json");
+      if (modelDiscoveryBlocked) {
+        response.statusCode = 503;
+        return response.end(JSON.stringify({ error: { message: "model catalog unavailable" } }));
+      }
       if (request.headers.authorization === "Bearer sk-onpeople-openai") {
         return response.end(JSON.stringify({
           object: "list",
@@ -240,6 +252,7 @@ async function main() {
     });
     assert.equal(status.account.balanceUSD, 10.5);
     assert.equal(status.account.group.id, 3);
+    assert.equal(status.modelsLive, true);
     assert.equal(status.models[0].id, "gpt-5.6-sol");
     assert.equal(status.models.some((model) => model.id === "gpt-5.6-terra"), true, "the account model catalog must include every available group");
     assert.deepEqual(client.providerCredentials("gpt-5.6-sol"), {
@@ -257,12 +270,38 @@ async function main() {
     assert.deepEqual(groups.groups.find((group) => group.id === 4).models, ["gpt-5.6-terra"]);
     const switched = await client.selectGroup(4);
     assert.equal(switched.account.group.id, 4);
-    assert.deepEqual(switched.models.map((model) => model.id), ["gpt-5.6-sol", "gpt-5.6-terra"]);
+    assert.deepEqual(switched.models.map((model) => model.id), ["gpt-5.6-terra", "gpt-5.6-sol"]);
     assert.equal(client.apiKey(), "sk-onpeople-openai");
     await client.selectGroup(3);
     assert.equal(client.apiKey(), "sk-onpeople-desktop");
     assert.equal(client.providerCredentials("gpt-5.6-sol").apiKey, "sk-onpeople-desktop");
     assert.equal(client.providerCredentials("gpt-5.6-terra").apiKey, "sk-onpeople-openai");
+
+    client.saveCredentials(serviceUrl, {
+      apiKey: "sk-stale-wrong-user",
+      apiKeyId: 999,
+      group: { id: 3, name: "统一模型", platform: "composite" },
+      groupCredentials: {
+        3: {
+          encryptedApiKey: client.encrypt("sk-stale-wrong-user"),
+          apiKeyId: 999,
+          group: { id: 3, name: "统一模型", platform: "composite" },
+        },
+      },
+    });
+    const repaired = await client.status();
+    assert.equal(repaired.account.apiKeyId, 12, "status refresh must replace a stale API-key binding");
+    assert.equal(client.apiKey(), "sk-onpeople-desktop");
+    assert.equal(client.read().groupCredentials["3"].apiKeyId, 12);
+
+    modelDiscoveryBlocked = true;
+    const unavailableModels = await client.status();
+    assert.equal(unavailableModels.signedIn, true);
+    assert.equal(unavailableModels.modelsLive, false);
+    assert.deepEqual(unavailableModels.models, [], "gateway failure must not reuse a cached model list");
+    assert.match(unavailableModels.modelsError, /model catalog unavailable/);
+    modelDiscoveryBlocked = false;
+    assert.equal((await client.status()).modelsLive, true);
 
     const stableCredentials = client.read();
     provisioningBlocked = true;
@@ -299,9 +338,10 @@ async function main() {
     const offline = await client.status();
     assert.equal(offline.signedIn, true);
     assert.equal(offline.offline, true);
+    assert.equal(offline.modelsLive, false);
     assert.equal(offline.account.email, "user@example.com");
-    assert.equal(offline.models[0].id, "gpt-5.6-sol");
-    assert.equal(offline.models.some((model) => model.id === "gpt-5.6-terra"), true);
+    assert.deepEqual(offline.models, [], "offline status must not expose a stale model fallback");
+    assert.deepEqual(client.read().cachedModels, [], "offline refresh must clear the stale model cache");
 
     client.clearCredentials();
     assert.equal((await client.status()).signedIn, false);

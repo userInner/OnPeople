@@ -19,12 +19,13 @@ fs.mkdirSync(defaultWorkspace, { recursive: true });
 fs.mkdirSync(alternateWorkspace, { recursive: true });
 
 async function run() {
-  const executablePath = process.platform === "darwin"
+  const packagedExecutablePath = String(process.env.ONPEOPLE_E2E_EXECUTABLE_PATH || "").trim();
+  const executablePath = packagedExecutablePath || (process.platform === "darwin"
     ? path.join(root, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron")
-    : require("electron");
+    : require("electron"));
   const application = await electronApi.launch({
     executablePath,
-    args: [root],
+    args: packagedExecutablePath ? [] : [root],
     env: {
       ...process.env,
       INTERNAL_AGENT_WORKSPACE: defaultWorkspace,
@@ -37,7 +38,8 @@ async function run() {
     const page = await application.firstWindow();
     page.on("pageerror", (error) => errors.push(error.message));
     await page.waitForSelector("#cwd", { state: "attached" });
-    await page.waitForFunction((expected) => document.querySelector("#cwd")?.value === expected, defaultWorkspace);
+    await page.waitForFunction(() => document.querySelector("#cwd")?.value === "");
+    assert.doesNotMatch(await page.locator("#task-list").innerText(), /Error invoking remote method|Cannot read properties of undefined/);
     assert.equal(await page.locator("#content-area").evaluate((element) => element.classList.contains("utility-collapsed")), true);
     assert.equal(await page.locator("#utility-panel").getAttribute("aria-hidden"), "true");
     assert.equal(await page.locator('[data-tool-view="browser"]').getAttribute("aria-pressed"), "false");
@@ -46,9 +48,195 @@ async function run() {
     const welcomeMarkBounds = await page.locator(".welcome-mark").boundingBox();
     assert.ok(brandMarkBounds.width >= 30, "sidebar brand mark should be visually prominent");
     assert.ok(welcomeMarkBounds.width >= 58, "welcome mark should anchor the empty state");
+    await page.locator("#cloud-account-open").click();
+    assert.equal(await page.locator("#settings-center").isVisible(), true);
+    assert.equal(await page.locator("#app-shell").getAttribute("aria-hidden"), "true");
+    assert.equal(await page.locator("#settings-profile-page").isVisible(), true);
+    assert.equal(await page.locator("#usage-profile-view").isVisible(), true);
+    assert.equal(await page.locator(".app-sidebar > .runtime-settings").count(), 0);
+    await page.screenshot({ path: "/tmp/onpeople-electron-profile-center.png" });
+    await page.locator("[data-settings-route='general']").click();
+    assert.equal(await page.locator("[data-settings-permission]").count(), 3);
+    assert.equal(await page.locator("[data-settings-permission][aria-checked='true']").count(), 1);
+    await page.locator("[data-settings-route='plugins']").click();
+    assert.equal(await page.locator("#settings-live-title").textContent(), "插件");
+    assert.equal(await page.locator("#settings-live-host .extensions-view").isVisible(), true);
+    assert.equal(await page.locator("#settings-live-host [data-extension-list='plugins']").isVisible(), true);
+    await page.locator("[data-settings-route='hooks']").click();
+    await page.waitForFunction(() => document.querySelector("#settings-live-title")?.textContent === "钩子");
+    assert.equal(await page.locator("#settings-live-title").textContent(), "钩子");
+    assert.equal(await page.locator("#settings-live-host .settings-hooks-manager").isVisible(), true);
+    assert.equal(await page.locator("#settings-hook-create").isVisible(), true);
+    await page.locator("#settings-hook-event").click();
+    assert.equal(await page.locator("#settings-hook-event-menu").isVisible(), true);
+    await page.locator("#settings-hook-event-menu button", { hasText: "PostToolUse" }).click();
+    assert.equal(await page.locator("#settings-hook-event strong").textContent(), "PostToolUse");
+    await page.locator("[data-settings-route='connections']").click();
+    assert.equal(await page.locator("#settings-live-title").textContent(), "连接");
+    assert.equal(await page.locator("#settings-live-host [data-control-panel='config']").isVisible(), true);
+    await page.locator("[data-settings-route='hooks']").click();
+    await page.waitForFunction(() => document.querySelector("#settings-live-title")?.textContent === "钩子");
+    assert.equal(await page.locator("#settings-live-title").textContent(), "钩子");
+    assert.equal(await page.locator("#settings-live-host .settings-hooks-manager").isVisible(), true);
+    await page.locator("[data-settings-route='environment']").click();
+    assert.equal(await page.locator("#settings-live-title").textContent(), "环境");
+    assert.equal(await page.locator("#settings-live-host [data-control-panel='config']").isVisible(), true);
+    await page.locator("[data-settings-route='git']").click();
+    await page.waitForFunction(() => document.querySelector("#settings-live-title")?.textContent === "Git");
+    assert.equal(await page.locator("#settings-live-title").textContent(), "Git");
+    assert.equal(await page.locator("#settings-live-host .settings-git-manager").isVisible(), true);
+    assert.equal(await page.locator("#settings-git-open").isVisible(), true);
+    await page.waitForFunction(() => document.querySelector("#settings-git-heading")?.textContent !== "正在读取当前工作区…");
+    await page.locator("[data-settings-route='environment']").click();
+    assert.equal(await page.locator("#settings-live-title").textContent(), "环境");
+    await page.locator("[data-settings-route='git']").click();
+    await page.waitForFunction(() => document.querySelector("#settings-live-title")?.textContent === "Git");
+    assert.equal(await page.locator("#settings-live-title").textContent(), "Git");
+    assert.equal(await page.locator("#settings-live-host .settings-git-manager").isVisible(), true);
+    await page.locator("[data-settings-route='worktrees']").click();
+    assert.equal(await page.locator("#settings-live-page").isVisible(), true);
+    assert.equal(await page.locator("#settings-live-title").textContent(), "工作树");
+    assert.equal(await page.locator("#settings-live-host [data-control-panel='worktrees']").isVisible(), true);
+    assert.equal(await page.locator("#worktree-create").isVisible(), true);
+    await page.waitForFunction(() => document.querySelector("#worktree-root")?.textContent.includes("不是 Git 项目"));
+    assert.equal(await page.locator('#worktree-create button[type="submit"]').isDisabled(), true);
+    assert.match(await page.locator("#worktree-root").textContent(), /不是 Git 项目/);
+    assert.match(await page.locator("#worktree-list").textContent(), /选择一个 Git 项目|初始化当前目录/);
+    await page.locator("[data-settings-route='general']").click();
+    assert.equal(await page.locator(".control-view [data-control-panel='worktrees']").count(), 1);
+    await page.locator("[data-settings-toggle='preventSleepWhileRunning']").click();
+    assert.equal(
+      await page.locator("[data-settings-toggle='preventSleepWhileRunning']").getAttribute("aria-checked"),
+      "true",
+    );
+    await page.locator("[data-settings-route='appearance']").click();
+    assert.equal(await page.locator("#settings-appearance-page").isVisible(), true);
+    await page.locator("#settings-theme").selectOption("dark");
+    await page.waitForFunction(() => document.documentElement.dataset.resolvedTheme === "dark");
+    await page.locator("#settings-density").selectOption("compact");
+    assert.equal(await page.locator("html").getAttribute("data-density"), "compact");
+    await page.locator("[data-settings-toggle='reduceMotion']").click();
+    assert.equal(await page.locator("html").getAttribute("data-reduce-motion"), "true");
+    await page.locator("#settings-theme").selectOption("light");
+    await page.locator("#settings-density").selectOption("comfortable");
+    await page.locator("[data-settings-toggle='reduceMotion']").click();
+
+    await page.locator("[data-settings-route='personalization']").click();
+    assert.equal(await page.locator("#settings-personalization-page").isVisible(), true);
+    await page.locator("#settings-custom-instructions").fill("回答使用中文，并在交付前运行验证。");
+    await page.locator("#settings-personalization-save").click();
+    await page.waitForFunction(() => document.querySelector("#settings-personalization-status")?.textContent.includes("已保存"));
+    assert.equal(
+      (await page.evaluate(() => window.workbench.getPreferences())).customInstructions,
+      "回答使用中文，并在交付前运行验证。",
+    );
+    await page.locator("#settings-memory-generate").click();
+    assert.equal(await page.locator("#settings-memory-generate").getAttribute("aria-checked"), "true");
+
+    await page.locator("[data-settings-route='pet']").click();
+    assert.equal(await page.locator("#settings-pet-page").isVisible(), true);
+    assert.ok(await page.locator("#settings-pet-skin option").count() >= 1);
+
+    await page.locator("[data-settings-route='shortcuts']").click();
+    assert.equal(await page.locator("#settings-shortcuts-page").isVisible(), true);
+    assert.ok(await page.locator("#settings-shortcuts-list .settings-shortcut-row").count() >= 6);
+    await page.locator("#settings-shortcuts-search").fill("浏览器");
+    assert.ok(await page.locator("#settings-shortcuts-list .settings-shortcut-row").count() >= 1);
+    assert.match(await page.locator("#settings-shortcuts-list").innerText(), /浏览器/);
+
+    await page.locator("[data-settings-route='browser']").click();
+    assert.equal(await page.locator("#settings-browser-page").isVisible(), true);
+    await page.locator("[data-settings-toggle='browserEnabled']").click();
+    assert.equal(await page.locator("html").evaluate((element) => element.classList.contains("browser-disabled")), true);
+    assert.equal(await page.locator('[data-tool-view="browser"]').isHidden(), true);
+    await page.locator("[data-settings-toggle='browserEnabled']").click();
+    assert.equal(await page.locator('[data-tool-view="browser"]').isVisible(), true);
+    await page.screenshot({ path: "/tmp/onpeople-electron-settings.png" });
+    await page.locator("#settings-close").click();
+    assert.equal(await page.locator("#settings-center").isHidden(), true);
+    assert.equal(await page.locator("#app-shell").getAttribute("aria-hidden"), null);
     assert.equal(await page.locator(".topbar .permission-control").count(), 0);
     assert.equal(await page.locator(".composer-context-row .permission-control").isVisible(), true);
-    assert.equal(await page.locator("#composer-workspace-label").textContent(), path.basename(defaultWorkspace));
+    assert.equal(await page.locator("#composer-workspace-label").textContent(), "独立空间");
+    await page.locator("#composer-workspace").click();
+    assert.equal(await page.locator("#composer-workspace-menu").isVisible(), true);
+    assert.deepEqual(
+      await page.locator("#composer-workspace-menu [data-workspace-mode] strong").allTextContents(),
+      ["新建工作空间", "打开本地文件夹", "Git Worktree"],
+    );
+    assert.equal(await page.locator("#composer-workspace-search").isVisible(), false);
+    assert.equal(await page.locator(".composer-workspace-section").isVisible(), false);
+    assert.equal(
+      await page.locator('#composer-workspace-menu [data-workspace-mode="isolated"]').getAttribute("aria-checked"),
+      "true",
+    );
+    await page.waitForTimeout(180);
+    await page.screenshot({ path: "/tmp/onpeople-electron-workspace-menu.png" });
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      selectedProjectPath = "/workspace/project-b";
+      renderThreads([
+        {
+          id: "pinned-from-another-project",
+          name: "全局置顶任务",
+          preview: "全局置顶任务",
+          projectPath: "/workspace/project-a",
+          cwd: "/workspace/project-a",
+          pinned: true,
+          status: { type: "saved" },
+        },
+        {
+          id: "regular-project-task",
+          name: "项目 B 普通任务",
+          preview: "项目 B 普通任务",
+          projectPath: "/workspace/project-b",
+          cwd: "/workspace/project-b",
+          pinned: false,
+          status: { type: "saved" },
+        },
+        {
+          id: "regular-other-project-task",
+          name: "项目 A 普通任务",
+          preview: "项目 A 普通任务",
+          projectPath: "/workspace/project-a",
+          cwd: "/workspace/project-a",
+          pinned: false,
+          status: { type: "saved" },
+        },
+      ]);
+    });
+    assert.equal(await page.locator("#pinned-section").isVisible(), true);
+    assert.equal(await page.locator("#pinned-task-list .task-row").count(), 1);
+    assert.match(await page.locator("#pinned-task-list").innerText(), /全局置顶任务/);
+    assert.equal(await page.locator("#task-list .task-row").count(), 2);
+    assert.match(await page.locator("#task-list").innerText(), /项目 B 普通任务/);
+    assert.match(await page.locator("#task-list").innerText(), /项目 A 普通任务/);
+    const canScrollSidebar = await page.evaluate(() => {
+      const nav = document.querySelector(".task-nav");
+      nav.style.flex = "none";
+      nav.style.height = "220px";
+      selectedProjectPath = "/workspace/project-b";
+      renderThreads(Array.from({ length: 24 }, (_, index) => ({
+        id: `scroll-task-${index}`,
+        name: `滚动任务 ${index + 1}`,
+        preview: `滚动任务 ${index + 1}`,
+        projectPath: index % 2 ? "/workspace/project-a" : "/workspace/project-b",
+        cwd: index % 2 ? "/workspace/project-a" : "/workspace/project-b",
+        pinned: index === 0,
+        status: { type: "saved" },
+      })));
+      const overflowed = nav.scrollHeight > nav.clientHeight;
+      nav.scrollTop = 120;
+      return overflowed && nav.scrollTop > 0;
+    });
+    assert.equal(canScrollSidebar, true);
+    await page.evaluate(() => {
+      const nav = document.querySelector(".task-nav");
+      nav.style.flex = "";
+      nav.style.height = "";
+      selectedProjectPath = null;
+      renderThreads([]);
+    });
     const attachBounds = await page.locator("#attach-image").boundingBox();
     const sendBounds = await page.locator("#send").boundingBox();
     const surfaceBounds = await page.locator(".composer-surface").boundingBox();
@@ -97,14 +285,39 @@ async function run() {
     await page.waitForTimeout(250);
     await page.screenshot({ path: "/tmp/onpeople-electron-utility-hidden.png" });
 
-    await page.locator("details.runtime-settings summary").click();
+    await page.locator("#cloud-account-open").click();
+    await page.locator("[data-settings-route='configuration']").click();
+    assert.equal(await page.locator("#settings-runtime-page").isVisible(), true);
+    assert.equal(await page.locator("details.runtime-settings").getAttribute("open"), "");
+    await page.screenshot({ path: "/tmp/onpeople-electron-runtime-settings.png" });
     await page.locator("#cwd").fill(alternateWorkspace);
     await page.locator("#cwd").dispatchEvent("change");
     assert.equal(await page.locator("#cwd").inputValue(), alternateWorkspace);
+    assert.equal(await page.locator("#composer-workspace-label").textContent(), `本地项目 · ${path.basename(alternateWorkspace)}`);
+    await page.locator("#settings-close").click();
+    await page.locator("#composer-workspace").click();
+    assert.equal(await page.locator("#composer-workspace-menu").isVisible(), true);
+    await page.keyboard.press("Escape");
+    await page.evaluate((workspace) => {
+      setThreadHeader({
+        id: "019fa000-0000-7000-8000-000000000001",
+        name: "已有任务",
+        cwd: workspace,
+        workspaceMode: "local",
+        workspaceBaseCwd: workspace,
+      });
+    }, alternateWorkspace);
+    assert.equal(await page.locator("#composer-workspace").isEnabled(), true);
+    await page.locator("#composer-workspace").click();
+    assert.equal(await page.locator("#composer-workspace-menu").isVisible(), true);
+    await page.locator('#composer-workspace-menu [data-workspace-mode="isolated"]').click();
+    await page.waitForFunction(() => document.querySelector("#thread-label")?.textContent === "NEW THREAD");
+    assert.equal(await page.locator("#composer-workspace-label").textContent(), "独立空间");
     await page.locator('[data-tool-view="browser"]').click();
     assert.equal(await page.locator("#content-area").evaluate((element) => element.classList.contains("utility-collapsed")), false);
     await page.locator("#new-task").click();
-    await page.waitForFunction((expected) => document.querySelector("#cwd")?.value === expected, defaultWorkspace);
+    await page.waitForFunction(() => document.querySelector("#cwd")?.value === "");
+    assert.equal(await page.locator("#composer-workspace-label").textContent(), "独立空间");
     assert.equal(await page.locator("#content-area").evaluate((element) => element.classList.contains("utility-collapsed")), true);
 
     await page.locator('[data-tool-view="control"]').click();

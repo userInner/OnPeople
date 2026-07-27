@@ -106,32 +106,6 @@ function normalizeGroupCredentials(credentials) {
   return normalized;
 }
 
-function mergeModelCatalog(groups, discovered = []) {
-  const models = new Map();
-  for (const group of Array.isArray(groups) ? groups : []) {
-    for (const id of parseGroupModels(group)) {
-      if (models.has(id)) continue;
-      models.set(id, {
-        id,
-        name: id,
-        ownedBy: group.platform || null,
-        groupId: Number(group.id || 0) || null,
-        groupName: String(group.name || group.id || ""),
-      });
-    }
-  }
-  for (const model of normalizeCachedModels(discovered)) {
-    const existing = models.get(model.id);
-    models.set(model.id, {
-      ...model,
-      groupId: model.groupId || existing?.groupId || null,
-      groupName: model.groupName || existing?.groupName || "",
-      ownedBy: model.ownedBy || existing?.ownedBy || null,
-    });
-  }
-  return [...models.values()];
-}
-
 function parseGroupModels(group) {
   const raw = group?.models
     ?? group?.models_list_config?.models
@@ -415,33 +389,33 @@ class CloudAccountClient {
       .sort((left, right) => groupPriority(left) - groupPriority(right));
   }
 
+  async listApiKeys() {
+    const listed = await this.managementRequest("/keys?page=1&page_size=100");
+    return Array.isArray(listed?.items) ? listed.items : (Array.isArray(listed) ? listed : []);
+  }
+
   async ensureDesktopApiKeyForGroup(group, { makeActive = false } = {}) {
     const groupId = Number(group?.id || 0);
     if (!groupId) throw new Error("模型分组无效，请刷新后重试");
     const stored = this.read();
     const cached = stored.groupCredentials?.[String(groupId)];
     const cachedKey = this.decryptValue(cached?.encryptedApiKey);
-    if (cachedKey) {
-      if (makeActive) {
-        this.saveCredentials(this.serviceUrl(), {
-          apiKey: cachedKey,
-          apiKeyId: cached.apiKeyId,
-          group: { ...group },
-        });
-      }
-      return {
-        id: cached.apiKeyId,
-        key: cachedKey,
-        group_id: groupId,
-        group: { ...group },
-      };
-    }
-    const listed = await this.managementRequest("/keys?page=1&page_size=100");
-    const keys = Array.isArray(listed?.items) ? listed.items : (Array.isArray(listed) ? listed : []);
-    let selected = keys.find((key) => key.status === "active"
+    const cachedKeyId = Number(cached?.apiKeyId || 0);
+    const keys = await this.listApiKeys();
+    const activeGroupKeys = keys.filter((key) => key.status === "active"
       && Number(key.group_id) === groupId
-      && key.key
-      && String(key.name || "").startsWith(DESKTOP_KEY_NAME));
+      && key.key);
+    // API keys are scoped to the access-token owner. Requiring the cached key
+    // to still appear in this list prevents an old user/group binding from
+    // silently routing a newly signed-in account through somebody else's pool.
+    let selected = activeGroupKeys.find((key) => (
+      (cachedKeyId && Number(key.id) === cachedKeyId)
+      || (cachedKey && String(key.key) === cachedKey)
+    ));
+    if (!selected) {
+      selected = activeGroupKeys.find((key) => String(key.name || "") === DESKTOP_KEY_NAME)
+        || activeGroupKeys.find((key) => String(key.name || "").startsWith(DESKTOP_KEY_NAME));
+    }
     if (!selected) {
       selected = await this.managementRequest("/keys", {
         method: "POST",
@@ -486,15 +460,42 @@ class CloudAccountClient {
   }
 
   async models(apiKey = this.apiKey()) {
-    try {
-      const result = await this.gatewayRequest("/models", apiKey);
-      const models = Array.isArray(result?.data) ? result.data : (Array.isArray(result?.models) ? result.models : []);
-      return models.map((model) => {
-        const id = String(model.id || model.model || "");
-        return { id, name: String(model.name || id), ownedBy: model.owned_by || null };
-      }).filter((model) => model.id);
-    } catch {}
-    return [];
+    const result = await this.gatewayRequest("/models", apiKey);
+    const models = Array.isArray(result?.data) ? result.data : (Array.isArray(result?.models) ? result.models : []);
+    return models.map((model) => {
+      const id = String(model.id || model.model || "");
+      return {
+        id,
+        name: String(model.display_name || model.displayName || model.name || id),
+        ownedBy: model.owned_by || model.ownedBy || null,
+      };
+    }).filter((model) => model.id);
+  }
+
+  async liveModelCatalog(groups, activeGroupId) {
+    const ordered = [...groups].sort((left, right) => (
+      Number(right.id) === Number(activeGroupId)
+        ? 1
+        : Number(left.id) === Number(activeGroupId)
+          ? -1
+          : 0
+    ));
+    const catalog = new Map();
+    for (const group of ordered) {
+      const credential = await this.ensureDesktopApiKeyForGroup(group, {
+        makeActive: Number(group.id) === Number(activeGroupId),
+      });
+      const liveModels = await this.models(credential.key);
+      for (const model of liveModels) {
+        if (catalog.has(model.id)) continue;
+        catalog.set(model.id, {
+          ...model,
+          groupId: Number(group.id || 0) || null,
+          groupName: String(group.name || group.id || ""),
+        });
+      }
+    }
+    return [...catalog.values()];
   }
 
   async listGroups() {
@@ -541,22 +542,18 @@ class CloudAccountClient {
   async ensureModelAccess(modelId) {
     const id = String(modelId || "").trim();
     if (!id) throw new Error("请选择 OnPeople 模型");
-    let stored = this.read();
-    let model = stored.cachedModels.find((item) => item.id === id);
-    if (!model) {
-      await this.status();
-      stored = this.read();
-      model = stored.cachedModels.find((item) => item.id === id);
+    const state = await this.status();
+    if (!state.modelsLive) {
+      throw new Error(state.modelsError || "无法从 OnPeople 服务读取实时模型列表，请刷新后重试");
     }
+    const stored = this.read();
+    const model = state.models.find((item) => item.id === id);
     if (!model) throw new Error(`当前 OnPeople 账号未开放模型：${id}`);
     if (!model.groupId) {
       const apiKey = this.apiKey();
       if (!apiKey) throw new Error("请先登录 OnPeople 账号");
       return { baseUrl: this.apiBaseUrl(), apiKey, group: stored.group };
     }
-    const cached = stored.groupCredentials?.[String(model.groupId)];
-    const cachedKey = this.decryptValue(cached?.encryptedApiKey);
-    if (cachedKey) return { baseUrl: this.apiBaseUrl(), apiKey: cachedKey, group: cached.group };
     const groups = await this.availableGroups();
     const group = groups.find((item) => Number(item.id) === Number(model.groupId));
     if (!group) throw new Error(`模型 ${id} 所属分组当前不可用`);
@@ -572,7 +569,24 @@ class CloudAccountClient {
     }
     try {
       const user = await this.managementRequest("/auth/me");
-      if (!this.apiKey()) await this.ensureDesktopApiKey();
+      const groups = await this.availableGroups();
+      const previous = this.read();
+      const activeGroup = groups.find((item) => Number(item.id) === Number(previous.group?.id))
+        || groups[0];
+      if (!activeGroup) {
+        throw new Error("OnPeople 账号当前没有可用模型分组");
+      }
+      let models = [];
+      let modelsLive = true;
+      let modelsError = null;
+      try {
+        // The gateway is authoritative. Query every user-visible group with
+        // that group's API key; never merge local defaults or cached models.
+        models = await this.liveModelCatalog(groups, activeGroup.id);
+      } catch (error) {
+        modelsLive = false;
+        modelsError = error.message || "实时模型列表读取失败";
+      }
       const stored = this.read();
       const account = {
         id: user.id,
@@ -585,9 +599,6 @@ class CloudAccountClient {
         apiKeyId: stored.apiKeyId,
         group: stored.group,
       };
-      const groups = await this.availableGroups();
-      const discoveredModels = await this.models();
-      const models = mergeModelCatalog(groups, discoveredModels);
       this.saveCredentials(serviceUrl, { cachedAccount: account, cachedModels: models });
       return {
         signedIn: true,
@@ -595,19 +606,24 @@ class CloudAccountClient {
         apiBaseUrl: `${serviceUrl}/v1`,
         account,
         models,
+        modelsLive,
+        modelsError,
       };
     } catch (error) {
       if (!new Set(["CLOUD_NETWORK_ERROR", "CLOUD_TIMEOUT"]).has(error.code)) throw error;
       const stored = this.read();
       const cachedAccount = stored.cachedAccount || jwtAccount(accessToken);
       if (!cachedAccount || !this.apiKey()) throw error;
+      this.saveCredentials(serviceUrl, { cachedModels: [] });
       return {
         signedIn: true,
         offline: true,
         serviceUrl,
         apiBaseUrl: `${serviceUrl}/v1`,
         account: { ...cachedAccount, apiKeyId: stored.apiKeyId, group: stored.group },
-        models: stored.cachedModels,
+        models: [],
+        modelsLive: false,
+        modelsError: "当前网络不可用，无法读取实时模型列表",
       };
     }
   }
