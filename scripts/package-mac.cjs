@@ -34,7 +34,7 @@ const packagerArgs = [
   "--icon=assets/OnPeople.icns",
   "--protocol=onpeople",
   "--protocol-name=OnPeople",
-  "--ignore=^/(dist[^/]*|release[^/]*|services|\\.git|work)(/|$)",
+  "--ignore=^/(dist[^/]*|release[^/]*|output|services|\\.git|work)(/|$)",
 ];
 const electronZipDirectory = findElectronZipDirectory();
 if (electronZipDirectory) packagerArgs.push(`--electron-zip-dir=${electronZipDirectory}`);

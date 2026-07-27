@@ -37,5 +37,6 @@ assert.doesNotMatch(workflow, /release\/OnPeople-\*-win-x64\.zip/);
 assert.doesNotMatch(workflow, /release\/windows\/win-unpacked/);
 assert.doesNotMatch(workflow, /gh release (?:create|upload)[^\n]*OnPeople-Store/);
 assert.match(packageMac, /OnPeople-\$\{version\}-macos-arm64\.zip/);
+assert.match(packageMac, /release\[\^\/\]\*\|output\|services/, "macOS packaging must exclude generated output");
 
 console.log("release workflow checks passed");
