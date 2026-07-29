@@ -62,7 +62,16 @@ syncComposerClearance();
 
 const promptInput = $("#prompt");
 const sendButton = $("#send");
-const stopButton = $("#stop");
+const liveStartButton = $("#live-start");
+const liveCallPanel = $("#live-call-panel");
+const liveCallTitle = $("#live-call-title");
+const liveCallStatus = $("#live-call-status");
+const liveCallTranscript = $("#live-call-transcript");
+const liveCallDuration = $("#live-call-duration");
+const liveMuteButton = $("#live-mute");
+const liveMuteLabel = $("#live-mute-label");
+const liveEndButton = $("#live-end");
+const liveAudio = $("#live-audio");
 const threadLabel = $("#thread-label");
 const taskTitle = $("#task-title");
 const taskList = $("#task-list");
@@ -81,6 +90,13 @@ const modelOptions = $("#model-options");
 const modelInputWrap = $("#model-input-wrap");
 const onpeopleModelWrap = $("#onpeople-model-wrap");
 const onpeopleModelSelect = $("#onpeople-model");
+const taskModelPicker = $("#task-model-picker");
+const taskModelTrigger = $("#task-model-trigger");
+const taskModelPopover = $("#task-model-popover");
+const taskModelLabel = $("#task-model-label");
+const taskEffortLabel = $("#task-effort-label");
+const taskModelOptions = $("#task-model-options");
+const taskEffortOptions = $("#task-effort-options");
 const baseUrlInput = $("#base-url");
 const apiKeyInput = $("#api-key");
 const providerStatus = $("#provider-status");
@@ -97,6 +113,7 @@ const settingsGeneralPage = $("#settings-general-page");
 const settingsProfilePage = $("#settings-profile-page");
 const settingsRuntimePage = $("#settings-runtime-page");
 const settingsAppearancePage = $("#settings-appearance-page");
+const settingsVoicePage = $("#settings-voice-page");
 const settingsPersonalizationPage = $("#settings-personalization-page");
 const settingsPetPage = $("#settings-pet-page");
 const settingsShortcutsPage = $("#settings-shortcuts-page");
@@ -244,6 +261,7 @@ let providerImageGeneration = { available: false, reason: "当前 Provider 未�
 let computerCapability = { available: false, reason: "Computer Use 尚未就绪" };
 const imagePreviewUrls = new Map();
 let selectedModelVision = null;
+let selectedReasoningEffort = "high";
 let activeAgentMessage = null;
 let running = false;
 let submitting = false;
@@ -292,9 +310,13 @@ let appPreferences = {
   browserOpenLinks: "tab",
   downloadDirectory: "",
   askDownloadLocation: false,
+  liveVoice: "cove",
+  liveEchoCancellation: true,
+  liveNoiseSuppression: true,
+  liveAutoGainControl: true,
 };
 let auditState = [];
-let activeControlView = "scheduled";
+let activeControlView = "diagnostics";
 let pendingBrowserAnnotationTarget = null;
 let currentGitState = null;
 let selectedGitFile = null;
@@ -303,6 +325,7 @@ let currentFilePath = "";
 let currentFileParent = null;
 let fileSearchTimer = null;
 let schedulerState = { tasks: [], runs: [], unread: 0 };
+let scheduledCenterMode = "inbox";
 const reviewComments = new Map();
 let agentProfiles = [];
 let memoryState = { enabled: true, generate: false, entries: [] };
@@ -315,6 +338,14 @@ let activeProcessFlow = null;
 let activeAgentMessagePhase = null;
 let currentTurnStartedAt = null;
 let appUpdateState = null;
+let liveConversation = null;
+let pendingLiveDelegation = null;
+let lastLiveUserTranscript = "";
+let liveDelegationFallbackTimer = null;
+const liveTranscriptHistory = new Map();
+const LIVE_TRANSCRIPT_DEDUPE_WINDOW_MS = 60_000;
+const LIVE_DELEGATION_FALLBACK_DELAY_MS = 700;
+const liveDelegationPolicy = window.OnPeopleLiveDelegation;
 
 function renderAppUpdate(state = {}) {
   appUpdateState = state;
@@ -900,6 +931,7 @@ function setThreadHeader(thread = null) {
   $("#browser-task-tab").textContent = `${title} · 独立页面`;
   $("#browser-task-tab").title = thread?.id ? `任务 ${thread.id} 的独立浏览器页面` : "新任务的独立浏览器页面";
   threadLabel.textContent = thread?.id ? thread.id.slice(0, 13).toUpperCase() : "NEW THREAD";
+  selectedReasoningEffort = thread?.reasoningEffort || "high";
   const nextCwd = thread?.cwd || "";
   if (thread) {
     selectedWorkspaceMode = thread.workspaceMode || "local";
@@ -916,6 +948,7 @@ function setThreadHeader(thread = null) {
     resetTaskScopedUtilityState();
   }
   renderModelSource(modelSourceForProvider(providerSelect.value));
+  syncTaskModelPicker();
 }
 
 function resetTaskScopedUtilityState() {
@@ -2124,6 +2157,7 @@ async function loadThreads() {
     loadedThreads = result.threads || [];
     loadedProjects = result.projects || [];
     renderThreads(loadedThreads);
+    if (!$("#scheduled-center").hidden && scheduledCenterMode === "create") refreshScheduledProjectOptions();
   } catch (error) {
     if (sequence === threadListRequestSequence) {
       taskList.innerHTML = '<span class="empty-list">任务暂时无法载入，连接恢复后会自动刷新。</span>';
@@ -2134,6 +2168,7 @@ async function loadThreads() {
 
 async function resumeThread(threadId) {
   if (!threadId) return;
+  closeScheduledCenter();
   if (threadId === currentThreadId) {
     if (pendingThreadId) {
       threadSwitchSequence += 1;
@@ -2172,7 +2207,10 @@ function activateThread(result) {
   imagePreviewUrls.clear();
   renderImages();
   renderSelectedCapability();
-  setThreadHeader(thread);
+  setThreadHeader({
+    ...thread,
+    reasoningEffort: result.reasoningEffort || thread.reasoningEffort || null,
+  });
   setRunning(Boolean(result.running));
   if (result.running) setThreadRuntimeState(thread.id, "working");
   else if (result.restoring) setThreadRuntimeState(thread.id, "restoring");
@@ -2182,6 +2220,118 @@ function activateThread(result) {
   void refreshAgents();
   loadThreads();
   promptInput.focus();
+}
+
+const REASONING_EFFORT_LABELS = {
+  medium: "标准",
+  high: "高",
+  xhigh: "超高",
+};
+
+function compactModelName(model = {}) {
+  const raw = String(model.name || model.id || "").trim();
+  return raw
+    .replace(/^gpt-/i, "")
+    .replace(/(^|[-_\s])([a-z])/g, (_match, prefix, letter) => `${prefix === "-" || prefix === "_" ? " " : prefix}${letter.toUpperCase()}`)
+    .replace(/\s+/g, " ")
+    .trim() || "选择模型";
+}
+
+function preferredOnPeopleModel(models = [], requestedId = modelInput.value.trim()) {
+  const requested = String(requestedId || "").trim();
+  if (requested && models.some((model) => model.id === requested)) {
+    return models.find((model) => model.id === requested);
+  }
+  const activeGroupId = cloudAccountState.account?.group?.id;
+  return models.find((model) => (
+    activeGroupId != null
+    && Number(model.groupId) === Number(activeGroupId)
+  )) || models[0] || null;
+}
+
+function placeTaskModelPopover() {
+  const rect = taskModelTrigger.getBoundingClientRect();
+  const width = Math.min(310, window.innerWidth - 20);
+  taskModelPopover.style.width = `${width}px`;
+  taskModelPopover.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, rect.right - width))}px`;
+  taskModelPopover.style.top = `${Math.min(window.innerHeight - 10, rect.bottom + 6)}px`;
+}
+
+function setTaskModelPopover(open) {
+  const shouldOpen = Boolean(open && !taskModelPicker.hidden);
+  taskModelTrigger.setAttribute("aria-expanded", String(shouldOpen));
+  taskModelPopover.hidden = !shouldOpen;
+  if (shouldOpen) {
+    taskModelPopover.showPopover?.();
+    renderTaskModelPickerOptions();
+    placeTaskModelPopover();
+  } else {
+    try { taskModelPopover.hidePopover?.(); } catch {}
+  }
+}
+
+function renderTaskModelPickerOptions() {
+  const models = PROVIDER_PRESETS.onpeople.models || [];
+  const selectedId = modelInput.value.trim();
+  taskModelOptions.replaceChildren();
+  if (!cloudAccountState.modelsLive || !models.length) {
+    const empty = document.createElement("span");
+    empty.className = "task-model-empty";
+    empty.textContent = cloudAccountState.modelsError || "正在读取 OnPeople 可用模型…";
+    taskModelOptions.append(empty);
+  } else {
+    let previousGroup = null;
+    for (const model of models) {
+      const groupName = model.groupName || "其他模型";
+      if (groupName !== previousGroup) {
+        const group = document.createElement("span");
+        group.className = "task-model-group";
+        group.textContent = groupName;
+        taskModelOptions.append(group);
+        previousGroup = groupName;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "task-model-option";
+      button.dataset.modelId = model.id;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(model.id === selectedId));
+      const check = document.createElement("i");
+      check.textContent = model.id === selectedId ? "✓" : "";
+      const label = document.createElement("span");
+      label.textContent = model.name || model.id;
+      button.append(check, label);
+      taskModelOptions.append(button);
+    }
+  }
+  for (const button of taskEffortOptions.querySelectorAll("[data-reasoning-effort]")) {
+    button.classList.toggle("active", button.dataset.reasoningEffort === selectedReasoningEffort);
+  }
+}
+
+function syncTaskModelPicker() {
+  const cloud = providerSelect.value === "onpeople";
+  taskModelPicker.hidden = !cloud || !cloudAccountState.signedIn;
+  const model = (PROVIDER_PRESETS.onpeople.models || []).find((item) => item.id === modelInput.value.trim());
+  taskModelLabel.textContent = compactModelName(model || { id: modelInput.value.trim() });
+  taskEffortLabel.textContent = REASONING_EFFORT_LABELS[selectedReasoningEffort] || selectedReasoningEffort;
+  taskModelTrigger.disabled = !cloudAccountState.modelsLive || !(PROVIDER_PRESETS.onpeople.models || []).length;
+  taskModelTrigger.title = model?.name || modelInput.value.trim() || "等待 OnPeople 模型目录";
+  if (!taskModelPopover.hidden) renderTaskModelPickerOptions();
+}
+
+async function persistTaskModelSelection() {
+  const result = await window.workbench.saveProvider({
+    threadId: currentThreadId,
+    type: "onpeople",
+    model: modelInput.value.trim(),
+    baseUrl: baseUrlInput.value.trim(),
+    apiKey: "",
+  });
+  renderProvider(result.settings);
+  providerStatus.textContent = result.pending
+    ? "模型将在当前 Turn 完成后切换"
+    : currentThreadId ? "已应用到当前任务" : "已设为新任务默认";
 }
 
 function modelSourceForProvider(type) {
@@ -2214,6 +2364,7 @@ function renderModelSource(source = modelSourceForProvider(providerSelect.value)
     modelSourceCopy.textContent = "使用自己的 API Key，不消耗 OnPeople 额度";
   }
   $("#save-provider").textContent = currentThreadId ? "应用到当前任务" : "设为新任务默认";
+  syncTaskModelPicker();
 }
 
 function updateProviderFields() {
@@ -2256,6 +2407,7 @@ function updateProviderFields() {
     imagePreviewUrls.clear();
     renderImages();
   }
+  syncTaskModelPicker();
 }
 
 function renderPresetModelOptions(preset = {}) {
@@ -2290,15 +2442,18 @@ function renderOnPeopleModelOptions(models = []) {
     groups.get(groupName).append(option);
   }
   const selected = modelInput.value.trim();
+  const preferred = cloudAccountState.modelsLive
+    ? preferredOnPeopleModel(models, selected)
+    : null;
   onpeopleModelSelect.replaceChildren(placeholder, ...groups.values());
   onpeopleModelSelect.disabled = !cloudAccountState.signedIn
     || !cloudAccountState.modelsLive
     || !models.length;
-  onpeopleModelSelect.value = models.some((model) => model.id === selected) ? selected : "";
-  if (providerSelect.value === "onpeople" && selected && !onpeopleModelSelect.value) {
-    modelInput.value = "";
-  }
+  onpeopleModelSelect.value = preferred?.id || "";
+  if (providerSelect.value === "onpeople") modelInput.value = preferred?.id || "";
+  PROVIDER_PRESETS.onpeople.model = preferred?.id || "";
   window.OnPeopleUI?.syncSelect?.(onpeopleModelSelect);
+  syncTaskModelPicker();
 }
 
 let modelValidationSequence = 0;
@@ -2520,11 +2675,11 @@ function renderCloudAccount(state = cloudAccountState) {
   const models = (cloudAccountState.models || []).map((model) => ({
     id: model.id,
     name: model.name || model.id,
+    groupId: model.groupId ?? null,
     groupName: model.groupName || "",
   }));
   PROVIDER_PRESETS.onpeople.baseUrl = cloudAccountState.apiBaseUrl || `${cloudAccountState.serviceUrl}/v1`;
   PROVIDER_PRESETS.onpeople.models = models;
-  PROVIDER_PRESETS.onpeople.model = "";
   renderOnPeopleModelOptions(models);
   if (providerSelect.value === "onpeople") {
     baseUrlInput.value = PROVIDER_PRESETS.onpeople.baseUrl;
@@ -2748,10 +2903,14 @@ async function openUsageProfile() {
 }
 
 function openCloudAccountManagement() {
-  closeSettingsCenter();
   if (!cloudAccountState.signedIn) setCloudAuthMode("login");
   if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
   void refreshCloudAccount().catch(() => {});
+}
+
+function closeCloudAccountManagement() {
+  pendingCloudSourceSelection = false;
+  if (cloudAccountDialog.open) cloudAccountDialog.close();
 }
 
 function renderImages() {
@@ -2912,9 +3071,9 @@ function selectMode(mode) {
 function setRunning(value) {
   running = value;
   // A running turn still accepts a follow-up from the composer. The main
-  // process routes it through turn/steer; Stop remains a separate action.
+  // process routes it through turn/steer. With an empty composer the same
+  // primary action becomes Stop; typing a follow-up changes it back to Send.
   sendButton.disabled = submitting;
-  stopButton.disabled = !value;
   promptInput.disabled = false;
   promptInput.placeholder = value ? "补充指令；发送后会加入当前运行任务…" : (
       selectedMode === "goal" ? "描述可验证的结果、约束和完成标准。" :
@@ -2924,6 +3083,7 @@ function setRunning(value) {
   for (const option of modeOptions) option.disabled = value;
   goalBudgetMode.disabled = value;
   goalBudget.disabled = value;
+  updateComposerPrimaryAction();
   updateProviderFields();
 }
 
@@ -2936,6 +3096,18 @@ function setSubmitting(value) {
         selectedMode === "plan" ? "描述任务；Agent 会先调查并生成实施计划。" :
           DEFAULT_PROMPT_PLACEHOLDER);
   }
+  updateComposerPrimaryAction();
+}
+
+function updateComposerPrimaryAction() {
+  const stopping = running && !submitting && !promptInput.value.trim();
+  sendButton.dataset.action = stopping ? "stop" : "send";
+  sendButton.setAttribute("aria-label", stopping
+    ? "停止当前任务"
+    : (running ? "发送补充指令" : "运行任务"));
+  sendButton.title = stopping
+    ? "停止当前任务"
+    : (running ? "发送补充指令" : "运行任务");
 }
 
 const terminalTheme = {
@@ -3919,7 +4091,7 @@ function updateAgentSurfaceVisibility() {
   const panel = $('[data-control-panel="agents"]');
   tab.hidden = !visible;
   panel.hidden = !visible;
-  if (!visible && activeControlView === "agents") applyControlPanelSelection("scheduled");
+  if (!visible && activeControlView === "agents") applyControlPanelSelection("diagnostics");
   return visible;
 }
 
@@ -4316,6 +4488,7 @@ function renderPreferences(preferences = {}) {
   $("#settings-theme").value = appPreferences.theme;
   $("#settings-density").value = appPreferences.density;
   $("#settings-browser-links").value = appPreferences.browserOpenLinks;
+  $("#settings-live-voice").value = appPreferences.liveVoice || "cove";
   $("#settings-download-directory").textContent = appPreferences.downloadDirectory || "系统“下载”文件夹";
   if (document.activeElement !== $("#settings-custom-instructions")) {
     $("#settings-custom-instructions").value = appPreferences.customInstructions || "";
@@ -4341,6 +4514,590 @@ async function savePreferences(patch) {
     addEvent("error", "SETTINGS", error.message);
     renderPreferences(appPreferences);
   }
+}
+
+function renderLiveAvailability(state = {}) {
+  const card = $("#settings-live-status-dot").closest(".settings-live-status-card");
+  card.classList.toggle("available", Boolean(state.available));
+  card.classList.toggle("unavailable", state.available === false);
+  $("#settings-live-status-title").textContent = state.available ? "GPT-Live 已可用" : "GPT-Live 暂不可用";
+  $("#settings-live-status-copy").textContent = [state.message, state.group?.name, state.sidebandStatus]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+async function refreshLiveAvailability() {
+  const button = $("#settings-live-refresh");
+  button.disabled = true;
+  $("#settings-live-status-title").textContent = "正在检查 GPT-Live…";
+  try {
+    const state = await window.workbench.getLiveStatus();
+    renderLiveAvailability(state);
+    return state;
+  } catch (error) {
+    const state = { available: false, message: error.message };
+    renderLiveAvailability(state);
+    return state;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function setLivePanel({ title, status, transcript, error = false, paused = false, phase } = {}) {
+  liveCallPanel.hidden = false;
+  composer.classList.add("live-active");
+  liveCallPanel.classList.toggle("is-error", error);
+  liveCallPanel.classList.toggle("is-paused", paused);
+  liveCallPanel.classList.toggle("is-connecting", phase === "connecting");
+  liveCallPanel.classList.toggle("is-muted", phase === "muted");
+  liveCallPanel.dataset.phase = phase || (error ? "error" : "active");
+  if (title) liveCallTitle.textContent = title;
+  if (status) liveCallStatus.textContent = status;
+  if (transcript) liveCallTranscript.textContent = transcript;
+  syncComposerClearance();
+}
+
+function updateLiveDuration() {
+  const startedAt = Number(liveConversation?.startedAt || 0);
+  if (!startedAt) {
+    liveCallDuration.hidden = true;
+    liveCallDuration.textContent = "00:00";
+    liveCallDuration.dateTime = "PT0S";
+    return;
+  }
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  liveCallDuration.hidden = false;
+  liveCallDuration.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  liveCallDuration.dateTime = `PT${seconds}S`;
+}
+
+function splitLiveContext(text, maxBytes = 480) {
+  const source = String(text || "").trim();
+  if (!source) return [];
+  const encoder = new TextEncoder();
+  const chunks = [];
+  let current = "";
+  for (const character of source) {
+    if (encoder.encode(current + character).length > maxBytes && current) {
+      chunks.push(current);
+      current = character;
+    } else {
+      current += character;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function sendLiveDelegationContext(delegationItemId, text, channel = "speakable", expectedLiveSessionId = null) {
+  const dataChannel = liveConversation?.dataChannel;
+  if (expectedLiveSessionId && liveConversation?.sessionId !== expectedLiveSessionId) return false;
+  if (!delegationItemId || dataChannel?.readyState !== "open") return false;
+  for (const chunk of splitLiveContext(text)) {
+    dataChannel.send(JSON.stringify({
+      type: "delegation.context.append",
+      delegation_item_id: delegationItemId,
+      channel,
+      content: [{ type: "input_text", text: chunk }],
+    }));
+  }
+  return true;
+}
+
+function liveDelegationText(item = {}) {
+  return (Array.isArray(item.content) ? item.content : [])
+    .filter((content) => content?.type === "input_text")
+    .map((content) => String(content.text || ""))
+    .join("")
+    .trim();
+}
+
+function normalizedLiveTranscript(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function liveEventRole(event = {}) {
+  const role = String(
+    event.turn?.role
+    || event.turn?.item?.role
+    || event.item?.role
+    || event.role
+    || "",
+  ).toLowerCase();
+  if (role === "user") return "user";
+  if (new Set(["assistant", "agent"]).has(role)) return "assistant";
+  const type = String(event.type || "");
+  if (type === "conversation.item.input_audio_transcription.completed") return "user";
+  if (new Set(["response.audio_transcript.done", "response.output_audio_transcript.done"]).has(type)) return "assistant";
+  return null;
+}
+
+function liveEventTranscript(event = {}) {
+  return normalizedLiveTranscript(
+    event.turn?.transcript
+    || event.turn?.item?.transcript
+    || event.item?.transcript
+    || event.item?.text
+    || event.transcript
+    || event.text
+    || "",
+  );
+}
+
+function appendLiveTranscript(event = {}) {
+  const role = liveEventRole(event);
+  const text = liveEventTranscript(event);
+  if (!role || !text) return false;
+  if (role === "user") lastLiveUserTranscript = text;
+  const now = Date.now();
+  const key = `${role}\u0000${text.toLocaleLowerCase()}`;
+  const previousAt = Number(liveTranscriptHistory.get(key) || 0);
+  if (now - previousAt < LIVE_TRANSCRIPT_DEDUPE_WINDOW_MS) return false;
+  liveTranscriptHistory.set(key, now);
+  for (const [storedKey, storedAt] of liveTranscriptHistory) {
+    if (now - storedAt >= LIVE_TRANSCRIPT_DEDUPE_WINDOW_MS) liveTranscriptHistory.delete(storedKey);
+  }
+  addEvent(role === "user" ? "user" : "agent", role === "user" ? "LIVE · YOU" : "LIVE", text);
+  return true;
+}
+
+function clearLiveDelegationFallback() {
+  if (liveDelegationFallbackTimer) window.clearTimeout(liveDelegationFallbackTimer);
+  liveDelegationFallbackTimer = null;
+}
+
+function clearLiveDelegationWait(delegation = pendingLiveDelegation) {
+  if (delegation?.waitTimer) window.clearTimeout(delegation.waitTimer);
+  if (delegation) delegation.waitTimer = null;
+}
+
+function updateLiveDelegationTrace(delegation, status, summary, detail = "") {
+  if (!delegation) return null;
+  ensureProcessFlow();
+  const card = upsertTraceItem({
+    id: delegation.traceId,
+    type: "event",
+    label: "LIVE → TASK",
+    message: summary,
+    details: detail || `语音请求\n${delegation.text}`,
+    status,
+  }, status === "inProgress" ? "started" : status, { open: status === "failed" });
+  card.classList.add("trace-live-handoff");
+  return card;
+}
+
+function pendingLiveDelegationMatchesThread(delegation, threadId) {
+  const id = String(threadId || "").trim();
+  return Boolean(delegation && (!delegation.threadId || !id || delegation.threadId === id));
+}
+
+function finalizePendingLiveDelegation({
+  threadId = currentThreadId,
+  status = "completed",
+  error = "",
+  finalText = "",
+} = {}) {
+  const delegation = pendingLiveDelegation;
+  if (!pendingLiveDelegationMatchesThread(delegation, threadId)) return false;
+  clearLiveDelegationWait(delegation);
+  const failed = status === "failed";
+  const resultText = String(finalText || "").trim();
+  const returnedToLive = !failed
+    && delegation.native
+    && resultText
+    && sendLiveDelegationContext(
+      delegation.itemId,
+      resultText,
+      "speakable",
+      delegation.liveSessionId,
+    );
+  if (failed && delegation.native) {
+    sendLiveDelegationContext(
+      delegation.itemId,
+      `OnPeople could not complete the delegated task: ${error || "the task failed"}`,
+      "speakable",
+      delegation.liveSessionId,
+    );
+  }
+  updateLiveDelegationTrace(
+    delegation,
+    failed ? "failed" : "completed",
+    failed ? "任务执行失败" : resultText ? "结果已返回" : "任务已完成",
+    failed ? (error || "任务未能完成") : "",
+  );
+  pendingLiveDelegation = null;
+  setLivePanel(failed
+    ? {
+        title: "任务执行失败",
+        status: error || "任务未能完成",
+        transcript: delegation.text,
+        error: true,
+        paused: true,
+      }
+    : {
+        title: returnedToLive ? "结果已返回语音会话" : "任务结果已记录",
+        status: returnedToLive ? "GPT-Live 将继续向你说明" : "结果已显示在当前任务中",
+        transcript: resultText || delegation.text,
+        paused: !returnedToLive,
+        phase: returnedToLive ? "speaking" : "completed",
+      });
+  return true;
+}
+
+function reconcileCurrentThreadTerminalState({
+  threadId,
+  status = "completed",
+  completedAt = null,
+  error = "",
+  finalText = "",
+} = {}) {
+  const id = String(threadId || "").trim();
+  if (!id || id !== currentThreadId || !new Set(["completed", "failed", "idle", "stopped"]).has(status)) return false;
+  const completedAtMs = timestampMs(completedAt);
+  if (currentTurnStartedAt && completedAtMs && completedAtMs < currentTurnStartedAt) return false;
+  finalizePendingLiveDelegation({
+    threadId: id,
+    status: status === "failed" ? "failed" : "completed",
+    error,
+    finalText,
+  });
+  finishProcessFlow(status === "failed" ? "failed" : "completed", { finishedAt: completedAtMs });
+  currentTurnStartedAt = null;
+  setThreadRuntimeState(id, status === "failed" ? "failed" : "completed");
+  setRunning(false);
+  activeAgentMessage = null;
+  activeAgentMessagePhase = null;
+  traceCards.delete("active-plan");
+  return true;
+}
+
+function queueLiveDelegationFallback(assistantText) {
+  if (
+    !liveConversation
+    || pendingLiveDelegation
+    || !liveDelegationPolicy?.shouldRecoverDelegation?.({
+      assistantText,
+      userText: lastLiveUserTranscript,
+    })
+  ) return;
+  const request = lastLiveUserTranscript;
+  clearLiveDelegationFallback();
+  setLivePanel({
+    title: "准备交给当前任务",
+    status: "正在创建可追踪任务",
+    transcript: request,
+    paused: true,
+    phase: "delegating",
+  });
+  liveDelegationFallbackTimer = window.setTimeout(() => {
+    liveDelegationFallbackTimer = null;
+    if (!liveConversation || pendingLiveDelegation) return;
+    void dispatchLiveDelegation({
+      source: "recovered",
+      content: [{ type: "input_text", text: request }],
+    });
+  }, LIVE_DELEGATION_FALLBACK_DELAY_MS);
+}
+
+async function dispatchLiveDelegation(item = {}) {
+  clearLiveDelegationFallback();
+  const nativeDelegationItemId = String(item.id || "");
+  const text = liveDelegationText(item);
+  if (!text) return;
+  if (pendingLiveDelegation) {
+    if (nativeDelegationItemId && nativeDelegationItemId === pendingLiveDelegation.itemId) return;
+    if (
+      nativeDelegationItemId
+      && !pendingLiveDelegation.native
+      && liveDelegationPolicy?.normalizeTranscript?.(pendingLiveDelegation.text)
+        === liveDelegationPolicy?.normalizeTranscript?.(text)
+    ) {
+      pendingLiveDelegation.itemId = nativeDelegationItemId;
+      pendingLiveDelegation.native = true;
+      pendingLiveDelegation.source = "native";
+      updateLiveDelegationTrace(
+        pendingLiveDelegation,
+        "inProgress",
+        "当前任务正在运行",
+        `GPT-Live 已确认原生委派。\n\n语音请求\n${text}`,
+      );
+      return;
+    }
+    if (nativeDelegationItemId) {
+      sendLiveDelegationContext(nativeDelegationItemId, "OnPeople is already handling another delegated task. Ask the user to wait for that result.");
+    }
+    return;
+  }
+  const native = Boolean(nativeDelegationItemId);
+  const delegationItemId = nativeDelegationItemId || `local-${crypto.randomUUID()}`;
+  const delegation = {
+    itemId: delegationItemId,
+    native,
+    source: native ? "native" : "recovered",
+    text,
+    liveSessionId: liveConversation?.sessionId || null,
+    traceId: `live-handoff-${delegationItemId}`,
+    threadId: currentThreadId || null,
+    turnStarted: false,
+    waitTimer: null,
+  };
+  pendingLiveDelegation = delegation;
+  updateLiveDelegationTrace(
+    delegation,
+    "inProgress",
+    "已交给当前任务",
+    native
+      ? `GPT-Live 已创建原生委派。\n\n语音请求\n${text}`
+      : `GPT-Live 未创建原生委派，OnPeople 已自动恢复执行。\n\n语音请求\n${text}`,
+  );
+  setLivePanel({
+    title: "已交给当前任务",
+    status: "任务已记录，等待执行轨迹",
+    transcript: text,
+    paused: true,
+    phase: "delegating",
+  });
+  setRunning(true);
+  try {
+    const result = await window.workbench.sendPrompt({
+      threadId: currentThreadId,
+      browserRouteId: activeBrowserRouteId,
+      clientMessageId: crypto.randomUUID(),
+      cwd: cwdInput.value.trim(),
+      workspaceMode: selectedWorkspaceMode,
+      workspaceBaseCwd: selectedWorkspaceBaseCwd,
+      modelProvider: providerSelect.value,
+      model: modelInput.value.trim(),
+      reasoningEffort: selectedReasoningEffort,
+      baseUrl: baseUrlInput.value.trim(),
+      apiKey: apiKeyInput.value,
+      prompt: text,
+      mode: "default",
+      images: [],
+      attachments: [],
+      capability: null,
+    });
+    delegation.threadId = result.threadId;
+    currentThreadId = result.threadId;
+    if (result.cwd) {
+      cwdInput.value = result.cwd;
+      selectedWorkspaceMode = result.workspaceMode || selectedWorkspaceMode;
+      selectedWorkspaceBaseCwd = result.workspaceBaseCwd || selectedWorkspaceBaseCwd;
+      cwdInput.disabled = true;
+      updateProject(result.cwd);
+    }
+    await promoteBrowserTab(result.threadId);
+    threadLabel.textContent = result.threadId.slice(0, 13).toUpperCase();
+    await loadThreads();
+    if (pendingLiveDelegation === delegation && !delegation.turnStarted) {
+      updateLiveDelegationTrace(delegation, "inProgress", "任务已启动，等待工具进度");
+      delegation.waitTimer = window.setTimeout(() => {
+        if (pendingLiveDelegation !== delegation || delegation.turnStarted) return;
+        updateLiveDelegationTrace(delegation, "inProgress", "任务已排队，等待运行");
+        setLivePanel({
+          title: "已交给当前任务",
+          status: "当前任务仍在队列中，进度会继续记录",
+          transcript: text,
+          paused: true,
+          phase: "delegating",
+        });
+      }, 8_000);
+    }
+  } catch (error) {
+    if (delegation.native) {
+      sendLiveDelegationContext(delegation.itemId, `OnPeople could not complete the delegated request: ${error.message}`);
+    }
+    clearLiveDelegationWait(delegation);
+    updateLiveDelegationTrace(delegation, "failed", "委派失败", error.message);
+    if (pendingLiveDelegation === delegation) pendingLiveDelegation = null;
+    setLivePanel({ title: "委派失败", status: error.message, transcript: text, error: true, paused: true });
+    setRunning(false);
+  }
+}
+
+function handleLiveDataMessage(raw) {
+  let event;
+  try { event = JSON.parse(String(raw || "")); } catch { return; }
+  const type = String(event.type || "");
+  if (new Set(["session.started", "session.updated", "session.created"]).has(type)) {
+    setLivePanel({ title: "GPT-Live 正在聆听", status: "实时音频已连接", transcript: "你可以开始说话。", phase: "listening" });
+    return;
+  }
+  if (type === "input_transcript.added" || type === "output_transcript.added") {
+    const text = String(event.item?.text || "").trim();
+    if (text) setLivePanel({
+      title: type.startsWith("input_") ? "正在聆听" : "OnPeople 正在回复",
+      status: "GPT-Live 实时会话",
+      transcript: text,
+      phase: type.startsWith("input_") ? "listening" : "speaking",
+    });
+    return;
+  }
+  if (new Set([
+    "turn.done",
+    "conversation.item.input_audio_transcription.completed",
+    "response.audio_transcript.done",
+    "response.output_audio_transcript.done",
+  ]).has(type)) {
+    const role = liveEventRole(event);
+    const text = liveEventTranscript(event);
+    if (text) {
+      appendLiveTranscript(event);
+      if (role === "assistant") queueLiveDelegationFallback(text);
+      setLivePanel({
+        title: role === "assistant" && liveDelegationFallbackTimer ? "准备交给当前任务"
+          : role === "assistant" ? "OnPeople 正在回复" : "GPT-Live 正在聆听",
+        status: role === "assistant" && liveDelegationFallbackTimer ? "正在创建可追踪任务" : "实时音频已连接",
+        transcript: text,
+        paused: Boolean(liveDelegationFallbackTimer),
+        phase: role === "assistant" && liveDelegationFallbackTimer ? "delegating"
+          : role === "assistant" ? "speaking" : "listening",
+      });
+    }
+    return;
+  }
+  if (type === "delegation.created") {
+    void dispatchLiveDelegation(event.item || {});
+    return;
+  }
+  if (type === "error") {
+    const message = event.error?.message || event.message || "GPT-Live 会话发生错误";
+    setLivePanel({ title: "实时语音出错", status: message, transcript: "可以结束后重新连接。", error: true, paused: true });
+  }
+}
+
+function waitForIceGathering(peerConnection, timeoutMs = 5_000) {
+  if (peerConnection.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(done, timeoutMs);
+    function done() {
+      window.clearTimeout(timer);
+      peerConnection.removeEventListener("icegatheringstatechange", changed);
+      resolve();
+    }
+    function changed() {
+      if (peerConnection.iceGatheringState === "complete") done();
+    }
+    peerConnection.addEventListener("icegatheringstatechange", changed);
+  });
+}
+
+function releaseLiveConversation({ keepPanel = false } = {}) {
+  const session = liveConversation;
+  liveConversation = null;
+  clearLiveDelegationFallback();
+  clearLiveDelegationWait(pendingLiveDelegation);
+  lastLiveUserTranscript = "";
+  if (session?.callId) {
+    void window.workbench.closeLiveSession(session.callId).catch(() => {});
+  }
+  if (session?.dataChannel?.readyState === "open") {
+    try { session.dataChannel.send(JSON.stringify({ type: "session.close" })); } catch {}
+  }
+  try { session?.dataChannel?.close(); } catch {}
+  try { session?.peerConnection?.close(); } catch {}
+  for (const track of session?.localStream?.getTracks?.() || []) track.stop();
+  liveAudio.srcObject = null;
+  liveStartButton.classList.remove("active");
+  liveStartButton.setAttribute("aria-label", "开始 GPT-Live 实时语音");
+  liveMuteButton.setAttribute("aria-pressed", "false");
+  liveMuteButton.setAttribute("aria-label", "静音麦克风");
+  liveMuteLabel.textContent = "静音";
+  if (session?.durationTimer) window.clearInterval(session.durationTimer);
+  updateLiveDuration();
+  if (!keepPanel) {
+    liveCallPanel.hidden = true;
+    composer.classList.remove("live-active");
+    syncComposerClearance();
+  }
+}
+
+async function startLiveConversation() {
+  if (liveConversation) {
+    releaseLiveConversation();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection !== "function") {
+    throw new Error("当前系统不支持 WebRTC 麦克风会话");
+  }
+  liveTranscriptHistory.clear();
+  clearLiveDelegationFallback();
+  lastLiveUserTranscript = "";
+  setLivePanel({ title: "正在连接 GPT-Live", status: "正在检查账户与语音权限", transcript: "建立安全的实时音频连接…", phase: "connecting" });
+  const availability = await refreshLiveAvailability();
+  if (!availability.available) throw new Error(availability.message || "GPT-Live 暂不可用");
+
+  const localStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: appPreferences.liveEchoCancellation !== false,
+      noiseSuppression: appPreferences.liveNoiseSuppression !== false,
+      autoGainControl: appPreferences.liveAutoGainControl !== false,
+    },
+    video: false,
+  });
+  const peerConnection = new RTCPeerConnection();
+  const dataChannel = peerConnection.createDataChannel("oai-events");
+  liveConversation = {
+    peerConnection,
+    dataChannel,
+    localStream,
+    muted: false,
+    startedAt: Date.now(),
+    durationTimer: null,
+    callId: null,
+    sessionId: crypto.randomUUID(),
+  };
+  liveConversation.durationTimer = window.setInterval(updateLiveDuration, 1_000);
+  updateLiveDuration();
+  liveStartButton.classList.add("active");
+  liveStartButton.setAttribute("aria-label", "结束 GPT-Live 实时语音");
+
+  peerConnection.ontrack = (event) => {
+    liveAudio.srcObject = event.streams?.[0] || new MediaStream([event.track]);
+    void liveAudio.play().catch(() => {});
+  };
+  peerConnection.onconnectionstatechange = () => {
+    const state = peerConnection.connectionState;
+    if (state === "connected") {
+      setLivePanel({ title: "GPT-Live 正在聆听", status: "实时语音已连接", transcript: "你可以开始说话。", phase: "listening" });
+    } else if (new Set(["failed", "closed"]).has(state) && liveConversation?.peerConnection === peerConnection) {
+      setLivePanel({ title: "实时语音已断开", status: `WebRTC ${state}`, transcript: "请结束后重新连接。", error: true, paused: true });
+      releaseLiveConversation({ keepPanel: true });
+    }
+  };
+  dataChannel.onopen = () => {
+    setLivePanel({ title: "GPT-Live 正在聆听", status: "实时语音已连接", transcript: "你可以开始说话。", phase: "listening" });
+  };
+  dataChannel.onmessage = (event) => handleLiveDataMessage(event.data);
+  dataChannel.onerror = () => setLivePanel({ title: "实时事件通道异常", status: "音频可能仍可继续", transcript: "若无法交互，请重新连接。", error: true });
+
+  for (const track of localStream.getAudioTracks()) peerConnection.addTrack(track, localStream);
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  await waitForIceGathering(peerConnection);
+  const initialText = promptInput.value.trim();
+  const created = await window.workbench.createLiveSession({
+    sdp: peerConnection.localDescription?.sdp || offer.sdp,
+    voice: appPreferences.liveVoice || "cove",
+    initialItems: initialText ? [{ role: "user", text: initialText }] : [],
+  });
+  if (liveConversation?.peerConnection === peerConnection) liveConversation.callId = created.callId;
+  await peerConnection.setRemoteDescription({ type: "answer", sdp: created.sdp });
+  const ready = peerConnection.connectionState === "connected" || dataChannel.readyState === "open";
+  setLivePanel(ready
+    ? {
+        title: "GPT-Live 正在聆听",
+        status: "实时语音已连接",
+        transcript: initialText || "你可以开始说话。",
+        phase: "listening",
+      }
+    : {
+        title: "正在连接语音",
+        status: "正在准备语音与任务能力",
+        transcript: initialText || "连接完成后即可开始说话。",
+        phase: "connecting",
+      });
 }
 
 const SETTINGS_FEATURES = {
@@ -4384,6 +5141,7 @@ const SETTINGS_FEATURES = {
   account: {
     title: "账户", copy: "登录 OnPeople、查看余额并管理云端模型访问。",
     cardTitle: "OnPeople 账户", cardCopy: "打开登录、注册和账户管理界面。", action: "管理账户",
+    preserveSettings: true,
     run: () => openCloudAccountManagement(),
   },
   snapshots: {
@@ -4827,6 +5585,7 @@ function showSettingsRoute(route) {
   const isRuntime = route === "configuration";
   const functionalPages = new Map([
     ["appearance", settingsAppearancePage],
+    ["voice", settingsVoicePage],
     ["personalization", settingsPersonalizationPage],
     ["pet", settingsPetPage],
     ["shortcuts", settingsShortcutsPage],
@@ -4854,6 +5613,7 @@ function showSettingsRoute(route) {
     return;
   }
   if (functionalPage) {
+    if (route === "voice") void refreshLiveAvailability();
     if (route === "personalization") void refreshSettingsMemory();
     if (route === "pet") void refreshSettingsPet();
     if (route === "shortcuts") renderSettingsShortcuts($("#settings-shortcuts-search").value);
@@ -4878,7 +5638,7 @@ function showSettingsRoute(route) {
   action.hidden = !feature.action;
   action.textContent = feature.action || "";
   action.onclick = feature.run ? async () => {
-    closeSettingsCenter();
+    if (!feature.preserveSettings) closeSettingsCenter();
     await feature.run();
   } : null;
 }
@@ -4970,30 +5730,96 @@ function scheduleLabel(schedule) {
 }
 
 function updateNotificationBadge(unread = 0) {
-  const count = $("#notification-count"); count.hidden = unread < 1; count.textContent = unread > 99 ? "99+" : String(unread);
+  const count = $("#scheduled-nav-count");
+  count.hidden = unread < 1;
+  count.textContent = unread > 99 ? "99+" : String(unread);
+}
+
+function refreshScheduledProjectOptions() {
+  const select = $("#scheduled-project");
+  const previous = select.value;
+  const entries = new Map();
+  const remember = (projectPath, name) => {
+    const value = String(projectPath || "").trim();
+    if (!value || entries.has(value)) return;
+    entries.set(value, name || value.split("/").filter(Boolean).at(-1) || "项目");
+  };
+  remember(cwdInput.value);
+  for (const project of loadedProjects) if (!project.hidden) remember(project.path, project.name);
+  select.replaceChildren();
+  if (!entries.size) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "请先添加或选择项目";
+    select.append(option);
+    return;
+  }
+  for (const [value, name] of entries) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = name;
+    select.append(option);
+  }
+  select.value = entries.has(previous) ? previous : (entries.has(cwdInput.value.trim()) ? cwdInput.value.trim() : entries.keys().next().value);
+}
+
+function scheduledRuntimeLabel(task) {
+  const runtime = task.runtime || {};
+  const items = [];
+  if (runtime.model) items.push(runtime.model);
+  if (runtime.reasoningEffort) items.push(runtime.reasoningEffort);
+  if (runtime.permission && runtime.permission !== "inherit") items.push(runtime.permission);
+  return items.length ? ` · ${items.join(" · ")}` : "";
 }
 
 function renderScheduler(state) {
   schedulerState = state || { tasks: [], runs: [], unread: 0 };
   const threadOption = $("#scheduled-destination option[value=thread]");
   threadOption.disabled = !currentThreadId;
-  threadOption.textContent = currentThreadId ? `续跑当前会话 · ${currentThreadId.slice(0, 8)}` : "续跑当前会话 · 尚无会话";
+  threadOption.textContent = currentThreadId ? `续跑当前任务 · ${currentThreadId.slice(0, 8)}` : "续跑当前任务 · 尚无任务";
   if (!currentThreadId && $("#scheduled-destination").value === "thread") $("#scheduled-destination").value = "standalone";
   updateNotificationBadge(schedulerState.unread || 0);
-  const tasks = $("#scheduled-task-list"); tasks.replaceChildren();
+  $("#scheduled-unread-count").textContent = String(schedulerState.unread || 0);
+  const tasks = $("#scheduled-task-list");
+  tasks.replaceChildren();
   const active = schedulerState.tasks.filter((task) => task.enabled).length;
-  $("#scheduled-count").textContent = `${active} ACTIVE`;
-  if (!schedulerState.tasks.length) tasks.innerHTML = '<span class="control-empty">还没有计划任务。</span>';
+  $("#scheduled-count").textContent = `${schedulerState.tasks.length} 个计划 · ${active} 个启用`;
+  if (!schedulerState.tasks.length) {
+    tasks.innerHTML = '<div class="scheduled-empty"><strong>还没有计划任务</strong><span>创建一个计划，或直接在对话中说“每天 9 点检查项目”。</span></div>';
+  }
   for (const task of schedulerState.tasks) {
-    const destination = task.destination?.mode === "thread" ? `续跑 ${task.destination.threadId?.slice(0, 8)}` : "新会话";
-    const execution = task.execution?.mode === "worktree" ? `Worktree${task.worktreePath ? ` · ${task.worktreePath}` : ""}` : "当前工作区";
-    const card = controlCard(task.name, task.enabled ? "active" : "paused", task.prompt, `${scheduleLabel(task.schedule)} · ${destination} · ${execution} · 下次 ${task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : "已暂停或已结束"}`);
-    const actions = document.createElement("div"); actions.className = "control-card-actions";
-    const run = document.createElement("button"); run.type = "button"; run.textContent = "立即运行";
+    const destination = task.destination?.mode === "thread" ? `续跑 ${task.destination.threadId?.slice(0, 8)}` : "独立后台任务";
+    const execution = task.execution?.mode === "worktree" ? "Git Worktree" : "当前项目";
+    const card = document.createElement("article");
+    card.className = `scheduled-task ${task.enabled ? "active" : "paused"}`;
+    const rail = document.createElement("i");
+    const copy = document.createElement("div");
+    copy.className = "scheduled-task-copy";
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = task.name;
+    const status = document.createElement("span");
+    status.textContent = task.enabled ? "已启用" : "已暂停";
+    header.append(title, status);
+    const prompt = document.createElement("p");
+    prompt.textContent = task.prompt;
+    const meta = document.createElement("small");
+    meta.textContent = `${scheduleLabel(task.schedule)} · ${destination} · ${execution}${scheduledRuntimeLabel(task)} · ${task.nextRunAt ? `下次 ${new Date(task.nextRunAt).toLocaleString()}` : "没有下次运行"}`;
+    copy.append(header, prompt, meta);
+    const actions = document.createElement("div");
+    actions.className = "scheduled-task-actions";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.textContent = "立即运行";
     run.addEventListener("click", async () => { run.disabled = true; try { renderScheduler(await window.workbench.runScheduledTask(task.id)); } catch (error) { addEvent("error", "SCHEDULED", error.message); } finally { run.disabled = false; } });
-    const toggle = document.createElement("button"); toggle.type = "button"; toggle.textContent = task.enabled ? "暂停" : "恢复";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = task.enabled ? "暂停" : "恢复";
     toggle.addEventListener("click", async () => renderScheduler(await window.workbench.updateScheduledTask(task.id, { enabled: !task.enabled })));
-    const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger-outline"; remove.textContent = "删除";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-outline";
+    remove.textContent = "删除";
     remove.addEventListener("click", async () => {
       if (!await confirmAction(`删除计划任务“${task.name}”？\n\n已经产生的运行记录仍会保留。`, {
         title: "删除计划任务？",
@@ -5002,22 +5828,44 @@ function renderScheduler(state) {
       })) return;
       renderScheduler(await window.workbench.deleteScheduledTask(task.id));
     });
-    actions.append(run, toggle, remove); card.append(actions); tasks.append(card);
+    actions.append(run, toggle, remove);
+    card.append(rail, copy, actions);
+    tasks.append(card);
   }
-  const runs = $("#scheduled-run-list"); runs.replaceChildren();
-  if (!schedulerState.runs.length) runs.innerHTML = '<span class="control-empty">还没有运行记录。</span>';
+
+  const runsSection = $("#scheduled-runs-section");
+  runsSection.hidden = schedulerState.runs.length === 0;
+  $("#scheduled-mark-read").hidden = schedulerState.unread < 1;
+  const runs = $("#scheduled-run-list");
+  runs.replaceChildren();
   for (const item of schedulerState.runs.slice(0, 50)) {
-    const row = document.createElement("article"); row.className = `scheduled-run ${item.status}${item.read ? "" : " unread"}`;
-    const header = document.createElement("header"); const title = document.createElement("strong"); title.textContent = `${item.taskName} · ${item.status === "completed" ? "已完成" : item.status === "failed" ? "失败" : "运行中"}`;
-    const time = document.createElement("time"); time.textContent = new Date(item.completedAt || item.startedAt).toLocaleString(); header.append(title, time);
-    const copy = document.createElement("p"); copy.textContent = item.error || item.summary || (item.status === "running" ? "任务正在独立线程中执行…" : "没有摘要");
-    row.append(header, copy); row.addEventListener("click", async () => { if (!item.read) renderScheduler(await window.workbench.markScheduledNotificationsRead(item.id)); }); runs.append(row);
+    const row = document.createElement("article");
+    row.className = `scheduled-run ${item.status}${item.read ? "" : " unread"}`;
+    const body = document.createElement("div");
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = `${item.taskName} · ${item.status === "completed" ? "已完成" : item.status === "failed" ? "失败" : "运行中"}`;
+    const time = document.createElement("time");
+    time.textContent = new Date(item.completedAt || item.startedAt).toLocaleString();
+    header.append(title, time);
+    const copy = document.createElement("p");
+    copy.textContent = item.error || item.summary || (item.status === "running" ? "任务正在后台执行…" : "没有摘要");
+    body.append(header, copy);
+    row.append(body);
+    row.addEventListener("click", async () => {
+      if (!item.read) renderScheduler(await window.workbench.markScheduledNotificationsRead(item.id));
+    });
+    runs.append(row);
   }
 }
 
 async function refreshScheduler() {
-  try { renderScheduler(await window.workbench.listScheduledTasks()); }
-  catch (error) { $("#scheduled-task-list").innerHTML = `<span class="control-empty">${escapeHtml(error.message)}</span>`; }
+  try {
+    refreshScheduledProjectOptions();
+    renderScheduler(await window.workbench.listScheduledTasks());
+  } catch (error) {
+    $("#scheduled-task-list").innerHTML = `<div class="scheduled-empty"><strong>计划任务暂时无法载入</strong><span>${escapeHtml(error.message)}</span></div>`;
+  }
 }
 
 function renderDiagnostics(state) {
@@ -5054,7 +5902,6 @@ async function refreshControl() {
   else if (activeControlView === "policy") await refreshPolicy();
   else if (activeControlView === "hooks") await refreshHooks();
   else if (activeControlView === "diagnostics") await refreshDiagnostics();
-  else if (activeControlView === "scheduled") await refreshScheduler();
   else if (activeControlView === "config") await refreshEffectiveConfig();
   else if (activeControlView === "memory") await refreshMemories();
   else if (activeControlView === "usage") await refreshUsage();
@@ -5077,7 +5924,51 @@ providerSelect.addEventListener("change", () => {
 modelInput.addEventListener("change", validateSelectedModel);
 onpeopleModelSelect.addEventListener("change", () => {
   modelInput.value = onpeopleModelSelect.value;
+  syncTaskModelPicker();
   void validateSelectedModel();
+});
+taskModelTrigger.addEventListener("click", () => setTaskModelPopover(taskModelPopover.hidden));
+taskModelOptions.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-model-id]");
+  if (!button) return;
+  modelInput.value = button.dataset.modelId;
+  onpeopleModelSelect.value = button.dataset.modelId;
+  window.OnPeopleUI?.syncSelect?.(onpeopleModelSelect);
+  syncTaskModelPicker();
+  setTaskModelPopover(false);
+  void validateSelectedModel();
+  try {
+    await persistTaskModelSelection();
+  } catch (error) {
+    providerStatus.textContent = cloudErrorMessage(error);
+    addEvent("error", "MODEL", cloudErrorMessage(error));
+  }
+});
+taskEffortOptions.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-reasoning-effort]");
+  if (!button) return;
+  selectedReasoningEffort = button.dataset.reasoningEffort;
+  syncTaskModelPicker();
+  setTaskModelPopover(false);
+  if (!currentThreadId) return;
+  try {
+    await window.workbench.setThreadReasoningEffort(
+      currentThreadId,
+      selectedReasoningEffort,
+      modelInput.value.trim(),
+    );
+  } catch (error) {
+    addEvent("error", "REASONING", error.message);
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (taskModelPopover.hidden) return;
+  if (taskModelPopover.contains(event.target) || taskModelTrigger.contains(event.target)) return;
+  setTaskModelPopover(false);
+}, true);
+window.addEventListener("resize", () => setTaskModelPopover(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !taskModelPopover.hidden) setTaskModelPopover(false);
 });
 
 $("#cloud-account-open").addEventListener("click", () => {
@@ -5105,6 +5996,12 @@ $("#settings-density").addEventListener("change", (event) => {
 });
 $("#settings-browser-links").addEventListener("change", (event) => {
   void savePreferences({ browserOpenLinks: event.target.value });
+});
+$("#settings-live-voice").addEventListener("change", (event) => {
+  void savePreferences({ liveVoice: event.target.value });
+});
+$("#settings-live-refresh").addEventListener("click", () => {
+  void refreshLiveAvailability();
 });
 for (const button of $$("[data-settings-toggle]")) {
   button.addEventListener("click", () => {
@@ -5235,15 +6132,13 @@ for (const button of $$("[data-settings-permission]")) {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
-$("#cloud-account-close").addEventListener("click", () => {
-  pendingCloudSourceSelection = false;
-  cloudAccountDialog.close();
-});
+$("#cloud-account-close").addEventListener("click", closeCloudAccountManagement);
 cloudAccountDialog.addEventListener("click", (event) => {
-  if (event.target === cloudAccountDialog) {
-    pendingCloudSourceSelection = false;
-    cloudAccountDialog.close();
-  }
+  if (event.target === cloudAccountDialog) closeCloudAccountManagement();
+});
+cloudAccountDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeCloudAccountManagement();
 });
 $("#usage-profile-close").addEventListener("click", () => usageProfileDialog.close());
 usageProfileDialog.addEventListener("click", (event) => {
@@ -5414,14 +6309,6 @@ $("#cloud-redeem-submit").addEventListener("click", async () => {
     setCloudStatus(cloudErrorMessage(error), true);
   } finally {
     button.disabled = false;
-  }
-});
-$("#cloud-open-console").addEventListener("click", async () => {
-  try {
-    await window.workbench.openCloudConsole();
-    setCloudStatus("已在浏览器打开账户管理。");
-  } catch (error) {
-    setCloudStatus(cloudErrorMessage(error), true);
   }
 });
 $("#cloud-account-logout").addEventListener("click", async () => {
@@ -5669,6 +6556,7 @@ for (const button of $$("[data-tool-view]")) button.addEventListener("click", ()
 async function startFreshTask(options = {}) {
   const requested = options && !(options instanceof Event) ? options : {};
   try {
+    closeScheduledCenter();
     if (running && currentThreadId) setThreadRuntimeState(currentThreadId, "working");
     await window.workbench.newTask();
     setRunning(false);
@@ -5840,7 +6728,7 @@ function paletteCandidates() {
     { icon: "↗", label: "在新窗口新建任务", hint: "并行窗口", run: () => window.workbench.openTaskWindow(null) },
     { icon: "●", label: "显示 / 收起宠物", hint: "桌面任务状态", run: () => window.workbench.togglePet() },
     tool("browser", "浏览器"), tool("terminal", "终端"), tool("changes", "Git 变更"), tool("files", "项目文件"), tool("extensions", "扩展"),
-    agents, control("scheduled", "Scheduled Tasks"), control("diagnostics", "诊断中心"),
+    agents, { icon: "◴", label: "计划任务", hint: "独立任务与运行收件箱", run: () => showScheduledCenter("inbox") }, control("diagnostics", "诊断中心"),
     control("config", "有效配置"), control("memory", "本地记忆"), control("usage", "用量与成本"), control("secrets", "安全环境变量"), control("policy", "权限策略"),
     ...loadedThreads.filter((thread) => !thread.archived).slice(0, 40).map((thread) => ({ icon: "T", label: titleFrom(thread.name || thread.preview), hint: `${thread.cwd || "任务"} · ${thread.id.slice(0, 8)}`, run: () => resumeThread(thread.id) })),
   ];
@@ -6403,7 +7291,7 @@ $("#control-advanced-toggle").addEventListener("click", () => {
   const toggle = $("#control-advanced-toggle"); const expanded = toggle.getAttribute("aria-expanded") !== "true";
   toggle.setAttribute("aria-expanded", String(expanded)); toggle.textContent = expanded ? "高级设置⌃" : "高级设置⌄";
   for (const item of $$(".advanced-control-item")) item.hidden = !expanded;
-  if (!expanded && new Set(["worktrees", "context", "policy", "config", "memory", "usage", "secrets", "hooks"]).has(activeControlView)) void selectControlPanel("scheduled");
+  if (!expanded && new Set(["worktrees", "context", "policy", "config", "memory", "usage", "secrets", "hooks"]).has(activeControlView)) void selectControlPanel("diagnostics");
 });
 $("#control-advanced-select").addEventListener("change", (event) => { if (event.target.value) void selectControlPanel(event.target.value); });
 $("#agent-advanced-open").addEventListener("click", openAgentComposer);
@@ -6454,17 +7342,46 @@ $("#files-back").addEventListener("click", async () => { if (currentFileParent !
 $("#files-refresh").addEventListener("click", refreshProjectFiles);
 $("#files-search").addEventListener("input", () => { clearTimeout(fileSearchTimer); fileSearchTimer = setTimeout(refreshProjectFiles, 180); });
 
-function showScheduledCenter() {
-  return selectControlPanel("scheduled");
+function setScheduledCenterMode(mode = "inbox") {
+  scheduledCenterMode = mode === "create" ? "create" : "inbox";
+  $("#scheduled-inbox-view").hidden = scheduledCenterMode !== "inbox";
+  $("#scheduled-create-view").hidden = scheduledCenterMode !== "create";
+  $("#scheduled-create-open").hidden = scheduledCenterMode === "create";
+  if (scheduledCenterMode === "create") {
+    refreshScheduledProjectOptions();
+    window.setTimeout(() => $("#scheduled-prompt").focus(), 0);
+  }
 }
 
-$("#notification-center").addEventListener("click", showScheduledCenter);
+async function showScheduledCenter(mode = "inbox") {
+  $("#scheduled-center").hidden = false;
+  appShell.classList.add("scheduled-open");
+  $("#scheduled-nav").classList.add("active");
+  setScheduledCenterMode(mode);
+  await refreshScheduler();
+}
+
+function closeScheduledCenter() {
+  $("#scheduled-center").hidden = true;
+  appShell.classList.remove("scheduled-open");
+  $("#scheduled-nav").classList.remove("active");
+  scheduledCenterMode = "inbox";
+}
+
+$("#scheduled-nav").addEventListener("click", () => {
+  if ($("#scheduled-center").hidden) void showScheduledCenter("inbox");
+  else closeScheduledCenter();
+});
+$("#scheduled-center-close").addEventListener("click", closeScheduledCenter);
+$("#scheduled-create-open").addEventListener("click", () => setScheduledCenterMode("create"));
+$("#scheduled-create-back").addEventListener("click", () => setScheduledCenterMode("inbox"));
 $("#scheduled-kind").addEventListener("change", () => {
   const kind = $("#scheduled-kind").value;
   $("#scheduled-time-wrap").hidden = kind === "interval" || kind === "rrule";
   $("#scheduled-day-wrap").hidden = kind !== "weekly";
   $("#scheduled-interval-wrap").hidden = kind !== "interval";
   $("#scheduled-rrule-wrap").hidden = kind !== "rrule";
+  if (kind === "rrule") $("#scheduled-advanced").open = true;
 });
 $("#scheduled-create").addEventListener("submit", async (event) => {
   event.preventDefault(); const button = event.submitter; button.disabled = true;
@@ -6473,12 +7390,25 @@ $("#scheduled-create").addEventListener("submit", async (event) => {
   try {
     const destinationMode = $("#scheduled-destination").value;
     if (destinationMode === "thread" && !currentThreadId) throw new Error("当前没有可续跑的会话");
+    const prompt = $("#scheduled-prompt").value.trim();
+    const name = $("#scheduled-name").value.trim() || prompt.split(/\n/)[0].replace(/[。！？.!?]+$/, "").slice(0, 100);
     renderScheduler(await window.workbench.createScheduledTask({
-      name: $("#scheduled-name").value, prompt: $("#scheduled-prompt").value, cwd: cwdInput.value.trim(), schedule,
+      name, prompt, cwd: $("#scheduled-project").value, schedule,
       destination: { mode: destinationMode, threadId: destinationMode === "thread" ? currentThreadId : null },
       execution: { mode: $("#scheduled-execution").value, ref: "HEAD" },
+      runtime: {
+        model: $("#scheduled-model").value.trim(),
+        reasoningEffort: $("#scheduled-effort").value,
+        permission: $("#scheduled-permission").value,
+      },
     }));
-    $("#scheduled-name").value = ""; $("#scheduled-prompt").value = "";
+    $("#scheduled-name").value = "";
+    $("#scheduled-prompt").value = "";
+    $("#scheduled-model").value = "";
+    $("#scheduled-effort").value = "";
+    $("#scheduled-permission").value = "inherit";
+    $("#scheduled-advanced").open = false;
+    setScheduledCenterMode("inbox");
   } catch (error) { addEvent("error", "SCHEDULED", error.message); } finally { button.disabled = false; }
 });
 $("#scheduled-mark-read").addEventListener("click", async () => renderScheduler(await window.workbench.markScheduledNotificationsRead()));
@@ -6672,6 +7602,26 @@ window.workbench.onBrowserNewTabRequested((event) => {
   createBrowserTab(opener.taskId, event.url || null, "正在载入…", { activate: opener.taskId === activeBrowserTaskId });
 });
 
+async function createScheduleFromConversation(prompt) {
+  const result = await window.workbench.createScheduledTaskFromText({
+    text: prompt,
+    cwd: cwdInput.value.trim(),
+    model: modelInput.value.trim(),
+    reasoningEffort: selectedReasoningEffort,
+  });
+  if (!result?.matched) return false;
+  const clientMessageId = crypto.randomUUID();
+  addEvent("user", "YOU", prompt, { clientMessageId, deliveryStatus: result.error ? "failed" : "sent" });
+  promptInput.value = "";
+  if (result.error) {
+    addEvent("error", "SCHEDULED", result.error);
+    return true;
+  }
+  renderScheduler(result.state);
+  addEvent("agent", "计划任务", `已创建“${result.task.name}”。${scheduleLabel(result.task.schedule)}执行，可从左侧“计划任务”查看、暂停或立即运行。`);
+  return true;
+}
+
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (submitting) return;
@@ -6683,6 +7633,14 @@ composer.addEventListener("submit", async (event) => {
     goalBudget.focus();
     addEvent("error", "GOAL BUDGET", "请输入 Token 预算，或选择“∞ 无限”。");
     return;
+  }
+  if (!wasRunning && selectedMode === "default" && !selectedImages.length && !selectedAttachments.length) {
+    try {
+      if (await createScheduleFromConversation(prompt)) return;
+    } catch (error) {
+      addEvent("error", "SCHEDULED", error.message);
+      return;
+    }
   }
   taskTitle.textContent = titleFrom(prompt);
   const clientMessageId = crypto.randomUUID();
@@ -6700,6 +7658,7 @@ composer.addEventListener("submit", async (event) => {
       workspaceBaseCwd: selectedWorkspaceBaseCwd,
       modelProvider: providerSelect.value,
       model: modelInput.value.trim(),
+      reasoningEffort: selectedReasoningEffort,
       baseUrl: baseUrlInput.value.trim(),
       apiKey: apiKeyInput.value,
     };
@@ -6736,7 +7695,12 @@ promptInput.addEventListener("keydown", (event) => {
   event.preventDefault();
   composer.requestSubmit();
 });
-stopButton.addEventListener("click", async () => {
+promptInput.addEventListener("input", updateComposerPrimaryAction);
+sendButton.addEventListener("click", async (event) => {
+  if (sendButton.dataset.action !== "stop") return;
+  event.preventDefault();
+  if (!running || submitting) return;
+  sendButton.disabled = true;
   try {
     await window.workbench.interrupt(currentThreadId);
   } catch (error) {
@@ -6745,6 +7709,35 @@ stopButton.addEventListener("click", async () => {
     setThreadRuntimeState(currentThreadId, "stopped");
     setRunning(false);
   }
+});
+liveStartButton.addEventListener("click", async () => {
+  liveStartButton.disabled = true;
+  try {
+    await startLiveConversation();
+  } catch (error) {
+    const message = cloudErrorMessage(error);
+    releaseLiveConversation({ keepPanel: true });
+    setLivePanel({ title: "无法启动 GPT-Live", status: message, transcript: "检查登录、模型分组和麦克风权限后重试。", error: true, paused: true });
+    addEvent("error", "GPT-LIVE", message);
+  } finally {
+    liveStartButton.disabled = false;
+  }
+});
+liveEndButton.addEventListener("click", () => releaseLiveConversation());
+liveMuteButton.addEventListener("click", () => {
+  if (!liveConversation) return;
+  liveConversation.muted = !liveConversation.muted;
+  for (const track of liveConversation.localStream.getAudioTracks()) track.enabled = !liveConversation.muted;
+  liveMuteButton.setAttribute("aria-pressed", String(liveConversation.muted));
+  liveMuteButton.setAttribute("aria-label", liveConversation.muted ? "取消麦克风静音" : "静音麦克风");
+  liveMuteLabel.textContent = liveConversation.muted ? "取消静音" : "静音";
+  setLivePanel({
+    title: liveConversation.muted ? "麦克风已静音" : "GPT-Live 正在聆听",
+    status: liveConversation.muted ? "远端音频仍会继续播放" : "实时音频已连接",
+    transcript: liveCallTranscript.textContent,
+    paused: liveConversation.muted,
+    phase: liveConversation.muted ? "muted" : "listening",
+  });
 });
 
 window.workbench.onAgentEvent((event) => {
@@ -6761,9 +7754,17 @@ window.workbench.onAgentEvent((event) => {
   }
   if (event.type === "thread-lifecycle") {
     const phase = event.state?.phase || "idle";
-    const presentation = phase === "running" ? "working" : phase;
+    const presentation = phase === "running" ? "working" : phase === "idle" ? "completed" : phase;
     setThreadRuntimeState(event.threadId, presentation);
-    if (event.threadId === currentThreadId && new Set(["idle", "failed"]).has(phase)) setRunning(false);
+    if (event.threadId === currentThreadId && new Set(["idle", "failed"]).has(phase)) {
+      reconcileCurrentThreadTerminalState({
+        threadId: event.threadId,
+        status: phase,
+        completedAt: event.state?.updatedAt,
+        error: event.state?.error,
+        finalText: event.state?.finalText,
+      });
+    }
     return;
   }
   if (event.type === "message-delivery") {
@@ -6776,6 +7777,12 @@ window.workbench.onAgentEvent((event) => {
   }
   if (event.type === "thread-status-changed") {
     setThreadRuntimeState(event.threadId, event.status);
+    if (event.threadId === currentThreadId && new Set(["completed", "failed", "stopped"]).has(event.status)) {
+      reconcileCurrentThreadTerminalState({
+        threadId: event.threadId,
+        status: event.status,
+      });
+    }
     return;
   }
   if (event.type === "terminal-output") {
@@ -6849,6 +7856,21 @@ window.workbench.onTurnEvent((event) => {
     currentTurnStartedAt = Date.now();
     setThreadRuntimeState(eventThreadId || currentThreadId, "working");
     setRunning(true);
+    if (
+      pendingLiveDelegation
+      && (!pendingLiveDelegation.threadId || !eventThreadId || pendingLiveDelegation.threadId === eventThreadId)
+    ) {
+      pendingLiveDelegation.turnStarted = true;
+      clearLiveDelegationWait(pendingLiveDelegation);
+      updateLiveDelegationTrace(pendingLiveDelegation, "inProgress", "当前任务正在运行");
+      setLivePanel({
+        title: "当前任务正在运行",
+        status: "工具进度已开始记录",
+        transcript: pendingLiveDelegation.text,
+        paused: true,
+        phase: "delegating",
+      });
+    }
   }
   else if (message.method === "thread/status/changed") {
     const status = message.params?.status || {};
@@ -6877,12 +7899,31 @@ window.workbench.onTurnEvent((event) => {
       cancelScheduledAgentMarkdownRender(activeAgentMessage);
       renderAgentMarkdown(activeAgentMessage, message.params.item.text);
     }
+    if (
+      pendingLiveDelegation
+      && message.params.item.phase !== "commentary"
+      && message.params.item.text
+    ) {
+      finalizePendingLiveDelegation({
+        threadId: eventThreadId || currentThreadId,
+        finalText: message.params.item.text,
+      });
+    }
     activeAgentMessage = null;
     activeAgentMessagePhase = null;
   }
   else if (message.method === "item/started" && isTraceItem(message.params?.item)) {
     ensureProcessFlow();
     upsertTraceItem(message.params.item, "started");
+    if (pendingLiveDelegation) {
+      setLivePanel({
+        title: "当前任务正在运行",
+        status: "正在使用工具，详细进度已展开",
+        transcript: pendingLiveDelegation.text,
+        paused: true,
+        phase: "delegating",
+      });
+    }
   }
   else if (message.method === "item/completed" && isTraceItem(message.params?.item)) {
     ensureProcessFlow();
@@ -6901,12 +7942,12 @@ window.workbench.onTurnEvent((event) => {
   else if (message.method === "turn/completed") {
     const turn = message.params?.turn;
     if (turn?.status === "failed") addTraceError("TURN FAILED", turn.error?.message || JSON.stringify(turn.error || {}));
-    finishProcessFlow(turn?.status === "failed" ? "failed" : "completed", { finishedAt: turn?.completedAt || turn?.updatedAt });
-    currentTurnStartedAt = null;
-    setThreadRuntimeState(eventThreadId || currentThreadId, turn?.status === "failed" ? "failed" : "completed");
-    setRunning(false);
-    activeAgentMessage = null;
-      traceCards.delete("active-plan");
+    reconcileCurrentThreadTerminalState({
+      threadId: eventThreadId || currentThreadId,
+      status: turn?.status === "failed" ? "failed" : "completed",
+      completedAt: turn?.completedAt || turn?.updatedAt,
+      error: turn?.error?.message,
+    });
     loadThreads();
     if (activeToolView === "changes") refreshGit();
   }
@@ -6915,7 +7956,7 @@ window.workbench.onTurnEvent((event) => {
 window.workbench.onSchedulerUpdated((state) => {
   schedulerState = state;
   updateNotificationBadge(state.unread || 0);
-  if (activeToolView === "control" && activeControlView === "scheduled") renderScheduler(state);
+  if (!$("#scheduled-center").hidden) renderScheduler(state);
 });
 window.workbench.onSchedulerOpen(() => { void showScheduledCenter(); });
 window.workbench.onRuntimeUpdated((state) => {
@@ -6929,11 +7970,39 @@ window.workbench.onPetState((state) => {
 window.workbench.onPreferencesChanged(renderPreferences);
 window.workbench.onCloudAccountUpdated((state) => {
   renderCloudAccount(state);
+  if (!settingsVoicePage.hidden) void refreshLiveAvailability();
+});
+window.workbench.onLiveSidebandEvent((event = {}) => {
+  if (!liveConversation || String(event.callId || "") !== String(liveConversation.callId || "")) return;
+  let data = String(event.data || "");
+  if (event.encoding === "base64") {
+    try { data = atob(data); } catch { return; }
+  }
+  handleLiveDataMessage(data);
+});
+window.workbench.onLiveSidebandStatus((state = {}) => {
+  if (!liveConversation || String(state.callId || "") !== String(liveConversation.callId || "")) return;
+  if (state.state === "connected" && liveCallPanel.dataset.phase !== "delegating") {
+    setLivePanel({
+      title: liveCallTitle.textContent || "GPT-Live 正在聆听",
+      status: "实时语音与任务协作通道已连接",
+      transcript: liveCallTranscript.textContent || "你可以开始说话。",
+      phase: liveCallPanel.dataset.phase || "listening",
+    });
+  } else if (new Set(["reconnecting", "unavailable"]).has(state.state) && liveCallPanel.dataset.phase !== "delegating") {
+    setLivePanel({
+      title: liveCallTitle.textContent || "GPT-Live 正在聆听",
+      status: state.state === "reconnecting" ? "任务协作通道正在重新连接" : "任务协作通道暂时不可用，实时语音仍可继续",
+      transcript: liveCallTranscript.textContent || "你可以继续说话。",
+      phase: liveCallPanel.dataset.phase || "listening",
+    });
+  }
 });
 window.workbench.onAppUpdateState(renderAppUpdate);
 
 window.workbench.onDeepLink((target) => {
-  if (target?.type === "control" && target.view) void selectControlPanel(target.view);
+  if (target?.type === "control" && target.view === "scheduled") void showScheduledCenter("inbox");
+  else if (target?.type === "control" && target.view) void selectControlPanel(target.view);
   if (target?.type === "account") {
     if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
     void refreshCloudAccount().catch(() => {});
@@ -6944,8 +8013,11 @@ document.addEventListener("click", closeProjectMenus);
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   closeProjectMenus();
+  if (cloudAccountDialog.open) return;
+  if (!$("#scheduled-center").hidden) { closeScheduledCenter(); return; }
   if (!settingsCenter.hidden) closeSettingsCenter();
 });
+window.addEventListener("beforeunload", () => releaseLiveConversation());
 
 window.workbench.agentStatus().then((status) => {
   defaultWorkspaceCwd = status.defaultCwd || "";
@@ -6985,6 +8057,7 @@ window.workbench.getAppUpdateState().then(renderAppUpdate).catch((error) => {
   renderAppUpdate({ supported: false, status: "error", message: error.message });
 });
 void refreshPreferences();
+void refreshScheduler();
 
 cwdInput.addEventListener("change", (event) => {
   if (!currentThreadId) {

@@ -41,6 +41,11 @@ if (electronZipDirectory) packagerArgs.push(`--electron-zip-dir=${electronZipDir
 execFileSync(packager, packagerArgs, { cwd: root, stdio: "inherit" });
 
 const appPath = path.join(temporaryRoot, "OnPeople-darwin-arm64", "OnPeople.app");
+execFileSync("/usr/libexec/PlistBuddy", [
+  "-c",
+  "Set :NSMicrophoneUsageDescription OnPeople uses the microphone only while you are in a GPT-Live voice conversation.",
+  path.join(appPath, "Contents", "Info.plist"),
+], { stdio: "inherit" });
 execFileSync(process.execPath, [path.join(__dirname, "sign-mac.cjs"), appPath], { cwd: root, stdio: "inherit" });
 execFileSync(process.execPath, [path.join(__dirname, "check-packaged-app.cjs"), appPath], { cwd: root, stdio: "inherit" });
 

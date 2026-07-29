@@ -47,6 +47,25 @@ execFileSync(executablePath, [
 });
 
 if (isMacBundle) {
+  const infoPlist = path.join(appPath, "Contents", "Info.plist");
+  const readPlistValue = (key) => {
+    try {
+      return execFileSync("/usr/libexec/PlistBuddy", [
+        "-c",
+        `Print :${key}`,
+        infoPlist,
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+  };
+  assert.equal(
+    readPlistValue("CFBundleIdentifier"),
+    "com.userinner.onpeople",
+    "macOS package must use the canonical OnPeople bundle identifier",
+  );
+  assert.equal(readPlistValue("LSBackgroundOnly"), null, "OnPeople must not be packaged as a background-only app");
+  assert.equal(readPlistValue("LSUIElement"), null, "OnPeople must keep a normal Dock/window presence");
   execFileSync("/usr/bin/codesign", [
     "--verify",
     "--deep",

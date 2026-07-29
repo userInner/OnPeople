@@ -53,6 +53,24 @@
     return target.split(/[\\/]/).pop() || target;
   }
 
+  function webSearchActionDetail(item = {}) {
+    const action = item.action && typeof item.action === "object" ? item.action : {};
+    const type = String(action.type || "").replace(/[ _-]/g, "").toLowerCase();
+    if (type === "search") {
+      const queries = Array.isArray(action.queries) ? action.queries.filter(Boolean) : [];
+      const first = action.query || item.query || queries[0] || "";
+      return queries.length > 1 && first ? `${first} …` : first;
+    }
+    if (type === "openpage") return action.url || item.query || "";
+    if (type === "findinpage") {
+      return [
+        action.pattern && `'${action.pattern}'`,
+        action.url,
+      ].filter(Boolean).join(" · ");
+    }
+    return item.query || item.text || "";
+  }
+
   function normalizeTraceItem(item = {}, phase = "completed") {
     const type = itemType(item);
     const status = String(item.status || phase || "completed").toLowerCase();
@@ -127,7 +145,14 @@
       return { id, kind: "plan", label: "PLAN", status, summary: firstLine(item.explanation || item.text, "计划已更新"), detail: truncateTraceText(item.text || item.explanation || detailFrom(item)) };
     }
     if (type === "websearch" || type === "search") {
-      return { id, kind: "search", label: "WEB SEARCH", status, summary: firstLine(item.query || item.text, "搜索网页"), detail: truncateTraceText(detailFrom(item)) };
+      return {
+        id,
+        kind: "search",
+        label: "WEB SEARCH",
+        status,
+        summary: firstLine(webSearchActionDetail(item), "搜索网页"),
+        detail: truncateTraceText(detailFrom(item)),
+      };
     }
     if (type === "error" || status === "failed") {
       return { id, kind: "error", label: String(item.label || "ERROR").toUpperCase(), status: "failed", summary: firstLine(item.message || detailFrom(item), "任务执行失败"), detail: truncateTraceText(item.message || detailFrom(item)) };
@@ -157,5 +182,5 @@
     return verbs[record.kind] || verbs.event;
   }
 
-  return { activityLabel, normalizeTraceItem, redactTraceText, truncateTraceText };
+  return { activityLabel, normalizeTraceItem, redactTraceText, truncateTraceText, webSearchActionDetail };
 });

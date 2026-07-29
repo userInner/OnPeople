@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { activityLabel, normalizeTraceItem, redactTraceText, truncateTraceText } = require("../src/task-trace.js");
+const { activityLabel, normalizeTraceItem, redactTraceText, truncateTraceText, webSearchActionDetail } = require("../src/task-trace.js");
 
 assert.equal(redactTraceText("Authorization: Bearer abc.def.ghi"), "Authorization: [REDACTED]");
 assert.equal(redactTraceText("api_key=sk-example1234567890"), "api_key=[REDACTED]");
@@ -24,6 +24,19 @@ const read = normalizeTraceItem({ type: "commandExecution", command: "/bin/zsh -
 assert.equal(read.kind, "read"); assert.equal(read.summary, "main.cjs"); assert.equal(activityLabel(read, "completed"), "已读取");
 const search = normalizeTraceItem({ type: "commandExecution", command: "rg -n \"browser_fill\" src/browser-mcp.cjs", status: "completed" });
 assert.equal(search.kind, "search"); assert.equal(search.summary, "browser_fill · browser-mcp.cjs");
+const webSearchStarted = normalizeTraceItem({ id: "ws-1", type: "webSearch", query: "", action: null, status: "inProgress" }, "started");
+assert.equal(webSearchStarted.summary, "搜索网页");
+assert.equal(activityLabel(webSearchStarted, "running"), "正在搜索");
+const webSearchCompleted = normalizeTraceItem({
+  id: "ws-1",
+  type: "webSearch",
+  query: "OnPeople news",
+  action: { type: "search", query: "OnPeople news", queries: ["OnPeople news", "AI agent news"] },
+  status: "completed",
+});
+assert.equal(webSearchCompleted.summary, "OnPeople news …");
+assert.equal(webSearchActionDetail({ action: { type: "openPage", url: "https://example.com/news" } }), "https://example.com/news");
+assert.equal(webSearchActionDetail({ action: { type: "findInPage", pattern: "release", url: "https://example.com/news" } }), "'release' · https://example.com/news");
 const collab = normalizeTraceItem({ type: "collabAgentToolCall", id: "a1", tool: "spawnAgent", receiverThreadIds: ["child-1"], status: "completed" });
 assert.equal(collab.kind, "agent"); assert.equal(collab.summary, "派发子 Agent"); assert.equal(activityLabel(collab, "completed"), "已协调");
 const subagent = normalizeTraceItem({ type: "subAgentActivity", id: "a2", kind: "started", agentThreadId: "child-1", agentPath: "root/child-1" }, "started");

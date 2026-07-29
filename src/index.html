@@ -149,6 +149,43 @@
           </section>
         </section>
 
+        <section id="settings-voice-page" class="settings-page settings-functional-page" hidden>
+          <header class="settings-page-header">
+            <span>GPT-LIVE</span>
+            <h1>语音</h1>
+            <p>通过 OnPeople 账户建立低延迟实时语音，并把需要工具的请求交给当前任务处理。</p>
+          </header>
+          <section class="settings-group">
+            <h2>实时语音</h2>
+            <div class="settings-card settings-live-status-card">
+              <span id="settings-live-status-dot" aria-hidden="true"></span>
+              <div><strong id="settings-live-status-title">正在检查 GPT-Live…</strong><small id="settings-live-status-copy">连接状态由 OnPeople 服务实时返回。</small></div>
+              <button id="settings-live-refresh" type="button">重新检查</button>
+            </div>
+          </section>
+          <section class="settings-group">
+            <h2>声音与麦克风</h2>
+            <div class="settings-card settings-option-list">
+              <label class="settings-option-row">
+                <span><strong>声音</strong><small>选择 GPT-Live 的回复声音</small></span>
+                <select id="settings-live-voice"><option value="cove">Cove（Codex Live）</option></select>
+              </label>
+              <button class="settings-option-row" type="button" data-settings-toggle="liveEchoCancellation" role="switch" aria-checked="true">
+                <span><strong>回声消除</strong><small>减少扬声器声音被麦克风再次收录</small></span><i></i>
+              </button>
+              <button class="settings-option-row" type="button" data-settings-toggle="liveNoiseSuppression" role="switch" aria-checked="true">
+                <span><strong>噪声抑制</strong><small>降低持续环境噪声</small></span><i></i>
+              </button>
+              <button class="settings-option-row" type="button" data-settings-toggle="liveAutoGainControl" role="switch" aria-checked="true">
+                <span><strong>自动增益</strong><small>自动平衡麦克风输入音量</small></span><i></i>
+              </button>
+            </div>
+          </section>
+          <section class="settings-group">
+            <div class="settings-live-note"><strong>语音与任务协作</strong><p>需要代码、终端、浏览器或搜索的语音请求会交给当前 OnPeople 任务处理，并显示可追踪的执行进度。</p></div>
+          </section>
+        </section>
+
         <section id="settings-personalization-page" class="settings-page settings-functional-page" hidden>
           <header class="settings-page-header">
             <span>PERSONALIZATION</span>
@@ -287,6 +324,12 @@
           <button id="new-task-window" class="new-task-window" type="button" aria-label="在新窗口中新建任务" title="在新窗口中新建任务">▱</button>
         </div>
 
+        <button id="scheduled-nav" class="scheduled-nav" type="button" aria-label="打开计划任务">
+          <span aria-hidden="true">◴</span>
+          <strong>计划任务</strong>
+          <small id="scheduled-nav-count" hidden>0</small>
+        </button>
+
         <div class="task-search">
           <input id="task-search" type="search" placeholder="搜索任务" aria-label="搜索任务" />
           <div class="task-filter" role="tablist" aria-label="任务范围">
@@ -382,6 +425,105 @@
 
       </aside>
 
+      <section id="scheduled-center" class="scheduled-center" aria-labelledby="scheduled-center-title" hidden>
+        <header class="scheduled-center-header">
+          <div>
+            <span>SCHEDULED</span>
+            <h1 id="scheduled-center-title">计划任务</h1>
+            <p>让 OnPeople 按计划处理重复工作，并集中查看最近运行。</p>
+          </div>
+          <div class="scheduled-center-actions">
+            <button id="scheduled-create-open" class="scheduled-primary" type="button">新建计划</button>
+            <button id="scheduled-center-close" class="scheduled-icon-button" type="button" aria-label="关闭计划任务">×</button>
+          </div>
+        </header>
+
+        <div id="scheduled-inbox-view" class="scheduled-center-body">
+          <section class="scheduled-inbox-hero">
+            <div>
+              <span>任务收件箱</span>
+              <strong id="scheduled-count">0 个计划</strong>
+              <p>计划会在应用运行时执行；异常和结果直接附着在对应运行记录上。</p>
+            </div>
+            <div class="scheduled-inbox-metric">
+              <small>未读运行</small>
+              <strong id="scheduled-unread-count">0</strong>
+            </div>
+          </section>
+
+          <section class="scheduled-inbox-section" aria-labelledby="scheduled-task-heading">
+            <div class="scheduled-section-heading">
+              <div><span>PLANS</span><strong id="scheduled-task-heading">任务列表</strong></div>
+            </div>
+            <div id="scheduled-task-list" class="scheduled-task-list">
+              <div class="scheduled-empty"><strong>还没有计划任务</strong><span>创建一个计划，或直接在对话中说“每天 9 点检查项目”。</span></div>
+            </div>
+          </section>
+
+          <section id="scheduled-runs-section" class="scheduled-inbox-section" aria-labelledby="scheduled-run-heading" hidden>
+            <div class="scheduled-section-heading">
+              <div><span>RECENT RUNS</span><strong id="scheduled-run-heading">最近运行</strong></div>
+              <button id="scheduled-mark-read" type="button">全部已读</button>
+            </div>
+            <div id="scheduled-run-list" class="scheduled-run-list"></div>
+          </section>
+        </div>
+
+        <div id="scheduled-create-view" class="scheduled-create-view" hidden>
+          <button id="scheduled-create-back" class="scheduled-back" type="button"><span aria-hidden="true">←</span> 返回任务列表</button>
+          <div class="scheduled-create-heading">
+            <span>NEW PLAN</span>
+            <h2>需要 OnPeople 定期完成什么？</h2>
+            <p>先描述任务并选择项目。常用周期保持简单，高级周期再使用 RRULE。</p>
+          </div>
+          <form id="scheduled-create" class="scheduled-compose-form">
+            <label class="scheduled-prompt-field">
+              <span>任务描述</span>
+              <textarea id="scheduled-prompt" rows="5" maxlength="20000" placeholder="例如：检查项目依赖和测试状态，有异常时给出处理建议。" required></textarea>
+            </label>
+            <div class="scheduled-default-fields">
+              <label>项目
+                <select id="scheduled-project" required><option value="">选择项目</option></select>
+              </label>
+              <label>执行频率
+                <select id="scheduled-kind">
+                  <option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                  <option value="interval">按间隔</option>
+                  <option value="rrule">高级周期</option>
+                </select>
+              </label>
+              <label id="scheduled-time-wrap">时间<input id="scheduled-time" type="time" value="09:00" /></label>
+              <label id="scheduled-day-wrap" hidden>星期
+                <select id="scheduled-day"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="0">周日</option></select>
+              </label>
+              <label id="scheduled-interval-wrap" hidden>间隔分钟<input id="scheduled-interval" type="number" min="1" max="43200" value="60" /></label>
+            </div>
+
+            <details id="scheduled-advanced" class="scheduled-advanced">
+              <summary><span>高级设置</span><small>RRULE、Worktree、会话、模型与权限</small></summary>
+              <div class="scheduled-advanced-grid">
+                <label class="scheduled-wide">计划名称（可选）<input id="scheduled-name" maxlength="100" placeholder="默认根据任务描述生成" /></label>
+                <label id="scheduled-rrule-wrap" class="scheduled-wide" hidden>RRULE
+                  <input id="scheduled-rrule" value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" />
+                  <small>仅在“高级周期”时使用。</small>
+                </label>
+                <label>执行空间<select id="scheduled-execution"><option value="local">当前项目</option><option value="worktree">专用 Git Worktree</option></select></label>
+                <label>会话<select id="scheduled-destination"><option value="standalone">新建后台任务</option><option value="thread">续跑当前任务</option></select></label>
+                <label>模型<input id="scheduled-model" list="model-options" placeholder="留空则继承当前模型" /></label>
+                <label>推理强度<select id="scheduled-effort"><option value="">继承当前设置</option><option value="medium">标准</option><option value="high">高</option><option value="xhigh">超高</option><option value="ultra">Ultra</option></select></label>
+                <label class="scheduled-wide">权限<select id="scheduled-permission"><option value="inherit">继承默认权限</option><option value="read-only">只读</option><option value="workspace-write">工作区可写</option><option value="danger-full-access">完全访问</option></select></label>
+              </div>
+            </details>
+
+            <footer>
+              <p>无人值守运行不会弹出审批；超出所选权限的操作会失败，并记录在最近运行中。</p>
+              <button type="submit" class="scheduled-primary">创建计划</button>
+            </footer>
+          </form>
+        </div>
+      </section>
+
       <header class="topbar">
         <div class="title-group">
           <button id="sidebar-show" class="icon-button sidebar-show" type="button" aria-label="展开侧栏">◧</button>
@@ -389,8 +531,29 @@
           <span id="thread-label">NEW THREAD</span>
         </div>
         <div class="topbar-actions">
+          <div id="task-model-picker" class="task-model-picker" hidden>
+            <button id="task-model-trigger" class="task-model-trigger" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <span id="task-model-label">选择模型</span>
+              <small id="task-effort-label">高</small>
+              <i aria-hidden="true">⌄</i>
+            </button>
+            <section id="task-model-popover" class="task-model-popover" popover="manual" role="dialog" aria-label="任务模型与推理强度" hidden>
+              <header>
+                <span>OnPeople 实时模型</span>
+                <small>来自当前账号的可用模型</small>
+              </header>
+              <div class="task-effort-section">
+                <span>推理强度</span>
+                <div id="task-effort-options" class="task-effort-options" role="group" aria-label="推理强度">
+                  <button type="button" data-reasoning-effort="medium">标准</button>
+                  <button type="button" data-reasoning-effort="high">高</button>
+                  <button type="button" data-reasoning-effort="xhigh">超高</button>
+                </div>
+              </div>
+              <div id="task-model-options" class="task-model-options" role="listbox" aria-label="可用模型"></div>
+            </section>
+          </div>
           <div id="project-actions" class="project-actions" aria-label="项目动作" hidden></div>
-          <button id="notification-center" class="notification-center" type="button" aria-label="打开通知中心" title="计划任务通知">◔<small id="notification-count" hidden>0</small></button>
           <button id="pet-toggle" class="pet-toggle" type="button" aria-label="显示桌面宠物" title="显示 OnPeople 宠物">
             <img src="../assets/onpeople-app-icon.png" alt="" />
             <span>宠物</span>
@@ -460,6 +623,29 @@
                   <span class="capability-heading">应用</span>
                   <button type="button" data-capability-action="apps"><i>⊞</i><span><strong>应用与连接器</strong><small>从 Plugins 与 MCP 管理中心安装</small></span></button>
                 </div>
+                <section id="live-call-panel" class="live-call-panel" aria-live="polite" hidden>
+                  <div class="live-call-identity">
+                    <span class="live-orb" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                    <span class="live-call-copy">
+                      <span class="live-call-title-row">
+                        <strong id="live-call-title">正在连接 GPT-Live</strong>
+                        <time id="live-call-duration" class="live-call-duration" datetime="PT0S" hidden>00:00</time>
+                      </span>
+                      <small id="live-call-status">准备实时语音…</small>
+                    </span>
+                  </div>
+                  <p id="live-call-transcript">你可以开始说话。</p>
+                  <div class="live-call-actions">
+                    <button id="live-mute" type="button" aria-pressed="false" aria-label="静音麦克风">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="3.2" width="7" height="11.5" rx="3.5"/><path d="M5.5 11.2a6.5 6.5 0 0 0 13 0M12 17.8v3M8.8 20.8h6.4"/></svg>
+                      <span id="live-mute-label">静音</span>
+                    </button>
+                    <button id="live-end" type="button" aria-label="结束实时语音">
+                      <i aria-hidden="true"></i><span>结束</span>
+                    </button>
+                  </div>
+                  <audio id="live-audio" autoplay></audio>
+                </section>
                 <textarea id="prompt" rows="3" placeholder="今天帮你做些什么？  通过＋添加文件、技能与能力"></textarea>
                 <div class="composer-bottom">
                   <button id="attach-image" type="button" class="attach-button" aria-label="添加内容和能力" title="添加内容和能力" aria-expanded="false">＋</button>
@@ -474,8 +660,13 @@
                       </label>
                     </div>
                     <div class="composer-actions">
-                      <button id="stop" type="button" class="stop-button" aria-label="停止">■</button>
-                      <button id="send" type="submit" class="send-button" aria-label="运行任务">↑</button>
+                      <button id="live-start" type="button" class="live-start-button" aria-label="开始 GPT-Live 实时语音" title="GPT-Live 实时语音">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.3" y="3" width="7.4" height="12" rx="3.7"/><path d="M5.2 11.5a6.8 6.8 0 0 0 13.6 0M12 18.3V22M8.7 22h6.6"/></svg>
+                      </button>
+                      <button id="send" type="submit" class="send-button" data-action="send" aria-label="运行任务">
+                        <span class="send-button-arrow" aria-hidden="true">↑</span>
+                        <span class="send-button-stop" aria-hidden="true">■</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -738,8 +929,7 @@
           <section class="utility-view control-view" data-view="control">
             <div class="control-tabs" role="tablist" aria-label="P0 控制中心">
               <button type="button" data-control-view="agents" hidden>Agents</button>
-              <button class="active" type="button" data-control-view="scheduled">Scheduled</button>
-              <button type="button" data-control-view="diagnostics">Diagnostics</button>
+              <button class="active" type="button" data-control-view="diagnostics">Diagnostics</button>
               <button id="control-advanced-toggle" type="button" aria-expanded="false">高级设置⌄</button>
               <select id="control-advanced-select" class="advanced-control-item" aria-label="高级控制面板" hidden>
                 <option value="">选择高级面板…</option><option value="worktrees">Worktrees</option><option value="context">Context</option><option value="policy">Policy</option><option value="config">Config</option><option value="memory">Memory</option><option value="usage">Usage</option><option value="secrets">Secrets</option><option value="hooks">Hooks</option>
@@ -872,30 +1062,7 @@
               <div id="hook-runs" class="audit-list"></div>
             </div>
 
-            <div class="control-panel active" data-control-panel="scheduled">
-              <form id="scheduled-create" class="control-form scheduled-form">
-                <div class="control-form-heading"><strong>新建计划任务</strong><span>应用运行期间自动执行</span></div>
-                <input id="scheduled-name" maxlength="100" placeholder="名称，如 每日项目巡检" />
-                <textarea id="scheduled-prompt" rows="3" maxlength="20000" placeholder="描述需要自动完成的任务…"></textarea>
-                <div class="scheduled-grid">
-                  <label>频率<select id="scheduled-kind"><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">间隔</option><option value="rrule">RRULE</option></select></label>
-                  <label id="scheduled-time-wrap">时间<input id="scheduled-time" type="time" value="09:00" /></label>
-                  <label id="scheduled-day-wrap" hidden>星期<select id="scheduled-day"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="0">周日</option></select></label>
-                  <label id="scheduled-interval-wrap" hidden>分钟<input id="scheduled-interval" type="number" min="1" max="43200" value="60" /></label>
-                  <label id="scheduled-rrule-wrap" class="scheduled-wide" hidden>RRULE<input id="scheduled-rrule" value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" /></label>
-                  <label>会话<select id="scheduled-destination"><option value="standalone">新建后台会话</option><option value="thread">续跑当前会话</option></select></label>
-                  <label>执行目录<select id="scheduled-execution"><option value="local">当前工作区</option><option value="worktree">专用 Worktree</option></select></label>
-                </div>
-                <button type="submit" class="primary-control">创建计划</button>
-                <small class="policy-explainer">可在新会话或当前会话续跑；Worktree 模式为任务保留独立分支。无人值守时不弹出审批，越界操作会失败并进入通知中心。</small>
-              </form>
-              <div class="scheduled-section-heading"><strong>计划</strong><span id="scheduled-count">0 ACTIVE</span></div>
-              <div id="scheduled-task-list" class="control-list"><span class="control-empty">还没有计划任务。</span></div>
-              <div class="scheduled-section-heading"><strong>通知中心</strong><button id="scheduled-mark-read" type="button">全部已读</button></div>
-              <div id="scheduled-run-list" class="scheduled-run-list"><span class="control-empty">还没有运行记录。</span></div>
-            </div>
-
-            <div class="control-panel" data-control-panel="diagnostics">
+            <div class="control-panel active" data-control-panel="diagnostics">
               <div class="diagnostic-hero">
                 <div><span id="diagnostic-kicker">RUNTIME HEALTH</span><strong id="diagnostic-status">正在检查…</strong><small id="diagnostic-version">—</small></div>
                 <button id="runtime-restart" type="button">重启运行时</button>
@@ -991,7 +1158,6 @@
             <input id="cloud-redeem-code" autocomplete="off" placeholder="输入兑换码" />
             <button id="cloud-redeem-submit" class="cloud-primary" type="button">兑换</button>
           </div>
-          <button id="cloud-open-console" class="cloud-secondary" type="button">账户管理</button>
           <button id="cloud-account-logout" class="cloud-secondary" type="button">退出登录</button>
         </div>
 
@@ -1108,6 +1274,7 @@
     <script src="../node_modules/dompurify/dist/purify.min.js"></script>
     <script src="../node_modules/marked/lib/marked.umd.js"></script>
     <script src="task-trace.js"></script>
+    <script src="live-delegation.js"></script>
     <script src="ui-controls.js"></script>
     <script src="renderer.js"></script>
   </body>

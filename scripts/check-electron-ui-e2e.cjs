@@ -36,7 +36,7 @@ async function run() {
   const errors = [];
   try {
     const page = await application.firstWindow();
-    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("pageerror", (error) => errors.push(error.stack || error.message));
     await page.waitForSelector("#cwd", { state: "attached" });
     await page.waitForFunction(() => document.querySelector("#cwd")?.value === "");
     assert.doesNotMatch(await page.locator("#task-list").innerText(), /Error invoking remote method|Cannot read properties of undefined/);
@@ -44,6 +44,140 @@ async function run() {
     assert.equal(await page.locator("#utility-panel").getAttribute("aria-hidden"), "true");
     assert.equal(await page.locator('[data-tool-view="browser"]').getAttribute("aria-pressed"), "false");
     assert.match(await page.locator("#prompt").getAttribute("placeholder"), /今天帮你做些什么/);
+    await page.evaluate(() => {
+      cloudAccountState = {
+        ...cloudAccountState,
+        signedIn: true,
+        modelsLive: true,
+        modelsError: null,
+        account: { email: "test@onpeople.local", balanceUSD: 10, group: { id: 3, name: "Sol" } },
+      };
+      PROVIDER_PRESETS.onpeople.models = [
+        { id: "gpt-5.6-terra", name: "gpt-5.6-terra", groupId: 4, groupName: "Terra" },
+        { id: "gpt-5.6-sol", name: "gpt-5.6-sol", groupId: 3, groupName: "Sol" },
+      ];
+      providerSelect.value = "onpeople";
+      modelInput.value = "";
+      renderModelSource("onpeople");
+      renderOnPeopleModelOptions(PROVIDER_PRESETS.onpeople.models);
+      updateProviderFields();
+    });
+    assert.equal(await page.locator("#model").inputValue(), "gpt-5.6-sol");
+    assert.equal(await page.locator("#task-model-picker").isVisible(), true);
+    assert.equal(await page.locator("#task-model-label").textContent(), "5.6 Sol");
+    assert.equal(await page.locator("#task-effort-label").textContent(), "高");
+    await page.locator("#task-model-trigger").click();
+    assert.equal(await page.locator("#task-model-popover").isVisible(), true);
+    assert.equal(await page.locator("#task-model-options [data-model-id]").count(), 2);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      cloudAccountState = {
+        ...cloudAccountState,
+        signedIn: false,
+        modelsLive: false,
+        models: [],
+        account: null,
+      };
+      PROVIDER_PRESETS.onpeople.models = [];
+      renderProvider({ type: "openai", model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1" });
+    });
+    await page.evaluate(() => {
+      const panel = document.querySelector("#live-call-panel");
+      panel.hidden = false;
+      panel.classList.add("is-connecting");
+      document.querySelector("#composer").classList.add("live-active");
+      document.querySelector("#live-call-title").textContent = "正在连接 GPT-Live";
+      document.querySelector("#live-call-status").textContent = "正在检查账户与语音权限";
+      document.querySelector("#live-call-transcript").textContent = "建立安全的实时音频连接…";
+    });
+    const livePanelBounds = await page.locator("#live-call-panel").boundingBox();
+    assert.ok(livePanelBounds.height <= 64, "GPT-Live status bar should remain compact");
+    assert.equal(await page.locator("#live-mute svg").count(), 1);
+    assert.equal(await page.locator("#live-end i").count(), 1);
+    await page.screenshot({ path: "/tmp/onpeople-electron-live-bar.png" });
+    const liveCompletionRecovery = await page.evaluate(() => {
+      const sent = [];
+      currentThreadId = "live-completion-test";
+      currentTurnStartedAt = Date.now() - 5_000;
+      setRunning(true);
+      ensureProcessFlow();
+      liveConversation = {
+        sessionId: "new-live-session",
+        dataChannel: {
+          readyState: "open",
+          send: (value) => sent.push(JSON.parse(value)),
+        },
+      };
+      pendingLiveDelegation = {
+        itemId: "delegation-from-old-session",
+        native: true,
+        source: "native",
+        text: "读取 package.json",
+        liveSessionId: "old-live-session",
+        traceId: "live-completion-recovery",
+        threadId: currentThreadId,
+        turnStarted: true,
+        waitTimer: null,
+      };
+      const recovered = reconcileCurrentThreadTerminalState({
+        threadId: currentThreadId,
+        status: "idle",
+        completedAt: Date.now(),
+        finalText: "name=internal-agent-workbench version=0.29.18",
+      });
+      return {
+        recovered,
+        running,
+        pending: pendingLiveDelegation,
+        sent,
+        flowLabel: document.querySelector(".process-flow:last-of-type .process-flow-toggle strong")?.textContent,
+        panelTitle: document.querySelector("#live-call-title")?.textContent,
+      };
+    });
+    assert.equal(liveCompletionRecovery.recovered, true);
+    assert.equal(liveCompletionRecovery.running, false);
+    assert.equal(liveCompletionRecovery.pending, null);
+    assert.equal(liveCompletionRecovery.sent.length, 0, "an old delegation must not write into a newer Live session");
+    assert.equal(liveCompletionRecovery.flowLabel, "已处理");
+    assert.equal(liveCompletionRecovery.panelTitle, "任务结果已记录");
+    const delegatedTaskSurvivesLiveEnd = await page.evaluate(() => {
+      const delegation = {
+        itemId: "delegation-in-flight",
+        native: true,
+        source: "native",
+        text: "继续执行",
+        liveSessionId: "closing-live-session",
+        traceId: "live-survives-close",
+        threadId: "live-completion-test",
+        turnStarted: true,
+        waitTimer: null,
+      };
+      pendingLiveDelegation = delegation;
+      liveConversation = {
+        sessionId: "closing-live-session",
+        callId: null,
+        dataChannel: { readyState: "closed", close() {} },
+        peerConnection: { close() {} },
+        localStream: { getTracks: () => [] },
+        durationTimer: null,
+      };
+      releaseLiveConversation();
+      const survived = pendingLiveDelegation === delegation;
+      pendingLiveDelegation = null;
+      return survived;
+    });
+    assert.equal(delegatedTaskSurvivesLiveEnd, true, "ending Live must not cancel or forget the delegated task");
+    await page.evaluate(() => {
+      currentThreadId = null;
+      currentTurnStartedAt = null;
+      liveConversation = null;
+      pendingLiveDelegation = null;
+      resetTimeline();
+      setRunning(false);
+      document.querySelector("#live-call-panel").hidden = true;
+      document.querySelector("#live-call-panel").classList.remove("is-connecting");
+      document.querySelector("#composer").classList.remove("live-active");
+    });
     const brandMarkBounds = await page.locator(".brand-mark").boundingBox();
     const welcomeMarkBounds = await page.locator(".welcome-mark").boundingBox();
     assert.ok(brandMarkBounds.width >= 30, "sidebar brand mark should be visually prominent");
@@ -54,6 +188,13 @@ async function run() {
     assert.equal(await page.locator("#settings-profile-page").isVisible(), true);
     assert.equal(await page.locator("#usage-profile-view").isVisible(), true);
     assert.equal(await page.locator(".app-sidebar > .runtime-settings").count(), 0);
+    await page.locator("#usage-profile-account").click();
+    assert.equal(await page.locator("#cloud-account-dialog").evaluate((dialog) => dialog.open), true);
+    assert.equal(await page.locator("#settings-center").isVisible(), true);
+    await page.locator("#cloud-account-close").click();
+    assert.equal(await page.locator("#cloud-account-dialog").evaluate((dialog) => dialog.open), false);
+    assert.equal(await page.locator("#settings-center").isVisible(), true);
+    assert.equal(await page.locator("#settings-profile-page").isVisible(), true);
     await page.screenshot({ path: "/tmp/onpeople-electron-profile-center.png" });
     await page.locator("[data-settings-route='general']").click();
     assert.equal(await page.locator("[data-settings-permission]").count(), 3);
@@ -120,6 +261,18 @@ async function run() {
     await page.locator("#settings-theme").selectOption("light");
     await page.locator("#settings-density").selectOption("comfortable");
     await page.locator("[data-settings-toggle='reduceMotion']").click();
+
+    await page.locator("[data-settings-route='voice']").click();
+    assert.equal(await page.locator("#settings-voice-page").isVisible(), true);
+    await page.waitForFunction(() => !document.querySelector("#settings-live-refresh")?.disabled);
+    assert.match(await page.locator("#settings-live-status-title").textContent(), /GPT-Live/);
+    await page.locator("#settings-live-voice").selectOption("cove");
+    assert.equal((await page.evaluate(() => window.workbench.getPreferences())).liveVoice, "cove");
+    await page.locator("[data-settings-toggle='liveNoiseSuppression']").click();
+    assert.equal(
+      (await page.evaluate(() => window.workbench.getPreferences())).liveNoiseSuppression,
+      false,
+    );
 
     await page.locator("[data-settings-route='personalization']").click();
     assert.equal(await page.locator("#settings-personalization-page").isVisible(), true);
@@ -242,6 +395,18 @@ async function run() {
     const surfaceBounds = await page.locator(".composer-surface").boundingBox();
     const contextBounds = await page.locator(".composer-context-row").boundingBox();
     assert.ok(attachBounds.x < sendBounds.x, "add control should sit to the left of send");
+    assert.equal(await page.locator("#stop").count(), 0, "stop and send should use one primary action");
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "send");
+    await page.evaluate(() => setRunning(true));
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "stop");
+    assert.equal(await page.locator("#send").getAttribute("aria-label"), "停止当前任务");
+    await page.locator("#prompt").fill("补充一条指令");
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "send");
+    assert.equal(await page.locator("#send").getAttribute("aria-label"), "发送补充指令");
+    await page.locator("#prompt").fill("");
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "stop");
+    await page.evaluate(() => setRunning(false));
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "send");
     assert.ok(contextBounds.y >= surfaceBounds.y + surfaceBounds.height, "workspace and permission controls should sit below the input surface");
     const permissionTrigger = page.locator(".composer-permission .op-select-trigger");
     await permissionTrigger.click();
@@ -323,8 +488,32 @@ async function run() {
     await page.locator('[data-tool-view="control"]').click();
     await page.waitForFunction(() => document.querySelector('[data-view="control"]')?.classList.contains("active"));
     assert.equal(await page.locator('[data-control-view="agents"]').isHidden(), true);
-    assert.equal(await page.locator('[data-control-panel="scheduled"]').isVisible(), true);
+    assert.equal(await page.locator('[data-control-panel="diagnostics"]').isVisible(), true);
+    assert.equal(await page.locator('[data-control-view="scheduled"]').count(), 0);
     await page.screenshot({ path: "/tmp/onpeople-electron-agents-hidden.png" });
+
+    await page.locator("#scheduled-nav").click();
+    assert.equal(await page.locator("#scheduled-center").isVisible(), true);
+    assert.equal(await page.locator("#scheduled-inbox-view").isVisible(), true);
+    assert.equal(await page.locator("#scheduled-runs-section").isHidden(), true);
+    await page.locator("#scheduled-create-open").click();
+    assert.equal(await page.locator("#scheduled-create-view").isVisible(), true);
+    assert.match(await page.locator("#scheduled-create-view").innerText(), /任务描述/);
+    assert.match(await page.locator("#scheduled-create-view").innerText(), /项目/);
+    assert.match(await page.locator("#scheduled-create-view").innerText(), /执行频率/);
+    assert.equal(await page.locator("#scheduled-advanced").getAttribute("open"), null);
+    await page.locator("#scheduled-center").screenshot({ path: "/tmp/onpeople-electron-scheduled-create.png" });
+    await page.locator("#scheduled-center-close").click();
+    assert.equal(await page.locator("#scheduled-center").isHidden(), true);
+    await page.evaluate((workspace) => {
+      document.querySelector("#cwd").value = workspace;
+    }, defaultWorkspace);
+    await page.locator("#prompt").fill("每天 9 点检查项目");
+    await page.locator("#composer").evaluate((form) => form.requestSubmit());
+    await page.waitForFunction(() => document.querySelector("#timeline")?.textContent.includes("已创建"));
+    await page.locator("#scheduled-nav").click();
+    assert.match(await page.locator("#scheduled-task-list").innerText(), /检查项目/);
+    await page.locator("#scheduled-center-close").click();
 
     await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
     await page.locator("#command-palette-search").fill("新建共享任务");
@@ -338,9 +527,7 @@ async function run() {
     await page.screenshot({ path: "/tmp/onpeople-electron-board.png" });
 
     await page.locator("#control-advanced-toggle").click();
-    const advancedTrigger = page.locator("#control-advanced-select").locator("xpath=..").locator(".op-select-trigger");
-    await advancedTrigger.click();
-    await page.locator('#onpeople-select-popover .op-select-option[data-value="policy"]').click();
+    await page.locator("#control-advanced-select").selectOption("policy");
     assert.equal(await page.locator("#control-advanced-select").inputValue(), "policy");
     assert.equal(await page.locator('[data-control-panel="policy"]').isVisible(), true);
     assert.equal(await page.locator('[data-control-view="agents"]').isHidden(), true);
@@ -395,6 +582,15 @@ async function run() {
 
     await page.screenshot({ path: "/tmp/onpeople-electron-e2e.png" });
     assert.deepEqual(errors, []);
+    if (process.platform === "darwin") {
+      await page.close();
+      const reopenedWindow = application.waitForEvent("window", { timeout: 10_000 });
+      await application.evaluate(({ app }) => app.emit("activate"));
+      const reopenedPage = await reopenedWindow;
+      await reopenedPage.waitForSelector("#new-task");
+      assert.equal(await reopenedPage.title(), "OnPeople");
+      assert.equal(await reopenedPage.locator("body").isVisible(), true);
+    }
     console.log("Electron UI E2E checks passed.");
   } finally {
     await application.close();

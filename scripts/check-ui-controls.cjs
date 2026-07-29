@@ -21,6 +21,9 @@ assert.doesNotMatch(renderer, /window\.(?:alert|confirm|prompt)\s*\(/);
 assert.doesNotMatch(petRenderer, /window\.(?:alert|confirm|prompt)\s*\(/);
 assert.match(renderer, /window\.OnPeopleUI\.confirm/);
 assert.match(petRenderer, /window\.OnPeopleUI\.confirm/);
+assert.match(renderer, /function closeCloudAccountManagement\(\)/);
+assert.match(renderer, /if \(cloudAccountDialog\.open\) return/);
+assert.match(renderer, /preserveSettings: true/);
 
 assert.match(controls, /dialog\.showModal\(\)/);
 assert.match(controls, /new MutationObserver/);

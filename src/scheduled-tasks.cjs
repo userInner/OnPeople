@@ -74,6 +74,16 @@ function normalizeExecution(value = {}) {
   return { mode: value.mode === "worktree" ? "worktree" : "local", ref: String(value.ref || "HEAD").trim().slice(0, 200) || "HEAD" };
 }
 
+function normalizeRuntime(value = {}) {
+  const effort = ["medium", "high", "xhigh", "ultra"].includes(value.reasoningEffort) ? value.reasoningEffort : null;
+  const permission = ["read-only", "workspace-write", "danger-full-access"].includes(value.permission) ? value.permission : "inherit";
+  return {
+    model: String(value.model || "").trim().slice(0, 200) || null,
+    reasoningEffort: effort,
+    permission,
+  };
+}
+
 class ScheduledTaskStore {
   constructor(filePath) {
     this.filePath = filePath;
@@ -93,6 +103,7 @@ class ScheduledTaskStore {
         ...task,
         destination: task.destination || { mode: "standalone", threadId: null },
         execution: task.execution || { mode: "local", ref: "HEAD" },
+        runtime: normalizeRuntime(task.runtime),
         worktreePath: task.worktreePath || null,
       })) : [];
       return { tasks, runs: Array.isArray(value.runs) ? value.runs : [] };
@@ -117,8 +128,9 @@ class ScheduledTaskStore {
     const schedule = normalizeSchedule(input.schedule, now);
     const destination = normalizeDestination(input.destination);
     const execution = normalizeExecution(input.execution);
+    const runtime = normalizeRuntime(input.runtime);
     const timestamp = now.toISOString();
-    const task = { id: crypto.randomUUID(), name, prompt, cwd, schedule, destination, execution, worktreePath: null, enabled: true, createdAt: timestamp, updatedAt: timestamp, nextRunAt: nextRunAt(schedule, now), lastRunAt: null };
+    const task = { id: crypto.randomUUID(), name, prompt, cwd, schedule, destination, execution, runtime, worktreePath: null, enabled: true, createdAt: timestamp, updatedAt: timestamp, nextRunAt: nextRunAt(schedule, now), lastRunAt: null };
     this.state.tasks.unshift(task); this.save(); return { ...task };
   }
 
@@ -131,6 +143,7 @@ class ScheduledTaskStore {
     if (patch.schedule) task.schedule = normalizeSchedule(patch.schedule, now);
     if (patch.destination) task.destination = normalizeDestination(patch.destination);
     if (patch.execution) task.execution = normalizeExecution(patch.execution);
+    if (patch.runtime) task.runtime = normalizeRuntime(patch.runtime);
     if (Object.hasOwn(patch, "worktreePath")) task.worktreePath = patch.worktreePath ? path.resolve(String(patch.worktreePath)) : null;
     task.updatedAt = now.toISOString();
     task.nextRunAt = task.enabled ? nextRunAt(task.schedule, now) : null;
@@ -148,7 +161,7 @@ class ScheduledTaskStore {
 
   beginRun(task, now = new Date()) {
     task.lastRunAt = now.toISOString(); task.nextRunAt = nextRunAt(task.schedule, now); task.updatedAt = now.toISOString();
-    const run = { id: crypto.randomUUID(), taskId: task.id, taskName: task.name, status: "running", startedAt: now.toISOString(), completedAt: null, threadId: null, turnId: null, cwd: task.worktreePath || task.cwd, execution: task.execution, destination: task.destination, summary: "", error: null, read: true };
+    const run = { id: crypto.randomUUID(), taskId: task.id, taskName: task.name, status: "running", startedAt: now.toISOString(), completedAt: null, threadId: null, turnId: null, cwd: task.worktreePath || task.cwd, execution: task.execution, destination: task.destination, runtime: task.runtime, summary: "", error: null, read: true };
     this.state.runs.unshift(run); this.state.runs = this.state.runs.slice(0, 200); this.save(); return run;
   }
 
@@ -164,4 +177,4 @@ class ScheduledTaskStore {
   }
 }
 
-module.exports = { ScheduledTaskStore, nextRunAt, normalizeDestination, normalizeExecution, normalizeSchedule };
+module.exports = { ScheduledTaskStore, nextRunAt, normalizeDestination, normalizeExecution, normalizeRuntime, normalizeSchedule };

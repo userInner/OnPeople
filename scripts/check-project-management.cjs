@@ -10,6 +10,7 @@ const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
 const html = fs.readFileSync(path.join(root, "src/index.html"), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const packageMac = fs.readFileSync(path.join(root, "scripts", "package-mac.cjs"), "utf8");
+const packageCheck = fs.readFileSync(path.join(root, "scripts", "check-packaged-app.cjs"), "utf8");
 
 for (const channel of ["projects:update", "projects:reveal", "projects:archive-tasks"]) assert.ok(main.includes(channel), `missing ${channel}`);
 for (const method of ["updateProject", "revealProject", "archiveProjectTasks"]) assert.ok(preload.includes(method), `missing ${method}`);
@@ -110,5 +111,8 @@ assert.ok(packageJson.scripts["package:win"].includes("scripts/package-win-insta
 assert.ok(packageJson.scripts["package:win:portable"].includes("scripts/package-win.cjs"), "Windows portable packaging must remain available for diagnostics");
 assert.ok(packageMac.includes("sign-mac.cjs"), "macOS packages must be signed after assembly");
 assert.ok(packageMac.includes("check-packaged-app.cjs"), "macOS packages must verify production dependencies");
+assert.match(main, /app\.on\("activate"[\s\S]*showPrimaryWindow\(\)/, "macOS activation must restore the workbench window");
+assert.match(packageCheck, /LSBackgroundOnly/, "packaged app checks must reject background-only macOS bundles");
+assert.match(packageCheck, /LSUIElement/, "packaged app checks must reject menu-bar-only macOS bundles");
 assert.ok(packageMac.includes("^/(dist[^/]*|release[^/]*"), "macOS packaging must exclude only root build trees");
 console.log("project management checks passed");

@@ -139,6 +139,17 @@ function jwtAccount(token) {
   }
 }
 
+function preferredModelId(models = [], activeGroupId = null, requestedModelId = "") {
+  const catalog = Array.isArray(models) ? models.filter((model) => String(model?.id || "").trim()) : [];
+  const requested = String(requestedModelId || "").trim();
+  if (requested && catalog.some((model) => String(model.id) === requested)) return requested;
+  const activeGroupModel = catalog.find((model) => (
+    activeGroupId != null
+    && Number(model.groupId) === Number(activeGroupId)
+  ));
+  return String(activeGroupModel?.id || catalog[0]?.id || "");
+}
+
 class CloudAccountClient {
   constructor({ filePath, safeStorage, defaultServiceUrl = DEFAULT_SERVICE_URL, onCredentialsChanged = null }) {
     this.filePath = filePath;
@@ -507,8 +518,30 @@ class CloudAccountClient {
         name: String(group.name || group.id),
         platform: group.platform || null,
         models: parseGroupModels(group),
+        allowLive: Boolean(group.allow_live ?? group.allowLive),
       })),
       activeGroupId: stored.group?.id ?? null,
+    };
+  }
+
+  async liveCredentials() {
+    if (!this.accessToken()) throw new Error("请先登录 OnPeople 账号，再使用 GPT-Live");
+    const groups = await this.availableGroups();
+    const liveGroup = groups.find((group) => (
+      String(group.platform || "").toLowerCase() === "openai"
+      && Boolean(group.allow_live ?? group.allowLive)
+    ));
+    if (!liveGroup) throw new Error("当前 OnPeople 账号没有开放 GPT-Live 分组");
+    const credential = await this.ensureDesktopApiKeyForGroup(liveGroup);
+    return {
+      baseUrl: this.apiBaseUrl(),
+      apiKey: credential.key,
+      group: {
+        id: Number(liveGroup.id || 0) || null,
+        name: String(liveGroup.name || liveGroup.id || "GPT-Live"),
+        platform: String(liveGroup.platform || ""),
+        allowLive: true,
+      },
     };
   }
 
@@ -559,6 +592,24 @@ class CloudAccountClient {
     if (!group) throw new Error(`模型 ${id} 所属分组当前不可用`);
     const selected = await this.ensureDesktopApiKeyForGroup(group);
     return { baseUrl: this.apiBaseUrl(), apiKey: selected.key, group };
+  }
+
+  async resolveModelId(modelId = "") {
+    const state = await this.status();
+    if (!state.modelsLive) {
+      throw new Error(state.modelsError || "无法从 OnPeople 服务读取实时模型列表，请刷新后重试");
+    }
+    const requested = String(modelId || "").trim();
+    if (requested && !state.models.some((model) => model.id === requested)) {
+      throw new Error(`当前 OnPeople 账号未开放模型：${requested}`);
+    }
+    const resolved = preferredModelId(
+      state.models,
+      state.account?.group?.id,
+      requested,
+    );
+    if (!resolved) throw new Error("OnPeople 服务当前没有返回可用模型");
+    return { modelId: resolved, state };
   }
 
   async status() {
@@ -755,5 +806,6 @@ module.exports = {
   DEFAULT_SERVICE_URL,
   DESKTOP_KEY_NAME,
   normalizeServiceUrl,
+  preferredModelId,
   unwrapManagementResponse,
 };

@@ -7,6 +7,7 @@ const {
   CloudAccountClient,
   DEFAULT_SERVICE_URL,
   normalizeServiceUrl,
+  preferredModelId,
 } = require("../src/cloud-account.cjs");
 
 const index = fs.readFileSync(path.join(__dirname, "..", "src", "index.html"), "utf8");
@@ -18,7 +19,13 @@ assert.match(index, /<select id="onpeople-model"/, "OnPeople models must use the
 assert.doesNotMatch(index, /<option value="sub2api"/, "Sub2API must not appear as a duplicate Router provider");
 assert.doesNotMatch(renderer, /^\s*sub2api:\s*\{/m, "renderer must not keep a hard-coded Sub2API model fallback");
 assert.doesNotMatch(mainSource, /^\s*sub2api:\s*\{/m, "main process must not register Sub2API as a duplicate Router provider");
+assert.match(mainSource, /const DEFAULT_CLOUD_SERVICE_URL = "https:\/\/sub2api\.aibro\.vip";/, "OnPeople cloud traffic must default to the public service");
+assert.match(mainSource, /store\.type === "sub2api"/, "legacy Sub2API provider settings must migrate to OnPeople");
+assert.match(mainSource, /entry\.activeType === "sub2api"/, "legacy task provider settings must migrate to OnPeople");
 assert.match(renderer, /未使用本地回退/, "model discovery failure must be explicit in the UI");
+assert.match(renderer, /preferredOnPeopleModel\(models, selected\)/, "a new task must select its live OnPeople default instead of clearing the model");
+assert.match(mainSource, /cloudAccount\.resolveModelId\(\)/, "execution must resolve an empty OnPeople model from the live Sub2API catalog");
+assert.match(mainSource, /settings\.type !== "onpeople" && settings\.apiKey/, "dynamic OnPeople group credentials must not require a manual Router save");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-sub2api-account-"));
 const safeStorage = {
@@ -33,6 +40,14 @@ function success(response, data) {
 }
 
 async function main() {
+  assert.equal(preferredModelId([
+    { id: "gpt-5.6-terra", groupId: 4 },
+    { id: "gpt-5.6-sol", groupId: 3 },
+  ], 3), "gpt-5.6-sol", "a new task should inherit the active Sub2API group's first live model");
+  assert.equal(preferredModelId([
+    { id: "gpt-5.6-terra", groupId: 4 },
+    { id: "gpt-5.6-sol", groupId: 3 },
+  ], 3, "gpt-5.6-terra"), "gpt-5.6-terra", "an available task selection must be preserved");
   assert.throws(() => normalizeServiceUrl("http://example.com"), /HTTPS/);
   assert.equal(normalizeServiceUrl("http://127.0.0.1:8080/v1"), "http://127.0.0.1:8080");
   const legacyFile = path.join(root, "legacy-account.json");
@@ -188,6 +203,7 @@ async function main() {
           name: "OpenAI",
           platform: "openai",
           status: "active",
+          allow_live: true,
           models_list_config: { enabled: true, models: ["gpt-5.6-terra"] },
         },
         { id: 3, name: "统一模型", platform: "composite", status: "active", models: "gpt-5.6-sol" },
@@ -255,6 +271,8 @@ async function main() {
     assert.equal(status.modelsLive, true);
     assert.equal(status.models[0].id, "gpt-5.6-sol");
     assert.equal(status.models.some((model) => model.id === "gpt-5.6-terra"), true, "the account model catalog must include every available group");
+    assert.equal((await client.resolveModelId()).modelId, "gpt-5.6-sol");
+    assert.equal((await client.resolveModelId("gpt-5.6-terra")).modelId, "gpt-5.6-terra");
     assert.deepEqual(client.providerCredentials("gpt-5.6-sol"), {
       baseUrl: `${serviceUrl}/v1`,
       apiKey: "sk-onpeople-desktop",
@@ -264,10 +282,15 @@ async function main() {
       baseUrl: `${serviceUrl}/v1`,
       apiKey: "sk-onpeople-openai",
     });
+    const liveCredentials = await client.liveCredentials();
+    assert.equal(liveCredentials.baseUrl, `${serviceUrl}/v1`);
+    assert.equal(liveCredentials.apiKey, "sk-onpeople-openai");
+    assert.equal(liveCredentials.group.allowLive, true);
 
     const groups = await client.listGroups();
     assert.equal(groups.activeGroupId, 3);
     assert.deepEqual(groups.groups.find((group) => group.id === 4).models, ["gpt-5.6-terra"]);
+    assert.equal(groups.groups.find((group) => group.id === 4).allowLive, true);
     const switched = await client.selectGroup(4);
     assert.equal(switched.account.group.id, 4);
     assert.deepEqual(switched.models.map((model) => model.id), ["gpt-5.6-terra", "gpt-5.6-sol"]);
