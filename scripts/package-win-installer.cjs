@@ -3,8 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-if (process.platform !== "win32") {
-  throw new Error("The NSIS installer must be built on Windows so Electron and node-pty target win32.");
+const crossBuild = process.platform === "darwin" && process.env.ONPEOPLE_ALLOW_CROSS_WINDOWS_BUILD === "1";
+if (process.platform !== "win32" && !crossBuild) {
+  throw new Error("The NSIS installer must be built on Windows, or on macOS with the explicit package:win:cross workflow.");
 }
 
 const root = path.resolve(__dirname, "..");
@@ -17,6 +18,15 @@ const version = require("../package.json").version;
 
 assert.equal(runtimeManifest.target?.platform, "win32", "Staged Codex/Cua Driver runtimes must target Windows");
 assert.equal(runtimeManifest.target?.arch, "x64", "Staged Codex/Cua Driver runtimes must target x64");
+if (crossBuild) {
+  for (const file of [
+    "node_modules/node-pty/prebuilds/win32-x64/pty.node",
+    "node_modules/node-pty/prebuilds/win32-x64/conpty.node",
+    "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
+  ]) {
+    assert.ok(fs.existsSync(path.join(root, file)), `Cross-build requires the Windows node-pty prebuild: ${file}`);
+  }
+}
 
 function runBuilder(args) {
   execFileSync(process.execPath, [builderCli, "--config", "electron-builder.yml", ...args, "--publish", "never"], {
@@ -36,8 +46,9 @@ execFileSync(process.execPath, [path.join(__dirname, "check-packaged-app.cjs"), 
 });
 
 const installedRuntimeRoot = path.join(unpackedRoot, "resources", ".embedded-runtime");
-for (const file of ["bin\\codex.exe", "bin\\cua-driver.exe", "manifest.json"]) {
-  assert.ok(fs.existsSync(path.join(installedRuntimeRoot, file)), `Embedded Windows runtime is missing: ${file}`);
+for (const file of [["bin", "codex.exe"], ["bin", "cua-driver.exe"], ["manifest.json"]]) {
+  const installedFile = path.join(installedRuntimeRoot, ...file);
+  assert.ok(fs.existsSync(installedFile), `Embedded Windows runtime is missing: ${file.join("/")}`);
 }
 
 runBuilder(["--win", "nsis", "--x64"]);

@@ -118,6 +118,7 @@ const codexMultiAgent = createCodexMultiAgentAdapter({ version: embeddedCodexVer
 const MCP_SCRIPT = path.join(__dirname, "browser-mcp.cjs");
 const ARTIFACT_MCP_SCRIPT = path.join(__dirname, "artifact-mcp.cjs");
 const IMAGE_GENERATION_MCP_SCRIPT = path.join(__dirname, "image-generation-mcp.cjs");
+const CUA_MCP_SCRIPT = path.join(__dirname, "cua-driver-mcp.cjs");
 const COMPUTER_USE_TOOLS = [
   "check_permissions",
   "start_session",
@@ -198,7 +199,12 @@ const CAPABILITY_INSTRUCTIONS = {
 
 function execFileAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, ...options }, (error, stdout, stderr) => {
+    execFile(command, args, {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      ...options,
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
       if (error) {
         error.stdout = stdout;
         error.stderr = stderr;
@@ -207,6 +213,12 @@ function execFileAsync(command, args, options = {}) {
     });
   });
 }
+
+function spawnHiddenProcess(command, args, options = {}) {
+  return spawn(command, args, { ...options, windowsHide: true });
+}
+
+let managedCuaDriverProcess = null;
 
 function findCodexBinary() {
   return resolveCodexBinary({ runtimeRoot: EMBEDDED_RUNTIME_ROOT });
@@ -260,13 +272,30 @@ async function prepareComputerUse(binary, driverApp) {
   if (!binary || status.running) return status;
   try {
     if (process.platform === "darwin" && !driverApp) return status;
+    const isWindows = process.platform === "win32";
     const command = process.platform === "darwin" ? "/usr/bin/open" : binary;
-    const args = process.platform === "darwin" ? ["-n", "-g", driverApp, "--args", "serve"] : ["serve"];
-    const child = spawn(command, args, {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
+    const args = process.platform === "darwin"
+      ? ["-n", "-g", driverApp, "--args", "serve"]
+      : isWindows ? ["serve", "--embedded"] : ["serve"];
+    const child = spawnHiddenProcess(command, args, {
+      detached: !isWindows,
+      stdio: isWindows ? ["pipe", "ignore", "ignore"] : "ignore",
+      env: {
+        ...process.env,
+        ...(isWindows ? {
+          CUA_DRIVER_EMBEDDED: "1",
+          CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
+        } : {}),
+      },
     });
+    if (isWindows) {
+      managedCuaDriverProcess = child;
+      const clearManagedProcess = () => {
+        if (managedCuaDriverProcess === child) managedCuaDriverProcess = null;
+      };
+      child.once("error", clearManagedProcess);
+      child.once("exit", clearManagedProcess);
+    }
     child.unref();
   } catch (error) {
     return { ...status, message: `无法启动内嵌 Cua Driver: ${error.message}` };
@@ -304,7 +333,7 @@ class AppServerClient extends EventEmitter {
     });
     fs.mkdirSync(DEFAULT_CWD, { recursive: true });
     const providerSettings = readProviderSettings();
-    this.process = spawn(this.binary, ["app-server", "--listen", "stdio://"], {
+    this.process = spawnHiddenProcess(this.binary, ["app-server", "--listen", "stdio://"], {
       cwd: DEFAULT_CWD,
       env: {
         ...process.env,
@@ -1666,7 +1695,10 @@ function scheduleRuntimeRestart(reason) {
 
 async function restoreActiveThread(client, threadId) {
   if (!threadId) return;
-  const { settings, modelProvider, model } = providerContextForThread(threadId);
+  const providerContext = providerContextForThread(threadId);
+  const settings = await providerSettingsForExecution(providerContext.settings);
+  const modelProvider = PROVIDERS[settings.type].protocol === "local" ? settings.type : "onpeople";
+  const model = settings.model || null;
   const policy = readP0Settings().policy;
   const result = await client.request("thread/resume", {
     threadId, cwd: null, model, modelProvider,
@@ -2046,8 +2078,7 @@ async function runScheduledTask(task) {
     const runtime = task.runtime || {};
     let providerContext = providerContextForThread(task.destination?.threadId || null, runtime.model ? { model: runtime.model } : null);
     if (providerContext.settings.type === "onpeople") {
-      const executableSettings = await providerSettingsForExecution(providerContext.settings, { refresh: true });
-      invalidateProviderSettingsCaches();
+      const executableSettings = await providerSettingsForExecution(providerContext.settings);
       providerContext = {
         settings: executableSettings,
         modelProvider: "onpeople",
@@ -2486,8 +2517,14 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
   }
   if (cuaDriverBinary && computerUseStatus.running) {
     config.mcp_servers.computer_use = {
-      command: cuaDriverBinary,
-      args: computerUseMcpArgs(),
+      command: process.execPath,
+      args: [CUA_MCP_SCRIPT],
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        ONPEOPLE_CUA_DRIVER_BINARY: cuaDriverBinary,
+        ONPEOPLE_CUA_DRIVER_ARGS: JSON.stringify(computerUseMcpArgs()),
+        ...(process.platform === "win32" ? { CUA_DRIVER_EMBEDDED: "1" } : {}),
+      },
       startup_timeout_sec: 15,
       tool_timeout_sec: 120,
       enabled_tools: COMPUTER_USE_TOOLS,
@@ -2539,7 +2576,7 @@ async function ensureThread(payload = {}) {
     model: payload.model,
     baseUrl: payload.baseUrl,
     apiKey: payload.apiKey,
-  }, { refresh: true, saved: savedSettings });
+  }, { saved: savedSettings });
   if (settings.type !== "onpeople" && settings.apiKey && settings.apiKey !== savedSettings.apiKey) {
     throw new Error("请先保存模型配置，让 Agent 安全加载新的 API Key");
   }
@@ -2651,7 +2688,7 @@ async function ensureRuntimeThread(threadId, options = {}) {
   setThreadLifecycle(id, "restoring");
   const promise = (async () => {
     const providerContext = providerContextForThread(id);
-    const settings = await providerSettingsForExecution(providerContext.settings, { refresh: true });
+    const settings = await providerSettingsForExecution(providerContext.settings);
     const modelProvider = PROVIDERS[settings.type].protocol === "local" ? settings.type : "onpeople";
     const model = settings.model || null;
     const policy = readP0Settings().policy;
@@ -2756,7 +2793,7 @@ async function startAgentTurn(payload) {
   const settings = await providerSettingsForExecution({
     ...authoritativeProvider,
     model: payload.model || authoritativeProvider.model,
-  }, { refresh: authoritativeProvider.type === "onpeople" });
+  });
   if (settings.type === "onpeople") await applyThreadProvider(threadId, settings);
   const images = Array.isArray(payload.images) ? payload.images : [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 20) : [];
@@ -3885,7 +3922,7 @@ async function openEditorLocation(payload = {}) {
   const candidates = editorCandidates({ file, line, column });
   const selected = candidates.find((item) => isExecutable(item.binary));
   if (selected) {
-    const child = spawn(selected.binary, selected.args, { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawnHiddenProcess(selected.binary, selected.args, { detached: true, stdio: "ignore" });
     child.unref();
     return { opened: true, file, line, editor: path.basename(selected.binary) };
   }
@@ -4247,7 +4284,7 @@ function publicHunks(result) {
 
 function applyGitPatch(root, args, patch) {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", root, "apply", ...args, "-"], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawnHiddenProcess("git", ["-C", root, "apply", ...args, "-"], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -4665,6 +4702,7 @@ function createWorkbenchWindow(threadId = null) {
       webviewTag: true,
     },
   });
+  if (process.platform !== "darwin") window.setMenuBarVisibility(false);
   const webContentsId = window.webContents.id;
   taskWindows.add(window);
   bindWindowThread(webContentsId, threadId || null);
@@ -4749,6 +4787,10 @@ function handleOnPeopleUrl(rawUrl) {
 }
 
 function installApplicationMenu() {
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
   const sendPalette = (_item, window) => window?.webContents?.send("app:command-palette");
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: "appMenu", submenu: [
@@ -4811,7 +4853,14 @@ async function createWindow() {
     fallbackBinding: openSourceProfileImporter,
     targetPartition: EMBEDDED_BROWSER_PARTITION,
   });
-  modelGateway = new ModelGateway();
+  modelGateway = new ModelGateway(null, {
+    refreshSettings: async (settings) => {
+      if (settings?.type !== "onpeople") return null;
+      const refreshed = await providerSettingsForExecution(settings, { refresh: true });
+      invalidateProviderSettingsCaches();
+      return { ...refreshed, protocol: settings.protocol };
+    },
+  });
   await modelGateway.start();
 
   await mainWindow.loadFile(path.join(__dirname, "index.html"));
@@ -5865,6 +5914,12 @@ app.on("before-quit", (event) => {
     return;
   }
   quitting = true;
+  if (managedCuaDriverProcess) {
+    const child = managedCuaDriverProcess;
+    managedCuaDriverProcess = null;
+    try { child.stdin?.end(); } catch {}
+    try { child.kill(); } catch {}
+  }
   statusTray?.destroy();
   statusTray = null;
   for (const [, session] of terminalProcesses) {

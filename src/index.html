@@ -591,6 +591,17 @@
               <span class="welcome-mark" aria-hidden="true"><img src="../assets/onpeople-app-icon.png" alt="" /></span>
               <h1>今天要完成什么？</h1>
               <p>让本机 Agent 操作代码、终端、浏览器或桌面应用。任务执行会留在可审阅的轨迹里。</p>
+              <section id="welcome-account-cta" class="welcome-account-cta" aria-label="开始使用 OnPeople 账号">
+                <div class="welcome-account-copy">
+                  <span>ONPEOPLE ACCOUNT</span>
+                  <strong>登录或创建账号</strong>
+                  <small>使用内置模型与额度；自己的 Router 和本地模型仍可独立使用。</small>
+                </div>
+                <div class="welcome-account-actions">
+                  <button id="welcome-account-login" type="button">登录</button>
+                  <button id="welcome-account-register" class="primary" type="button">注册账号</button>
+                </div>
+              </section>
               <div class="capability-row" aria-label="可用能力">
                 <span>Plan</span><span>Goals</span><span>Browser</span><span>Computer Use</span>
               </div>
@@ -1138,27 +1149,44 @@
             </div>
             <button id="cloud-register-submit" class="cloud-primary" type="button">注册 OnPeople</button>
           </div>
-          <details class="cloud-advanced">
-            <summary>连接设置</summary>
-            <label>模型服务地址<input id="cloud-service-url" type="url" spellcheck="false" value="https://sub2api.aibro.vip" /></label>
-          </details>
+          <input id="cloud-service-url" type="hidden" value="https://sub2api.aibro.vip" />
         </div>
 
         <div id="cloud-signed-in" class="cloud-auth-view" hidden>
-          <div class="cloud-wallet">
-            <div><span id="cloud-account-email">—</span><strong id="cloud-wallet-balance">$0.00</strong><small>可用余额</small></div>
+          <div id="cloud-wallet" class="cloud-wallet">
+            <div class="cloud-wallet-copy">
+              <div class="cloud-wallet-meta">
+                <span id="cloud-account-email">—</span>
+                <em id="cloud-wallet-state">账户已连接</em>
+              </div>
+              <strong id="cloud-wallet-balance">$0.00</strong>
+              <small id="cloud-wallet-caption">可用余额</small>
+            </div>
             <button id="cloud-account-refresh" type="button" aria-label="刷新余额" title="刷新余额">↻</button>
           </div>
-          <div class="cloud-source-line"><i></i><span id="cloud-route-label">OnPeople 模型</span><b>按任务选择</b></div>
-          <label class="cloud-group-row">默认模型分组
-            <select id="cloud-group-select"><option value="">正在读取分组…</option></select>
-          </label>
-          <div class="cloud-package-heading"><strong>兑换额度</strong><span>充值到当前账户</span></div>
-          <div class="cloud-redeem-row">
-            <input id="cloud-redeem-code" autocomplete="off" placeholder="输入兑换码" />
-            <button id="cloud-redeem-submit" class="cloud-primary" type="button">兑换</button>
+
+          <section class="cloud-account-section" aria-labelledby="cloud-model-group-title">
+            <div class="cloud-source-line"><i></i><span id="cloud-route-label">OnPeople 模型</span><b>按任务选择</b></div>
+            <label id="cloud-model-group-title" class="cloud-group-row">默认模型分组
+              <select id="cloud-group-select"><option value="">正在读取分组…</option></select>
+            </label>
+          </section>
+
+          <section class="cloud-account-section cloud-redeem-card" aria-labelledby="cloud-redeem-title">
+            <div class="cloud-package-heading">
+              <div><strong id="cloud-redeem-title">兑换额度</strong><small>输入兑换码后，余额会自动刷新。</small></div>
+              <span>当前账户</span>
+            </div>
+            <div class="cloud-redeem-row">
+              <input id="cloud-redeem-code" autocomplete="off" placeholder="输入兑换码" aria-label="兑换码" />
+              <button id="cloud-redeem-submit" class="cloud-primary" type="button">兑换</button>
+            </div>
+          </section>
+
+          <div class="cloud-account-footer">
+            <span>自带 Router 不受账户余额影响</span>
+            <button id="cloud-account-logout" class="cloud-secondary" type="button">退出当前账户</button>
           </div>
-          <button id="cloud-account-logout" class="cloud-secondary" type="button">退出登录</button>
         </div>
 
         <p id="cloud-account-status" class="cloud-account-status"><i></i><span>登录是可选的；自定义 Router 和本地模型保持独立可用。</span></p>

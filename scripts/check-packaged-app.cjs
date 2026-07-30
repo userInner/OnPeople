@@ -20,8 +20,11 @@ assert.ok(usesAsar || fs.existsSync(packagePath), `Packaged application payload 
 const manifest = usesAsar
   ? JSON.parse(asar.extractFile(asarPath, "package.json").toString("utf8"))
   : JSON.parse(fs.readFileSync(packagePath, "utf8"));
+const packagedFiles = usesAsar
+  ? asar.listPackage(asarPath).map((entry) => entry.replace(/^\/+/, ""))
+  : [];
 const packageEntries = usesAsar
-  ? asar.listPackage(asarPath).map((entry) => entry.replace(/^\/+/, "").split("/")[0]).filter(Boolean)
+  ? packagedFiles.map((entry) => entry.split("/")[0]).filter(Boolean)
   : fs.readdirSync(appRoot);
 const accidentalBuildTrees = [...new Set(packageEntries)].filter((name) => /^(dist|release)(?:-|$)/.test(name));
 assert.deepEqual(accidentalBuildTrees, [], `Previous build trees leaked into the app: ${accidentalBuildTrees.join(", ")}`);
@@ -37,14 +40,37 @@ const dependencyProbe = `
   require(require.resolve("rrule", { paths: [appRoot] }));
   require(require.resolve("node-pty", { paths: [appRoot] }));
 `;
-execFileSync(executablePath, [
-  "-e",
-  dependencyProbe,
-], {
-  env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-  stdio: "ignore",
-  windowsHide: true,
-});
+const canExecutePackagedBinary = isMacBundle || process.platform === "win32";
+if (canExecutePackagedBinary) {
+  execFileSync(executablePath, [
+    "-e",
+    dependencyProbe,
+  ], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+} else {
+  assert.ok(fs.existsSync(executablePath), `Packaged Windows executable is missing: ${executablePath}`);
+  assert.equal(fs.readFileSync(executablePath).subarray(0, 2).toString("ascii"), "MZ", "Windows executable must be a PE file");
+  for (const dependency of Object.keys(manifest.dependencies || {})) {
+    const packageManifest = `node_modules/${dependency}/package.json`;
+    assert.ok(
+      usesAsar ? packagedFiles.includes(packageManifest) : fs.existsSync(path.join(appRoot, packageManifest)),
+      `Packaged dependency is missing: ${dependency}`,
+    );
+  }
+  for (const file of [
+    "node_modules/node-pty/prebuilds/win32-x64/pty.node",
+    "node_modules/node-pty/prebuilds/win32-x64/conpty.node",
+    "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
+  ]) {
+    assert.ok(
+      fs.existsSync(path.join(resourcesRoot, "app.asar.unpacked", file)),
+      `Packaged Windows native dependency is missing: ${file}`,
+    );
+  }
+}
 
 if (isMacBundle) {
   const infoPlist = path.join(appPath, "Contents", "Info.plist");

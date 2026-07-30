@@ -102,6 +102,16 @@ function resolveCuaRuntime() {
     ));
     return appBundle ? { kind: "app", source: appBundle } : null;
   }
+  const bundleSource = process.env.CUA_DRIVER_BUNDLE_SOURCE;
+  const bundleExecutable = bundleSource
+    ? path.join(bundleSource, executableName("cua-driver", targetPlatform))
+    : null;
+  if (
+    bundleSource
+    && (targetPlatform === "win32" ? fs.existsSync(bundleExecutable) : isExecutable(bundleExecutable))
+  ) {
+    return { kind: "directory", source: bundleSource };
+  }
   const source = firstExecutable([
     process.env.CUA_DRIVER_BINARY_SOURCE,
     process.env.CUA_DRIVER_PATH,
@@ -115,7 +125,9 @@ function sha256(file) {
 
 const cuaRuntime = resolveCuaRuntime();
 if (!cuaRuntime) {
-  const variable = targetPlatform === "darwin" ? "CUA_DRIVER_APP_SOURCE" : "CUA_DRIVER_BINARY_SOURCE";
+  const variable = targetPlatform === "darwin"
+    ? "CUA_DRIVER_APP_SOURCE"
+    : "CUA_DRIVER_BUNDLE_SOURCE or CUA_DRIVER_BINARY_SOURCE";
   throw new Error(`Cua Driver runtime for ${targetPlatform}-${targetArch} was not found. Set ${variable}.`);
 }
 
@@ -132,6 +144,9 @@ try {
   if (cuaRuntime.kind === "app") {
     cuaTarget = path.join(stageRoot, "CuaDriver.app");
     fs.cpSync(cuaRuntime.source, cuaTarget, { recursive: true, preserveTimestamps: true });
+  } else if (cuaRuntime.kind === "directory") {
+    cuaTarget = path.join(stageRoot, "bin");
+    fs.cpSync(cuaRuntime.source, cuaTarget, { recursive: true, preserveTimestamps: true });
   } else {
     cuaTarget = path.join(stageRoot, "bin", executableName("cua-driver", targetPlatform));
     fs.copyFileSync(cuaRuntime.source, cuaTarget);
@@ -140,7 +155,9 @@ try {
 
   const cuaExecutable = cuaRuntime.kind === "app"
     ? path.join(cuaTarget, "Contents", "MacOS", "cua-driver")
-    : cuaTarget;
+    : cuaRuntime.kind === "directory"
+      ? path.join(cuaTarget, executableName("cua-driver", targetPlatform))
+      : cuaTarget;
   const manifest = {
     createdAt: new Date().toISOString(),
     target: { platform: targetPlatform, arch: targetArch },
@@ -153,7 +170,7 @@ try {
       cuaDriver: {
         kind: cuaRuntime.kind,
         source: cuaRuntime.source,
-        target: path.relative(stageRoot, cuaTarget),
+        target: path.relative(stageRoot, cuaExecutable),
         sha256: sha256(cuaExecutable),
       },
     },

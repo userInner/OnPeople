@@ -51,10 +51,19 @@ assert.deepEqual(resolveTerminalShell({
   findCommand: () => null,
 }), { command: "C:\\Windows\\System32\\cmd.exe", args: ["/Q"], kind: "cmd" });
 
-assert.deepEqual(workbenchWindowOptions("win32"), {});
+assert.deepEqual(workbenchWindowOptions("win32"), {
+  autoHideMenuBar: true,
+  titleBarStyle: "hidden",
+  titleBarOverlay: {
+    color: "#ffffff",
+    symbolColor: "#69717a",
+    height: 42,
+  },
+});
 assert.equal(workbenchWindowOptions("darwin").titleBarStyle, "hiddenInset");
+assert.deepEqual(workbenchWindowOptions("linux"), { autoHideMenuBar: true });
 assert.deepEqual(computerUseMcpArgs("darwin"), ["mcp", "--host-bundle-id", "com.userinner.onpeople"]);
-assert.deepEqual(computerUseMcpArgs("win32"), ["mcp"]);
+assert.deepEqual(computerUseMcpArgs("win32"), ["mcp", "--embedded"]);
 
 const windowsEditors = editorCandidates({
   platform: "win32",

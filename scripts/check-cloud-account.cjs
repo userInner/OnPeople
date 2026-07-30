@@ -24,8 +24,28 @@ assert.match(mainSource, /store\.type === "sub2api"/, "legacy Sub2API provider s
 assert.match(mainSource, /entry\.activeType === "sub2api"/, "legacy task provider settings must migrate to OnPeople");
 assert.match(renderer, /未使用本地回退/, "model discovery failure must be explicit in the UI");
 assert.match(renderer, /preferredOnPeopleModel\(models, selected\)/, "a new task must select its live OnPeople default instead of clearing the model");
+assert.match(
+  renderer,
+  /await selectModelSource\("onpeople"\);\s+await persistTaskModelSelection\(\);/,
+  "email sign-in must apply the live OnPeople model to the current task or new-task default",
+);
 assert.match(mainSource, /cloudAccount\.resolveModelId\(\)/, "execution must resolve an empty OnPeople model from the live Sub2API catalog");
 assert.match(mainSource, /settings\.type !== "onpeople" && settings\.apiKey/, "dynamic OnPeople group credentials must not require a manual Router save");
+assert.doesNotMatch(
+  mainSource,
+  /providerSettingsForExecution\(providerContext\.settings,\s*\{\s*refresh:\s*true\s*\}\)/,
+  "normal task restore and scheduled execution must reuse encrypted model credentials",
+);
+assert.doesNotMatch(
+  mainSource,
+  /refresh:\s*authoritativeProvider\.type\s*===\s*"onpeople"/,
+  "normal turns must not refresh OnPeople credentials before every send",
+);
+assert.match(
+  mainSource,
+  /refreshSettings:\s*async\s*\(settings\)[\s\S]*providerSettingsForExecution\(settings,\s*\{\s*refresh:\s*true\s*\}\)/,
+  "the model gateway must refresh OnPeople credentials after an upstream authentication failure",
+);
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-sub2api-account-"));
 const safeStorage = {
@@ -113,6 +133,7 @@ async function main() {
 
   let createdKey = false;
   let createdOpenAiKey = false;
+  let keyCreationCount = 0;
   let provisioningBlocked = false;
   let modelDiscoveryBlocked = false;
   let redeemed = false;
@@ -210,6 +231,7 @@ async function main() {
       ]);
     }
     if (url.pathname === "/api/v1/keys" && request.method === "POST") {
+      keyCreationCount += 1;
       const openAi = Number(body.group_id) === 4;
       if (openAi) {
         assert.match(body.name, /^OnPeople Desktop/);
@@ -282,6 +304,13 @@ async function main() {
       baseUrl: `${serviceUrl}/v1`,
       apiKey: "sk-onpeople-openai",
     });
+    const restoredClient = new CloudAccountClient({
+      filePath: path.join(root, "account.json"),
+      safeStorage,
+    });
+    assert.equal((await restoredClient.ensureModelAccess("gpt-5.6-sol")).apiKey, "sk-onpeople-desktop");
+    assert.equal((await restoredClient.ensureModelAccess("gpt-5.6-terra")).apiKey, "sk-onpeople-openai");
+    assert.equal(keyCreationCount, 2, "restoring model credentials must reuse existing group keys");
     const liveCredentials = await client.liveCredentials();
     assert.equal(liveCredentials.baseUrl, `${serviceUrl}/v1`);
     assert.equal(liveCredentials.apiKey, "sk-onpeople-openai");

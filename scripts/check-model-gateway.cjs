@@ -32,6 +32,9 @@ function collect(url, body) {
 }
 
 async function main() {
+  let refreshCount = 0;
+  let staleRequestCount = 0;
+  let refreshedRequestCount = 0;
   const upstream = http.createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
@@ -39,7 +42,14 @@ async function main() {
       const authorization = request.headers.authorization || "";
       const requestBody = JSON.parse(raw);
       if (request.url === "/v1/responses") {
-        assert.equal(authorization.endsWith("gamma"), true);
+        if (authorization.endsWith("stale")) {
+          staleRequestCount += 1;
+          response.writeHead(401, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "invalid key" } }));
+          return;
+        }
+        if (authorization.endsWith("refreshed")) refreshedRequestCount += 1;
+        else assert.equal(authorization.endsWith("gamma"), true);
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\ndata: [DONE]\n\n');
         return;
@@ -54,7 +64,13 @@ async function main() {
     });
   });
   const port = await listen(upstream);
-  const gateway = new ModelGateway();
+  const gateway = new ModelGateway(null, {
+    refreshSettings: async (settings) => {
+      refreshCount += 1;
+      assert.equal(settings.apiKey, "stale");
+      return { ...settings, apiKey: "refreshed" };
+    },
+  });
   await gateway.start();
   const baseUrl = `http://127.0.0.1:${port}/v1`;
   assert.throws(
@@ -64,14 +80,21 @@ async function main() {
   const routeA = gateway.registerRoute("thread-a", { baseUrl, apiKey: "alpha" });
   const routeB = gateway.registerRoute("thread-b", { baseUrl, apiKey: "beta" });
   const routeC = gateway.registerRoute("thread-c", { baseUrl, apiKey: "gamma", protocol: "responses" });
+  const routeD = gateway.registerRoute("thread-d", {
+    type: "onpeople",
+    baseUrl,
+    apiKey: "stale",
+    protocol: "responses",
+  });
   const requestBody = {
     model: "test",
     input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] }],
   };
-  const [a, b, c] = await Promise.all([
+  const [a, b, c, d] = await Promise.all([
     collect(`${routeA}/responses`, requestBody),
     collect(`${routeB}/responses`, requestBody),
     collect(`${routeC}/responses`, requestBody),
+    collect(`${routeD}/responses`, requestBody),
   ]);
   assert.equal(a.status, 200);
   assert.equal(b.status, 200);
@@ -82,6 +105,15 @@ async function main() {
   assert.match(a.raw, /"total_tokens":4/);
   assert.equal(c.status, 200);
   assert.match(c.raw, /response\.completed/);
+  assert.equal(d.status, 200);
+  assert.equal(refreshCount, 1);
+  assert.equal(staleRequestCount, 1);
+  assert.equal(refreshedRequestCount, 1);
+  const reused = await collect(`${routeD}/responses`, requestBody);
+  assert.equal(reused.status, 200);
+  assert.equal(refreshCount, 1, "a refreshed route must reuse the repaired credential");
+  assert.equal(staleRequestCount, 1);
+  assert.equal(refreshedRequestCount, 2);
   gateway.stop();
   upstream.close();
   process.stdout.write("model gateway checks passed\n");

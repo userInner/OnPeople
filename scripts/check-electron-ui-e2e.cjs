@@ -44,6 +44,7 @@ async function run() {
     assert.equal(await page.locator("#utility-panel").getAttribute("aria-hidden"), "true");
     assert.equal(await page.locator('[data-tool-view="browser"]').getAttribute("aria-pressed"), "false");
     assert.match(await page.locator("#prompt").getAttribute("placeholder"), /今天帮你做些什么/);
+    await page.waitForFunction(() => typeof cloudAccountState !== "undefined");
     await page.evaluate(() => {
       cloudAccountState = {
         ...cloudAccountState,
@@ -182,6 +183,36 @@ async function run() {
     const welcomeMarkBounds = await page.locator(".welcome-mark").boundingBox();
     assert.ok(brandMarkBounds.width >= 30, "sidebar brand mark should be visually prominent");
     assert.ok(welcomeMarkBounds.width >= 58, "welcome mark should anchor the empty state");
+    assert.equal(await page.locator("#welcome-account-cta").isVisible(), true);
+    assert.equal(await page.locator("#cloud-account-label").textContent(), "登录或注册");
+    await page.screenshot({ path: "/tmp/onpeople-electron-account-entry.png" });
+    await page.locator("#welcome-account-register").click();
+    assert.equal(await page.locator("#cloud-account-dialog").evaluate((dialog) => dialog.open), true);
+    assert.equal(await page.locator("[data-cloud-auth-mode='register']").getAttribute("aria-selected"), "true");
+    assert.equal(await page.locator("#cloud-register-fields").isVisible(), true);
+    await page.evaluate(() => startCloudRegistrationCooldown(60));
+    assert.equal(await page.locator("#cloud-register-code").isDisabled(), true);
+    assert.match(await page.locator("#cloud-register-code").textContent(), /^重新发送 \d+s$/);
+    await page.evaluate(() => {
+      cloudRegistrationCooldownEndsAt = Date.now() - 1;
+      renderCloudRegistrationCooldown();
+    });
+    assert.equal(await page.locator("#cloud-register-code").isDisabled(), false);
+    assert.equal(await page.locator("#cloud-register-code").textContent(), "发送验证码");
+    await page.locator("#cloud-account-close").click();
+    assert.equal(await page.locator("#cloud-account-dialog").evaluate((dialog) => dialog.open), false);
+    await page.locator("#cloud-account-open").click();
+    assert.equal(await page.locator("#cloud-account-dialog").evaluate((dialog) => dialog.open), true);
+    assert.equal(await page.locator("[data-cloud-auth-mode='login']").getAttribute("aria-selected"), "true");
+    await page.locator("#cloud-account-close").click();
+    await page.evaluate(() => {
+      cloudAccountState = {
+        ...cloudAccountState,
+        signedIn: true,
+        account: { email: "test@onpeople.local", balanceUSD: 10, group: { id: 3, name: "Sol" } },
+      };
+      document.querySelector("#welcome-account-cta").hidden = true;
+    });
     await page.locator("#cloud-account-open").click();
     assert.equal(await page.locator("#settings-center").isVisible(), true);
     assert.equal(await page.locator("#app-shell").getAttribute("aria-hidden"), "true");
@@ -450,8 +481,7 @@ async function run() {
     await page.waitForTimeout(250);
     await page.screenshot({ path: "/tmp/onpeople-electron-utility-hidden.png" });
 
-    await page.locator("#cloud-account-open").click();
-    await page.locator("[data-settings-route='configuration']").click();
+    await page.evaluate(() => openSettingsCenter("configuration"));
     assert.equal(await page.locator("#settings-runtime-page").isVisible(), true);
     assert.equal(await page.locator("details.runtime-settings").getAttribute("open"), "");
     await page.screenshot({ path: "/tmp/onpeople-electron-runtime-settings.png" });

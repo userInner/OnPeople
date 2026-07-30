@@ -1683,9 +1683,15 @@ function addTraceError(label, message) {
   return upsertTraceItem({ type: "error", label, message, status: "failed" }, "failed", { open: true });
 }
 
+function syncWelcomeAccountCta() {
+  const accountCta = $("#welcome-account-cta");
+  if (accountCta) accountCta.hidden = Boolean(cloudAccountState.signedIn && cloudAccountState.account);
+}
+
 function resetTimeline() {
   discardProcessFlow();
   timeline.innerHTML = initialTimeline;
+  syncWelcomeAccountCta();
   pendingUserMessages.clear();
   activeAgentMessage = null;
   traceCards.clear();
@@ -1737,7 +1743,10 @@ function renderThreadHistory(thread) {
     finishProcessFlow("completed");
     renderingThreadHistory = false;
   }
-  if (!timeline.children.length) timeline.innerHTML = initialTimeline;
+  if (!timeline.children.length) {
+    timeline.innerHTML = initialTimeline;
+    syncWelcomeAccountCta();
+  }
   scrollTimelineToBottom(true);
   requestAnimationFrame(() => timeline.classList.remove("instant-scroll"));
 }
@@ -2545,15 +2554,45 @@ async function selectModelSource(source) {
   await selectProviderType(type);
 }
 
-function setCloudStatus(message, error = false) {
+function setCloudStatus(message, tone = false) {
   const indicator = document.createElement("i");
   const copy = document.createElement("span");
   copy.textContent = message;
   cloudAccountStatus.replaceChildren(indicator, copy);
-  cloudAccountStatus.classList.toggle("error", error);
+  const statusTone = tone === true ? "error" : String(tone || "");
+  cloudAccountStatus.classList.toggle("error", statusTone === "error");
+  cloudAccountStatus.classList.toggle("warning", statusTone === "warning");
 }
 
 let cloudAuthMode = "login";
+let cloudRegistrationCooldownTimer = null;
+let cloudRegistrationCooldownEndsAt = 0;
+
+function renderCloudRegistrationCooldown() {
+  const button = $("#cloud-register-code");
+  const secondsRemaining = Math.max(0, Math.ceil((cloudRegistrationCooldownEndsAt - Date.now()) / 1_000));
+  if (secondsRemaining > 0) {
+    button.disabled = true;
+    button.textContent = `重新发送 ${secondsRemaining}s`;
+    return;
+  }
+  cloudRegistrationCooldownEndsAt = 0;
+  if (cloudRegistrationCooldownTimer) {
+    window.clearInterval(cloudRegistrationCooldownTimer);
+    cloudRegistrationCooldownTimer = null;
+  }
+  button.disabled = false;
+  button.textContent = "发送验证码";
+}
+
+function startCloudRegistrationCooldown(seconds = 60) {
+  const duration = Math.min(600, Math.max(1, Math.ceil(Number(seconds) || 60)));
+  cloudRegistrationCooldownEndsAt = Date.now() + duration * 1_000;
+  if (cloudRegistrationCooldownTimer) window.clearInterval(cloudRegistrationCooldownTimer);
+  renderCloudRegistrationCooldown();
+  cloudRegistrationCooldownTimer = window.setInterval(renderCloudRegistrationCooldown, 250);
+}
+
 function setCloudAuthMode(mode = "login", { focus = false } = {}) {
   cloudAuthMode = mode === "register" ? "register" : "login";
   const registering = cloudAuthMode === "register";
@@ -2579,7 +2618,23 @@ function setCloudAuthMode(mode = "login", { focus = false } = {}) {
 function cloudErrorMessage(error) {
   return String(error?.message || error || "Sub2API 请求失败")
     .replace(/^Error invoking remote method '[^']+':\s*(?:[A-Za-z]+Error:\s*)?/, "")
-    .replace(/Sub2API/g, "OnPeople 服务");
+    .replace(/Sub2API/g, "OnPeople 服务")
+    .replace(/Insufficient account balance[.;；]?/gi, "当前账户余额不足。")
+    .replace(/\s*未使用本地回退[。.；;]*/g, "");
+}
+
+function cloudModelsStatus(state) {
+  const rawError = String(state?.modelsError || "");
+  if (/Insufficient account balance/i.test(rawError)) {
+    return {
+      message: "当前账户余额不足。输入兑换码补充额度后即可使用 OnPeople 模型；自带 Router 不受影响。",
+      tone: "warning",
+    };
+  }
+  return {
+    message: `${cloudErrorMessage(rawError || "实时模型列表读取失败")}；没有使用旧模型回退。`,
+    tone: "error",
+  };
 }
 
 const usdBalanceFormat = new Intl.NumberFormat(undefined, {
@@ -2659,13 +2714,23 @@ function renderCloudAccount(state = cloudAccountState) {
     $("#cloud-account-description").textContent = "全部可用模型按任务独立选择，分组凭据会自动匹配。";
   }
   $("#cloud-service-url").value = cloudAccountState.serviceUrl || "https://sub2api.aibro.vip";
-  $("#cloud-account-label").textContent = "个人资料";
+  const accountOpen = $("#cloud-account-open");
+  $("#cloud-account-label").textContent = signedIn ? "个人资料" : "登录或注册";
   $("#cloud-account-balance").textContent = signedIn
     ? `${cloudAccountState.account.email} · ${formatSub2APIBalance(cloudAccountState.account.balanceUSD)}`
-    : "未登录 · Router 仍可用";
+    : "使用 OnPeople 模型";
+  accountOpen.setAttribute("aria-label", signedIn ? "打开个人资料" : "登录或注册 OnPeople");
+  syncWelcomeAccountCta();
   if (signedIn) {
     $("#cloud-account-email").textContent = cloudAccountState.account.email;
-    $("#cloud-wallet-balance").textContent = formatSub2APIBalance(cloudAccountState.account.balanceUSD);
+    const balance = Number(cloudAccountState.account.balanceUSD || 0);
+    const balanceEmpty = balance <= 0;
+    $("#cloud-wallet-balance").textContent = formatSub2APIBalance(balance);
+    $("#cloud-wallet").classList.toggle("is-empty", balanceEmpty);
+    $("#cloud-wallet-state").textContent = balanceEmpty ? "需要补充额度" : "账户已连接";
+    $("#cloud-wallet-caption").textContent = balanceEmpty
+      ? "当前无法调用 OnPeople 内置模型"
+      : "可用余额";
     const group = cloudAccountState.account.group;
     $("#cloud-route-label").textContent = group?.name
       ? group.name
@@ -2690,7 +2755,7 @@ function renderCloudAccount(state = cloudAccountState) {
         ? (models.length
           ? `已从 OnPeople 服务实时读取 ${models.length} 个模型`
           : "OnPeople 服务当前没有返回可用模型")
-        : `${cloudAccountState.modelsError || "实时模型列表读取失败"}；未使用本地回退`;
+        : cloudModelsStatus(cloudAccountState).message;
     updateProviderFields();
   }
   renderModelSource(modelSourceForProvider(providerSelect.value));
@@ -2703,9 +2768,12 @@ async function refreshCloudAccount({ quiet = false } = {}) {
     renderCloudAccount(state);
     if (state.signedIn) {
       if (!quiet) {
-        setCloudStatus(state.modelsLive
-          ? `已从 OnPeople 服务实时同步 ${state.models?.length || 0} 个模型。`
-          : `${state.modelsError || "实时模型列表读取失败"}；没有使用旧模型回退。`, !state.modelsLive);
+        if (state.modelsLive) {
+          setCloudStatus(`已从 OnPeople 服务实时同步 ${state.models?.length || 0} 个模型。`);
+        } else {
+          const status = cloudModelsStatus(state);
+          setCloudStatus(status.message, status.tone);
+        }
       }
     } else if (!quiet) {
       setCloudStatus("登录是可选的；自定义 Router 和本地模型保持独立可用。");
@@ -2902,8 +2970,8 @@ async function openUsageProfile() {
   }
 }
 
-function openCloudAccountManagement() {
-  if (!cloudAccountState.signedIn) setCloudAuthMode("login");
+function openCloudAccountManagement(mode = "login") {
+  if (!cloudAccountState.signedIn) setCloudAuthMode(mode);
   if (!cloudAccountDialog.open) cloudAccountDialog.showModal();
   void refreshCloudAccount().catch(() => {});
 }
@@ -5972,7 +6040,13 @@ document.addEventListener("keydown", (event) => {
 });
 
 $("#cloud-account-open").addEventListener("click", () => {
-  void openUsageProfile();
+  if (cloudAccountState.signedIn) void openUsageProfile();
+  else openCloudAccountManagement("login");
+});
+timeline.addEventListener("click", (event) => {
+  const accountAction = event.target.closest("#welcome-account-login, #welcome-account-register");
+  if (!accountAction) return;
+  openCloudAccountManagement(accountAction.id === "welcome-account-register" ? "register" : "login");
 });
 $("#settings-close").addEventListener("click", closeSettingsCenter);
 $("#settings-nav").addEventListener("click", (event) => {
@@ -6214,16 +6288,23 @@ $("#cloud-group-select").addEventListener("change", async (event) => {
 });
 async function finishCloudSignIn(state) {
   renderCloudAccount(state);
-  if (pendingCloudSourceSelection) {
-    cloudAccountDialog.close();
+  const continuePendingSelection = pendingCloudSourceSelection;
+  if (continuePendingSelection) cloudAccountDialog.close();
+  if (state.modelsLive && state.models?.length) {
     await selectModelSource("onpeople");
-    providerStatus.textContent = state.modelsLive
-      ? "已登录 OnPeople；请选择实时模型并应用到当前任务"
-      : `${state.modelsError || "实时模型列表读取失败"}；未使用本地回退`;
+    await persistTaskModelSelection();
+    providerStatus.textContent = currentThreadId
+      ? "已登录 OnPeople，并应用到当前任务"
+      : "已登录 OnPeople，并设为新任务默认";
+  } else if (continuePendingSelection) {
+    providerStatus.textContent = cloudModelsStatus(state).message;
   }
-  setCloudStatus(state.modelsLive
-    ? `登录成功，实时发现 ${state.models?.length || 0} 个模型。`
-    : `${state.modelsError || "实时模型列表读取失败"}；未使用本地回退。`, !state.modelsLive);
+  if (state.modelsLive) {
+    setCloudStatus(`登录成功，实时发现 ${state.models?.length || 0} 个模型。`);
+  } else {
+    const status = cloudModelsStatus(state);
+    setCloudStatus(status.message, status.tone);
+  }
 }
 
 $("#cloud-login").addEventListener("click", async () => {
@@ -6255,18 +6336,21 @@ $("#cloud-password").addEventListener("keydown", (event) => {
 $("#cloud-register-code").addEventListener("click", async () => {
   const button = $("#cloud-register-code");
   button.disabled = true;
+  button.textContent = "发送中…";
   setCloudStatus("正在发送注册验证码…");
   try {
     const result = await window.workbench.sendCloudRegistrationCode({
       email: $("#cloud-email").value.trim(),
       serviceUrl: $("#cloud-service-url").value.trim(),
     });
+    const countdown = Math.ceil(Number(result?.countdown) || 60);
+    startCloudRegistrationCooldown(countdown);
     $("#cloud-code").focus();
-    setCloudStatus(result?.countdown ? `验证码已发送，${result.countdown} 秒后可重发。` : "验证码已发送，请检查邮箱。");
+    setCloudStatus(`验证码已发送，请检查邮箱。${countdown} 秒后可重新发送。`);
   } catch (error) {
     setCloudStatus(cloudErrorMessage(error), true);
-  } finally {
     button.disabled = false;
+    button.textContent = "发送验证码";
   }
 });
 

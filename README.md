@@ -129,6 +129,15 @@ $env:CUA_DRIVER_BINARY_SOURCE = "C:\path\to\cua-driver.exe"
 npm run package:win
 ```
 
+On an Apple Silicon Mac, the same NSIS installer can be cross-built without
+GitHub Actions when the official Windows Cua Driver binary is supplied. This
+path uses the Windows `node-pty` prebuilds shipped by the dependency and never
+reuses the macOS native module:
+
+```bash
+CUA_DRIVER_BUNDLE_SOURCE=/absolute/path/to/extracted-windows-driver npm run package:win:cross
+```
+
 The Windows build recompiles `node-pty` for Electron, stages `codex.exe` and `cua-driver.exe`, builds an unpacked application for package verification, and then creates an NSIS installer:
 
 ```text

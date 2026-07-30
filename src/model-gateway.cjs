@@ -296,8 +296,9 @@ async function consumeSse(readable, onData) {
 }
 
 class ModelGateway {
-  constructor(getFallbackSettings = null) {
+  constructor(getFallbackSettings = null, { refreshSettings = null } = {}) {
     this.getFallbackSettings = getFallbackSettings;
+    this.refreshSettings = typeof refreshSettings === "function" ? refreshSettings : null;
     this.routes = new Map();
     this.server = null;
     this.url = null;
@@ -327,6 +328,31 @@ class ModelGateway {
     if (url === "/v1/responses" && this.getFallbackSettings) return this.getFallbackSettings();
     const match = /^\/routes\/([^/]+)\/v1\/responses(?:\?.*)?$/.exec(url || "");
     return match ? this.routes.get(decodeURIComponent(match[1])) || null : null;
+  }
+
+  async fetchUpstream(settings, pathname, body, signal) {
+    const request = () => fetch(`${settings.baseUrl.replace(/\/$/, "")}${pathname}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream, application/json",
+        ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}),
+      },
+      body,
+      signal,
+    });
+    let upstream = await request();
+    if (upstream.status !== 401 || !this.refreshSettings) return upstream;
+    let refreshed;
+    try {
+      refreshed = await this.refreshSettings({ ...settings });
+    } catch {
+      return upstream;
+    }
+    if (!refreshed?.apiKey) return upstream;
+    try { await upstream.body?.cancel(); } catch {}
+    Object.assign(settings, refreshed);
+    return request();
   }
 
   async start() {
@@ -359,16 +385,12 @@ class ModelGateway {
     try {
       const body = await readJson(request);
       if (settings.protocol === "responses") {
-        const upstream = await fetch(`${settings.baseUrl.replace(/\/$/, "")}/responses`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "text/event-stream, application/json",
-            ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}),
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+        const upstream = await this.fetchUpstream(
+          settings,
+          "/responses",
+          JSON.stringify(body),
+          controller.signal,
+        );
         response.writeHead(upstream.status, {
           "content-type": upstream.headers.get("content-type") || "application/json",
           "cache-control": upstream.headers.get("cache-control") || "no-cache",
@@ -379,16 +401,12 @@ class ModelGateway {
         response.end();
         return;
       }
-      const upstream = await fetch(`${settings.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "text/event-stream, application/json",
-          ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}),
-        },
-        body: JSON.stringify(toChatRequest(body, true)),
-        signal: controller.signal,
-      });
+      const upstream = await this.fetchUpstream(
+        settings,
+        "/chat/completions",
+        JSON.stringify(toChatRequest(body, true)),
+        controller.signal,
+      );
       if (!upstream.ok) {
         const raw = await upstream.text();
         let parsed;

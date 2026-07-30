@@ -130,17 +130,30 @@ function resolveTerminalShell({
 }
 
 function workbenchWindowOptions(platform = process.platform) {
-  if (platform !== "darwin") return {};
-  return {
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
-  };
+  if (platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: { x: 16, y: 16 },
+    };
+  }
+  if (platform === "win32") {
+    return {
+      autoHideMenuBar: true,
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: "#ffffff",
+        symbolColor: "#69717a",
+        height: 42,
+      },
+    };
+  }
+  return { autoHideMenuBar: true };
 }
 
 function computerUseMcpArgs(platform = process.platform) {
   return platform === "darwin"
     ? ["mcp", "--host-bundle-id", "com.userinner.onpeople"]
-    : ["mcp"];
+    : ["mcp", "--embedded"];
 }
 
 function editorCandidates({
