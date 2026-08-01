@@ -183,7 +183,7 @@ runtimeSettingsPanel.open = true;
 $("#settings-runtime-host").append(runtimeSettingsPanel);
 
 const PROVIDER_PRESETS = {
-  onpeople: { model: "", baseUrl: "https://sub2api.aibro.vip/v1", vision: true, protocol: "OnPeople Responses API", models: [] },
+  onpeople: { model: "", baseUrl: "https://api.aibro.vip/v1", vision: true, protocol: "OnPeople Responses API", models: [] },
   openai: { model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1", vision: true, protocol: "Responses API" },
   deepseek: { model: "deepseek-v4-pro", baseUrl: "https://api.deepseek.com", vision: false, protocol: "内嵌 Chat 适配" },
   minimax: { model: "MiniMax-M2.7", baseUrl: "https://api.minimaxi.com/v1", vision: true, protocol: "内嵌 Chat 适配" },
@@ -236,7 +236,7 @@ const browserTabs = new Map();
 const browserTaskGroups = new Map();
 let cloudAccountState = {
   signedIn: false,
-  serviceUrl: "https://sub2api.aibro.vip",
+  serviceUrl: "https://api.aibro.vip",
   account: null,
   models: [],
   modelsLive: false,
@@ -2713,7 +2713,7 @@ function renderCloudAccount(state = cloudAccountState) {
     $("#cloud-account-title").textContent = "OnPeople 账号";
     $("#cloud-account-description").textContent = "全部可用模型按任务独立选择，分组凭据会自动匹配。";
   }
-  $("#cloud-service-url").value = cloudAccountState.serviceUrl || "https://sub2api.aibro.vip";
+  $("#cloud-service-url").value = cloudAccountState.serviceUrl || "https://api.aibro.vip";
   const accountOpen = $("#cloud-account-open");
   $("#cloud-account-label").textContent = signedIn ? "个人资料" : "登录或注册";
   $("#cloud-account-balance").textContent = signedIn

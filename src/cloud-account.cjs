@@ -4,11 +4,12 @@ const path = require("node:path");
 const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 const DESKTOP_KEY_NAME = "OnPeople Desktop";
-const DEFAULT_SERVICE_URL = "https://sub2api.aibro.vip";
+const DEFAULT_SERVICE_URL = "https://api.aibro.vip";
 const ACCOUNT_SCHEMA_VERSION = 4;
-const LEGACY_LOCAL_SERVICE_URLS = new Set([
+const LEGACY_SERVICE_URLS = new Set([
   "http://127.0.0.1:8080",
   "http://127.0.0.1:8787",
+  "https://sub2api.aibro.vip",
 ]);
 
 function normalizeServiceUrl(value) {
@@ -170,7 +171,7 @@ class CloudAccountClient {
       catch { legacyUrl = this.defaultServiceUrl; }
       const normalized = {
         schemaVersion: ACCOUNT_SCHEMA_VERSION,
-        serviceUrl: LEGACY_LOCAL_SERVICE_URLS.has(legacyUrl) ? this.defaultServiceUrl : legacyUrl,
+        serviceUrl: LEGACY_SERVICE_URLS.has(legacyUrl) ? this.defaultServiceUrl : legacyUrl,
         encryptedAccessToken: String(stored.encryptedAccessToken || ""),
         encryptedRefreshToken: String(stored.encryptedRefreshToken || ""),
         encryptedApiKey: String(stored.encryptedApiKey || ""),

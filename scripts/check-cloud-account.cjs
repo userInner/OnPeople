@@ -19,7 +19,7 @@ assert.match(index, /<select id="onpeople-model"/, "OnPeople models must use the
 assert.doesNotMatch(index, /<option value="sub2api"/, "Sub2API must not appear as a duplicate Router provider");
 assert.doesNotMatch(renderer, /^\s*sub2api:\s*\{/m, "renderer must not keep a hard-coded Sub2API model fallback");
 assert.doesNotMatch(mainSource, /^\s*sub2api:\s*\{/m, "main process must not register Sub2API as a duplicate Router provider");
-assert.match(mainSource, /const DEFAULT_CLOUD_SERVICE_URL = "https:\/\/sub2api\.aibro\.vip";/, "OnPeople cloud traffic must default to the public service");
+assert.match(mainSource, /const DEFAULT_CLOUD_SERVICE_URL = "https:\/\/api\.aibro\.vip";/, "OnPeople cloud traffic must default to the public API service");
 assert.match(mainSource, /store\.type === "sub2api"/, "legacy Sub2API provider settings must migrate to OnPeople");
 assert.match(mainSource, /entry\.activeType === "sub2api"/, "legacy task provider settings must migrate to OnPeople");
 assert.match(renderer, /未使用本地回退/, "model discovery failure must be explicit in the UI");
@@ -77,6 +77,19 @@ async function main() {
   }));
   const migratedClient = new CloudAccountClient({ filePath: legacyFile, safeStorage });
   assert.equal(migratedClient.serviceUrl(), DEFAULT_SERVICE_URL);
+  const legacyProductionFile = path.join(root, "legacy-production-account.json");
+  fs.writeFileSync(legacyProductionFile, JSON.stringify({
+    schemaVersion: 4,
+    serviceUrl: "https://sub2api.aibro.vip",
+    encryptedAccessToken: Buffer.from("encrypted:production-access").toString("base64"),
+    encryptedRefreshToken: Buffer.from("encrypted:production-refresh").toString("base64"),
+    encryptedApiKey: Buffer.from("encrypted:production-api-key").toString("base64"),
+  }));
+  const migratedProductionClient = new CloudAccountClient({ filePath: legacyProductionFile, safeStorage });
+  assert.equal(migratedProductionClient.serviceUrl(), DEFAULT_SERVICE_URL);
+  assert.equal(migratedProductionClient.accessToken(), "production-access");
+  assert.equal(migratedProductionClient.refreshToken(), "production-refresh");
+  assert.equal(migratedProductionClient.apiKey(), "production-api-key");
 
   const customFile = path.join(root, "custom-account.json");
   fs.writeFileSync(customFile, JSON.stringify({

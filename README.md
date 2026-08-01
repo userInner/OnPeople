@@ -207,7 +207,7 @@ Testers do not need Node.js, npm, Codex CLI, ChatGPT, or Cua Driver. They still 
 | MiniMax | `https://api.minimaxi.com/v1` / `MiniMax-M2.7` | Embedded Chat Completions adapter | Enabled; choose a vision-capable model for understanding attachments |
 | Kimi | `https://api.moonshot.cn/v1` / `kimi-k2.6` | Embedded Chat Completions adapter | Yes |
 | Grok / xAI | `https://api.x.ai/v1` / `grok-4.5` | Responses API | Yes |
-| Sub2API | `https://sub2api.aibro.vip/v1` / `gpt-5.6-sol` | Responses API | Yes |
+| Sub2API | `https://api.aibro.vip/v1` / `gpt-5.6-sol` | Responses API | Yes |
 
 Base URLs and model IDs remain editable because enterprise gateways, regional endpoints, and model availability can differ.
 The Sub2API preset includes `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` as initial selectable models.
@@ -221,7 +221,7 @@ After login, OnPeople creates or reuses its dedicated API Key, prefers an availa
 
 Registration uses Sub2API's own email verification API. Existing users sign in with their Sub2API email and password. The account panel can redeem a Sub2API code or open the full Sub2API console; every task can still independently switch to a third-party Router or local model.
 
-The desktop app defaults to `https://sub2api.aibro.vip`; users can change this in the login panel. Set `SUB2API_URL` to override the packaged/runtime default. See [`services/cloud/README.md`](services/cloud/README.md) for the required routes and deployment notes.
+The desktop app defaults to `https://api.aibro.vip`; users can change this in the login panel. Set `SUB2API_URL` to override the packaged/runtime default. See [`services/cloud/README.md`](services/cloud/README.md) for the required routes and deployment notes.
 
 ### Image generation
 

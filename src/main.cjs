@@ -156,7 +156,7 @@ const DEFAULT_CWD = process.env.INTERNAL_AGENT_WORKSPACE || path.join(os.homedir
 const TASK_WORKSPACES_ROOT = path.join(DEFAULT_CWD, "Workspaces");
 const START_URL = process.argv.find((value) => value.startsWith("--start-url="))?.slice("--start-url=".length) || null;
 const SMOKE_PROMPT = process.argv.find((value) => value.startsWith("--smoke-prompt="))?.slice("--smoke-prompt=".length) || null;
-const DEFAULT_CLOUD_SERVICE_URL = "https://sub2api.aibro.vip";
+const DEFAULT_CLOUD_SERVICE_URL = "https://api.aibro.vip";
 const LIVE_API_KEY_OVERRIDE = String(process.env.ONPEOPLE_LIVE_API_KEY || "").trim();
 const PROVIDERS = {
   onpeople: { name: "OnPeople", protocol: "responses", baseUrl: `${DEFAULT_CLOUD_SERVICE_URL.replace(/\/$/, "").replace(/\/api\/v1$/, "").replace(/\/v1$/, "")}/v1`, model: "", vision: true },
