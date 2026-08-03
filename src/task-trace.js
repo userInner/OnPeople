@@ -71,6 +71,52 @@
     return item.query || item.text || "";
   }
 
+  function toolInputText(item = {}) {
+    return text(item.arguments || item.input || item.params || item.command || "").toLowerCase();
+  }
+
+  function classifyTool(item = {}) {
+    const toolName = String(item.tool || item.name || item.method || "").toLowerCase();
+    const server = String(item.server || item.serverName || "").toLowerCase();
+    const input = toolInputText(item);
+    const combined = `${server} ${toolName} ${input}`;
+    if (/(?:web__run|web\.run|search_query|searchquery|browser_search|websearch)/.test(combined)) return "search";
+    if (/(?:internal_browser|browser)[\s_.-]*(?:navigate|open|click|snapshot|find|read)/.test(combined)) return "browse";
+    if (/(?:read_file|readfile|read_directory|readdir|cat_file|file_read)/.test(combined)) return "read";
+    if (/(?:write_file|writefile|apply_patch|edit_file|editfile|file_change|patch)/.test(combined)) return "files";
+    return "tool";
+  }
+
+  function toolActionSummary(item = {}, kind = "tool") {
+    const input = text(item.arguments || item.input || item.params || "");
+    if (kind === "search") {
+      const match = input.match(/(?:q|query|search_query)\s*[:=]\s*["']([^"']+)/i);
+      return match?.[1] || firstLine(item.tool || item.name || "搜索网页", "搜索网页");
+    }
+    if (kind === "browse") {
+      const match = input.match(/https?:\/\/[^\s"'}]+/i);
+      return match?.[0] || "打开网页";
+    }
+    if (kind === "read" || kind === "files") {
+      const match = input.match(/(?:path|file|filename)\s*[:=]\s*["']?([^,"'}\n]+)/i);
+      return match?.[1]?.split(/[\\/]/).pop() || (kind === "read" ? "读取文件" : "更新文件");
+    }
+    return firstLine(item.tool || item.name || "调用工具", "调用工具");
+  }
+
+  function researchToolSummary(toolName) {
+    const summaries = {
+      research_search_papers: "检索学术文献",
+      research_resolve_doi: "解析文献标识",
+      research_verify_reference: "核验参考文献",
+      research_search_datasets: "检索研究数据",
+      research_lookup_institution: "查询研究机构",
+      research_search_trials: "检索临床试验",
+      research_source_status: "检查资料来源",
+    };
+    return summaries[String(toolName || "").toLowerCase()] || null;
+  }
+
   function normalizeTraceItem(item = {}, phase = "completed") {
     const type = itemType(item);
     const status = String(item.status || phase || "completed").toLowerCase();
@@ -127,9 +173,19 @@
       const tool = item.tool || item.name || item.method || "调用工具";
       const argumentsText = item.arguments || item.input || item.params;
       const resultText = detailFrom(item);
+      const kind = classifyTool(item);
+      const researchSummary = researchToolSummary(tool);
+      if (researchSummary) {
+        const unavailable = status === "failed" || /(?:429|rate.?limit|too many requests)/i.test(text(resultText));
+        return {
+          id, kind: "search", label: "科研资料", status,
+          summary: researchSummary,
+          detail: unavailable ? "一个公开资料来源暂时不可用；任务会继续使用其他可用来源。" : "已通过公开学术资料来源完成查询，结果将由科研助手整理到交付内容中。",
+        };
+      }
       return {
-        id, kind: "tool", label: server === "TOOL" ? "TOOL" : `MCP · ${server}`, status,
-        summary: firstLine(tool, "调用工具"),
+        id, kind, label: kind === "search" ? "WEB SEARCH" : kind === "browse" ? "BROWSER" : server === "TOOL" ? "TOOL" : `MCP · ${server}`, status,
+        summary: toolActionSummary(item, kind),
         detail: truncateTraceText([argumentsText && `INPUT\n${text(argumentsText)}`, resultText && `RESULT\n${text(resultText)}`].filter(Boolean).join("\n\n")),
       };
     }
@@ -164,13 +220,14 @@
     const running = status === "running";
     const completed = status === "completed";
     const verbs = {
-      command: running ? "正在运行" : completed ? "已运行" : "运行失败",
+      command: running ? "正在运行命令" : completed ? "已运行命令" : "运行命令失败",
       tool: running ? "正在调用" : completed ? "已调用" : "调用失败",
-      files: running ? "正在更新" : completed ? "已更新" : "更新失败",
-      read: running ? "正在读取" : completed ? "已读取" : "读取失败",
-      plan: running ? "正在规划" : completed ? "已规划" : "规划失败",
-      reasoning: running ? "正在思考" : completed ? "已思考" : "思考失败",
-      search: running ? "正在搜索" : completed ? "已搜索" : "搜索失败",
+      files: running ? "正在编辑文件" : completed ? "已编辑文件" : "编辑文件失败",
+      read: running ? "正在读取文件" : completed ? "已读取文件" : "读取文件失败",
+      plan: running ? "正在更新计划" : completed ? "已更新计划" : "更新计划失败",
+      reasoning: running ? "正在整理思路" : completed ? "已整理思路" : "整理思路失败",
+      search: running ? "正在搜索网页" : completed ? "已搜索网页" : "搜索网页失败",
+      browse: running ? "正在打开网页" : completed ? "已打开网页" : "打开网页失败",
       agent: running ? "正在协调" : completed ? "已协调" : "协调失败",
       error: "执行失败",
       event: running ? "正在处理" : completed ? "已处理" : "处理失败",

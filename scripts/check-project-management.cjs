@@ -48,7 +48,7 @@ assert.ok(main.includes("readLocalThreadSnapshot(id)"), "task switching must hav
 assert.ok(main.includes("visibleRolloutUserText"), "persisted session rendering must filter internal context wrappers");
 assert.ok(main.includes("const liveTurnId = activeTurnIdsByThread.get(id) || null"), "persisted unfinished turns must not be promoted to live running turns");
 assert.ok(!main.includes("if (local.running && local.turnId) activeTurnIdsByThread.set(id, local.turnId)"), "stale rollout state must not lock the composer");
-assert.ok(main.includes('appServer.request("turn/steer"'), "the composer must steer an active turn");
+assert.ok(main.includes('appServer.request("turn/steer"'), "explicit context controls must still support steering an active turn");
 assert.ok(main.includes("await ensureRuntimeThread(requestedThreadId"), "continued messages and goals must restore persisted threads into the live App Server");
 assert.ok(main.includes("runtimeThreadLoadPromises"), "concurrent restore requests must share one in-flight runtime load");
 assert.ok(main.includes('appServer.request("thread/resume"'), "persisted threads must be resumed before runtime mutations");
@@ -60,9 +60,18 @@ assert.ok(main.includes("runtimeThreadReadyWaiters"), "runtime restore must have
 assert.ok(main.includes("signalRuntimeThreadReady(messageThreadId"), "thread status/token events must release queued messages");
 assert.ok(main.includes("Promise.race([") && main.includes('type: "ready"'), "queued messages must not wait for the final thread/resume response after readiness events");
 assert.ok(main.includes("CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED"), "API-key-only OnPeople must disable the unused Codex remote-control auth loop");
-assert.ok(main.includes("model_auto_compact_token_limit"), "long sessions must enable Codex Core auto compaction");
+assert.ok(!main.includes("model_auto_compact_token_limit"), "auto compaction must use Codex model metadata instead of a fixed override");
+assert.ok(main.includes("ContextCompactionTracker"), "context compaction lifecycle must be classified before renderer delivery");
+assert.ok(main.includes('type: "context-compaction-placeholder"'), "manual compaction must render immediately");
+assert.ok(main.includes('type: "context-compaction-cleanup"'), "unfinished compaction UI must be cleaned up");
+for (const copy of ["正在压缩上下文", "上下文已压缩", "正在自动压缩上下文", "上下文已自动压缩"]) {
+  assert.ok(renderer.includes(copy), `missing Codex compaction copy: ${copy}`);
+}
+assert.ok(renderer.includes('item.type === "contextCompaction"'), "thread history must render canonical context compaction items");
+assert.ok(main.includes("assertThreadProviderCanHotSwitch"), "loaded tasks must not silently retain stale compaction behavior after a provider-class switch");
 assert.ok(renderer.includes("const wasRunning = running"), "composer submission must preserve its pre-submit running state");
-assert.ok(renderer.includes('promptInput.placeholder = value ? "补充指令；发送后会加入当前运行任务…"'), "running tasks must expose follow-up input");
+assert.ok(renderer.includes('await window.workbench.queueMessage(prompt)'), "running composer messages must join the next-turn queue");
+assert.ok(renderer.includes('promptInput.placeholder = value ? "输入下一条消息；发送后加入队列…"'), "running tasks must expose queued follow-up input");
 assert.ok(!renderer.includes("promptInput.disabled = value"), "running tasks must not disable the composer");
 assert.ok(renderer.includes("setUserMessageDelivery"), "optimistic user messages must expose pending, sent, queued, and failed delivery states");
 assert.ok(main.includes("resolveNewThreadWorkspace(payload)"), "new tasks must materialize their workspace before thread/start");

@@ -23,6 +23,7 @@ class ThreadContextRegistry {
       workspaceMode: null,
       workspaceBaseCwd: null,
       provider: null,
+      industryPlugin: null,
       lifecycle: "idle",
       updatedAt: Date.now(),
     };

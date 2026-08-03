@@ -5,7 +5,13 @@ const { atomicWriteFile, readJsonWithBackup } = require("./atomic-file.cjs");
 
 const DESKTOP_KEY_NAME = "OnPeople Desktop";
 const DEFAULT_SERVICE_URL = "https://api.aibro.vip";
-const ACCOUNT_SCHEMA_VERSION = 4;
+const ACCOUNT_SCHEMA_VERSION = 5;
+const ONPEOPLE_MODEL_CATALOG = Object.freeze([
+  Object.freeze({ id: "gpt-5.6-sol", name: "GPT-5.6 SOL" }),
+  Object.freeze({ id: "gpt-5.6-terra", name: "GPT-5.6 Terra" }),
+  Object.freeze({ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }),
+]);
+const ONPEOPLE_MODEL_BY_ID = new Map(ONPEOPLE_MODEL_CATALOG.map((model) => [model.id, model]));
 const LEGACY_SERVICE_URLS = new Set([
   "http://127.0.0.1:8080",
   "http://127.0.0.1:8787",
@@ -82,15 +88,49 @@ function normalizeCachedAccount(account) {
 }
 
 function normalizeCachedModels(models) {
-  return (Array.isArray(models) ? models : [])
+  const normalized = (Array.isArray(models) ? models : [])
     .map((model) => ({
       id: String(model?.id || ""),
       name: String(model?.name || model?.id || ""),
       ownedBy: model?.ownedBy || null,
       groupId: Number(model?.groupId || 0) || null,
       groupName: String(model?.groupName || ""),
+      platform: String(model?.platform || "").trim().toLowerCase() || null,
     }))
-    .filter((model) => model.id);
+    .filter((model) => ONPEOPLE_MODEL_BY_ID.has(model.id));
+  const byId = new Map(normalized.map((model) => [model.id, model]));
+  return ONPEOPLE_MODEL_CATALOG
+    .filter((model) => byId.has(model.id))
+    .map((model) => ({ ...byId.get(model.id), name: model.name }));
+}
+
+function isOnPeopleModelAllowed(modelId) {
+  return ONPEOPLE_MODEL_BY_ID.has(String(modelId || "").trim());
+}
+
+function shouldPromoteOnPeopleProviderStore(store = {}, signedIn = false) {
+  if (!signedIn || store?.type !== "openai") return false;
+  const profile = store?.profiles?.openai && typeof store.profiles.openai === "object"
+    ? store.profiles.openai
+    : store;
+  if (profile?.encryptedApiKey) return false;
+  const baseUrl = String(profile?.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const model = String(profile?.model || "gpt-5.6-terra").trim();
+  return baseUrl === "https://api.openai.com/v1" && model === "gpt-5.6-terra";
+}
+
+function modelPlatformHint(model = {}) {
+  for (const raw of [model.platform, model.ownedBy, model.groupName]) {
+    const value = String(raw || "").trim().toLowerCase();
+    if (value === "openai") return "openai";
+    if (value === "grok" || value === "xai" || value === "x.ai") return "grok";
+    if (value === "anthropic" || value === "claude") return "anthropic";
+  }
+  const id = String(model.id || "").trim().toLowerCase();
+  if (/^(?:gpt-|codex-)/.test(id)) return "openai";
+  if (/^(?:grok|composer(?:-|$))/.test(id)) return "grok";
+  if (/^claude-/.test(id)) return "anthropic";
+  return "";
 }
 
 function normalizeGroupCredentials(credentials) {
@@ -499,15 +539,21 @@ class CloudAccountClient {
       });
       const liveModels = await this.models(credential.key);
       for (const model of liveModels) {
+        const published = ONPEOPLE_MODEL_BY_ID.get(model.id);
+        if (!published) continue;
         if (catalog.has(model.id)) continue;
         catalog.set(model.id, {
           ...model,
+          name: published.name,
           groupId: Number(group.id || 0) || null,
           groupName: String(group.name || group.id || ""),
+          platform: String(group.platform || "").trim().toLowerCase() || null,
         });
       }
     }
-    return [...catalog.values()];
+    return ONPEOPLE_MODEL_CATALOG
+      .filter((model) => catalog.has(model.id))
+      .map((model) => catalog.get(model.id));
   }
 
   async listGroups() {
@@ -518,7 +564,7 @@ class CloudAccountClient {
         id: group.id,
         name: String(group.name || group.id),
         platform: group.platform || null,
-        models: parseGroupModels(group),
+        models: parseGroupModels(group).filter(isOnPeopleModelAllowed),
         allowLive: Boolean(group.allow_live ?? group.allowLive),
       })),
       activeGroupId: stored.group?.id ?? null,
@@ -571,6 +617,12 @@ class CloudAccountClient {
     const groupKey = this.decryptValue(stored.groupCredentials?.[String(group.id)]?.encryptedApiKey);
     if (groupKey) return groupKey;
     return Number(group.id) === Number(stored.group?.id) ? this.apiKey() : "";
+  }
+
+  modelPlatform(modelId) {
+    const id = String(modelId || "").trim();
+    const model = this.read().cachedModels.find((item) => item.id === id);
+    return modelPlatformHint(model || { id });
   }
 
   async ensureModelAccess(modelId) {
@@ -806,7 +858,11 @@ module.exports = {
   CloudAccountClient,
   DEFAULT_SERVICE_URL,
   DESKTOP_KEY_NAME,
+  ONPEOPLE_MODEL_CATALOG,
+  isOnPeopleModelAllowed,
+  shouldPromoteOnPeopleProviderStore,
   normalizeServiceUrl,
   preferredModelId,
+  modelPlatformHint,
   unwrapManagementResponse,
 };

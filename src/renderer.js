@@ -62,6 +62,10 @@ syncComposerClearance();
 
 const promptInput = $("#prompt");
 const sendButton = $("#send");
+const composerRunState = $("#composer-run-state");
+const composerRunStateLabel = $("#composer-run-state-label");
+const composerRunStateHint = $("#composer-run-state-hint");
+const composerQueueCount = $("#composer-queue-count");
 const liveStartButton = $("#live-start");
 const liveCallPanel = $("#live-call-panel");
 const liveCallTitle = $("#live-call-title");
@@ -174,6 +178,8 @@ const goalObjective = $("#goal-objective");
 const goalUsage = $("#goal-usage");
 const goalPause = $("#goal-pause");
 const initialTimeline = timeline.innerHTML;
+const initialTimelineTemplate = document.createElement("template");
+initialTimelineTemplate.innerHTML = initialTimeline;
 const traceFormatter = window.OnPeopleTrace;
 
 $("#settings-profile-tabs-host").append($(".usage-profile-tabs"));
@@ -225,6 +231,7 @@ const CAPABILITY_COPY = {
 };
 
 let currentThreadId = null;
+let queuedComposerMessages = 0;
 const BROWSER_TAB_STORAGE_KEY = "onpeople.browser-tabs.v1";
 const MAX_BROWSER_TABS_PER_TASK = 8;
 const BROWSER_GROUP_IDLE_UNLOAD_MS = 60_000;
@@ -265,6 +272,9 @@ let selectedReasoningEffort = "high";
 let activeAgentMessage = null;
 let running = false;
 let submitting = false;
+let composerSubmitLocked = false;
+let activeIndustryPlugin = null;
+let availableIndustryPlugin = null;
 let threadSwitchSequence = 0;
 let pendingThreadId = null;
 let showingArchived = false;
@@ -289,6 +299,7 @@ let extensionsRefreshing = false;
 let terminalDockOpen = false;
 const traceCards = new Map();
 const generatedImageCards = new Map();
+const contextCompactionCards = new Map();
 let traceSequence = 0;
 let managedAgentState = [];
 let agentBoardState = { tasks: [], counts: {}, states: [] };
@@ -924,6 +935,7 @@ function setThreadHeader(thread = null) {
   const previousThreadId = currentThreadId;
   const previousCwd = cwdInput.value.trim();
   currentThreadId = thread?.id || null;
+  activeIndustryPlugin = thread?.industryPlugin || null;
   setWorkspaceMenu(false);
   activateBrowserTask(currentThreadId);
   const title = thread ? titleFrom(thread.name || thread.preview) : "新任务";
@@ -949,6 +961,8 @@ function setThreadHeader(thread = null) {
   }
   renderModelSource(modelSourceForProvider(providerSelect.value));
   syncTaskModelPicker();
+  renderSelectedCapability();
+  syncPluginWorkbench();
 }
 
 function resetTaskScopedUtilityState() {
@@ -1238,6 +1252,13 @@ function decorateMarkdown(content) {
     });
     block.append(copy);
   }
+  for (const table of content.querySelectorAll("table")) {
+    if (table.parentElement?.classList.contains("markdown-table-scroll")) continue;
+    const scroll = document.createElement("div");
+    scroll.className = "markdown-table-scroll";
+    table.before(scroll);
+    scroll.append(table);
+  }
 }
 
 function renderAgentMarkdown(content, markdown) {
@@ -1374,6 +1395,9 @@ function finishProcessFlow(status = "completed", options = {}) {
   flow.timer = null;
   flow.finishedAt = timestampMs(options.finishedAt) || Date.now();
   updateProcessFlowHeader(flow, status);
+  const collapse = status === "completed";
+  flow.toggle.setAttribute("aria-expanded", String(!collapse));
+  flow.body.hidden = collapse;
   activeProcessFlow = null;
 }
 
@@ -1385,19 +1409,15 @@ function discardProcessFlow() {
 }
 
 function addEvent(kind, label, text = "", options = {}) {
+  if (kind === "user") {
+    timeline.querySelector(".welcome-card")?.remove();
+    timeline.querySelector(".plugin-workbench")?.remove();
+  }
   const card = document.createElement("div");
   card.className = `event ${kind}`;
   if (options.clientMessageId) {
     card.dataset.clientMessageId = options.clientMessageId;
     card.classList.add(`is-${options.deliveryStatus || "pending"}`);
-  }
-  if (kind === "agent") {
-    const avatar = document.createElement("img");
-    avatar.className = "agent-avatar";
-    avatar.src = "../assets/onpeople-app-icon.png";
-    avatar.alt = "";
-    avatar.setAttribute("aria-hidden", "true");
-    card.append(avatar);
   }
   const heading = document.createElement("span");
   heading.className = "event-label";
@@ -1407,7 +1427,8 @@ function addEvent(kind, label, text = "", options = {}) {
     content.className = "event-content markdown-body";
     renderAgentMarkdown(content, text);
   } else content.textContent = text;
-  card.append(heading, content);
+  if (kind !== "agent") card.append(heading);
+  card.append(content);
   if (kind === "user" && options.clientMessageId) {
     const delivery = document.createElement("small");
     delivery.className = "message-delivery";
@@ -1549,7 +1570,7 @@ function setUserMessageDelivery(clientMessageId, status, message = "") {
   const delivery = card.querySelector(".message-delivery");
   if (delivery) {
     delivery.textContent = status === "sent" ? "已送达"
-      : status === "queued" ? "会话恢复中 · 已排队"
+      : status === "queued" ? "已加入队列 · 当前任务完成后执行"
         : status === "failed" ? `发送失败${message ? ` · ${message}` : ""}`
           : "正在发送…";
   }
@@ -1557,6 +1578,8 @@ function setUserMessageDelivery(clientMessageId, status, message = "") {
     window.setTimeout(() => delivery?.remove(), 1_500);
     pendingUserMessages.delete(id);
   } else if (status === "failed") {
+    pendingUserMessages.delete(id);
+  } else if (status === "queued") {
     pendingUserMessages.delete(id);
   }
 }
@@ -1580,7 +1603,7 @@ timeline.addEventListener("click", async (event) => {
       line = Number(lineMatch[1]) || 1;
       target = target.slice(0, -lineMatch[0].length);
     }
-    if (/\.(?:html?|pdf|svg|png|jpe?g|gif|webp|avif)$/i.test(target.split(/[?#]/, 1)[0])) {
+    if (/\.(?:html?|pdf|svg|png|jpe?g|gif|webp|avif|md|markdown|txt|csv|json|ya?ml|toml|xml|css|[cm]?[jt]sx?|py|go|rs)$/i.test(target.split(/[?#]/, 1)[0])) {
       await selectToolView("browser");
       await openWorkspacePreview(target);
       return;
@@ -1604,7 +1627,7 @@ function traceItemKey(item = {}) {
 }
 
 function isTraceItem(item = {}) {
-  return new Set(["plan", "commandExecution", "fileChange", "mcpToolCall", "reasoning", "webSearch", "collabAgentToolCall", "subAgentActivity"]).has(item.type);
+  return new Set(["plan", "commandExecution", "fileChange", "mcpToolCall", "customToolCall", "toolCall", "reasoning", "webSearch", "collabAgentToolCall", "subAgentActivity"]).has(item.type);
 }
 
 function renderTraceCard(card, item, phase = "completed", options = {}) {
@@ -1618,7 +1641,7 @@ function renderTraceCard(card, item, phase = "completed", options = {}) {
   card.className = `event trace-event trace-${record.kind} is-${statusClass}`;
   card.dataset.status = statusClass;
   card.hidden = record.kind === "reasoning" && new Set(["", "[]", "{}", "null", "推理摘要"]).has(String(record.summary || "").trim()) && new Set(["", "[]", "{}", "null"]).has(String(record.detail || "").trim());
-  card._traceIcon.textContent = ({ command: "⌘", read: "▱", tool: "◇", files: "▤", plan: "☷", reasoning: "◌", search: "⌕", error: "!", event: "·" })[record.kind] || "·";
+  card._traceIcon.textContent = ({ command: "⌘", read: "▱", tool: "◇", files: "▤", plan: "☷", reasoning: "◌", search: "⌕", browse: "↗", agent: "∴", error: "!", event: "·" })[record.kind] || "·";
   card._traceLabel.textContent = traceFormatter.activityLabel(record, statusClass);
   card._traceSummary.textContent = record.summary;
   card._traceDetail.textContent = record.detail;
@@ -1683,20 +1706,119 @@ function addTraceError(label, message) {
   return upsertTraceItem({ type: "error", label, message, status: "failed" }, "failed", { open: true });
 }
 
+const PENDING_MANUAL_CONTEXT_COMPACTION_ID = "pending-manual-context-compaction";
+
+function contextCompactionCopy(source, completed) {
+  if (source === "manual") return completed ? "上下文已压缩" : "正在压缩上下文";
+  return completed ? "上下文已自动压缩" : "正在自动压缩上下文";
+}
+
+function upsertContextCompaction(item = {}, phase = "started", options = {}) {
+  const itemId = String(item.id || "").trim();
+  if (!itemId) return null;
+  const source = options.historical ? "automatic" : (item.source === "manual" ? "manual" : "automatic");
+  const completed = options.historical || phase === "completed" || item.completed === true || item.status === "completed";
+  let row = contextCompactionCards.get(itemId);
+  if (!row && source === "manual" && itemId !== PENDING_MANUAL_CONTEXT_COMPACTION_ID) {
+    row = contextCompactionCards.get(PENDING_MANUAL_CONTEXT_COMPACTION_ID) || null;
+    if (row) contextCompactionCards.delete(PENDING_MANUAL_CONTEXT_COMPACTION_ID);
+  }
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "context-compaction-row";
+    row.setAttribute("role", "status");
+    row.setAttribute("aria-live", "polite");
+    const indicator = document.createElement("span");
+    indicator.className = "context-compaction-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    const copy = document.createElement("span");
+    copy.className = "context-compaction-copy";
+    row.append(indicator, copy);
+    (activeProcessFlow?.body || timeline).append(row);
+  }
+  row.dataset.itemId = itemId;
+  row.dataset.source = source;
+  row.classList.toggle("is-running", !completed);
+  row.classList.toggle("is-completed", completed);
+  row.querySelector(".context-compaction-copy").textContent = contextCompactionCopy(source, completed);
+  contextCompactionCards.set(itemId, row);
+  if (!renderingThreadHistory) scrollTimelineToBottom();
+  return row;
+}
+
+function removeContextCompactions(itemIds = []) {
+  for (const rawId of itemIds) {
+    const itemId = String(rawId || "").trim();
+    const row = contextCompactionCards.get(itemId);
+    if (!row) continue;
+    row.remove();
+    contextCompactionCards.delete(itemId);
+  }
+}
+
 function syncWelcomeAccountCta() {
   const accountCta = $("#welcome-account-cta");
   if (accountCta) accountCta.hidden = Boolean(cloudAccountState.signedIn && cloudAccountState.account);
 }
 
+function defaultPromptPlaceholder() {
+  return activeIndustryPlugin && !currentThreadId
+    ? `描述${activeIndustryPlugin.displayName || "插件"}任务，或从上方选择一个开始方式`
+    : DEFAULT_PROMPT_PLACEHOLDER;
+}
+
+function syncPluginWorkbench() {
+  const welcome = timeline.querySelector(".welcome-card");
+  const workbench = $("#plugin-workbench");
+  const showPlugin = Boolean(workbench && activeIndustryPlugin && !currentThreadId && !timeline.querySelector(".event"));
+  if (welcome) welcome.hidden = showPlugin;
+  if (workbench) workbench.hidden = !showPlugin;
+  if (showPlugin) {
+    const displayName = activeIndustryPlugin.displayName || activeIndustryPlugin.id || "插件";
+    $("#plugin-workbench-label").textContent = `${displayName} · 已注入本次任务`;
+    $("#plugin-workbench-description").textContent = activeIndustryPlugin.description || "选择一种开始方式，或直接描述你要完成的任务。";
+    const languages = (Array.isArray(activeIndustryPlugin.languages) ? activeIndustryPlugin.languages : [])
+      .map((language) => ({ "zh-CN": "中文", zh: "中文", en: "English" })[language] || language);
+    const meta = $("#plugin-workbench-meta");
+    meta.textContent = languages.length ? languages.join(" / ") : "PLUGIN";
+    meta.hidden = false;
+    const workflows = $("#plugin-workflows");
+    workflows.replaceChildren();
+    for (const [index, workflow] of (activeIndustryPlugin.workflows || []).entries()) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.pluginWorkflow = workflow.id;
+      const sequence = document.createElement("span");
+      sequence.textContent = String(index + 1).padStart(2, "0");
+      sequence.setAttribute("aria-hidden", "true");
+      const name = document.createElement("strong");
+      name.textContent = workflow.name;
+      const description = document.createElement("small");
+      description.textContent = workflow.description || "开始这个工作流";
+      button.append(sequence, name, description);
+      workflows.append(button);
+    }
+    workflows.hidden = !workflows.children.length;
+  }
+  if (!currentThreadId) taskTitle.textContent = showPlugin ? (activeIndustryPlugin.displayName || "插件任务") : "新任务";
+  if (!running && !submitting && selectedMode === "default") promptInput.placeholder = defaultPromptPlaceholder();
+}
+
+function restoreInitialTimeline() {
+  timeline.replaceChildren(initialTimelineTemplate.content.cloneNode(true));
+}
+
 function resetTimeline() {
   discardProcessFlow();
-  timeline.innerHTML = initialTimeline;
+  restoreInitialTimeline();
   syncWelcomeAccountCta();
   pendingUserMessages.clear();
   activeAgentMessage = null;
   traceCards.clear();
   generatedImageCards.clear();
+  contextCompactionCards.clear();
   traceSequence = 0;
+  syncPluginWorkbench();
 }
 
 function userItemText(item) {
@@ -1717,6 +1839,7 @@ function renderThreadHistory(thread) {
   activeAgentMessage = null;
   traceCards.clear();
   generatedImageCards.clear();
+  contextCompactionCards.clear();
   traceSequence = 0;
   try {
     for (const turn of thread.turns || []) {
@@ -1729,6 +1852,9 @@ function renderThreadHistory(thread) {
             finishProcessFlow("completed", { finishedAt: item.completedAt || item.updatedAt });
             addEvent("agent", "AGENT", item.text);
           }
+        }
+        else if (item.type === "contextCompaction") {
+          upsertContextCompaction(item, "completed", { historical: true });
         }
         else if (isTraceItem(item)) {
           ensureProcessFlow({ startedAt: currentTurnStartedAt });
@@ -1744,8 +1870,9 @@ function renderThreadHistory(thread) {
     renderingThreadHistory = false;
   }
   if (!timeline.children.length) {
-    timeline.innerHTML = initialTimeline;
+    restoreInitialTimeline();
     syncWelcomeAccountCta();
+    syncPluginWorkbench();
   }
   scrollTimelineToBottom(true);
   requestAnimationFrame(() => timeline.classList.remove("instant-scroll"));
@@ -2219,6 +2346,7 @@ function activateThread(result) {
   setThreadHeader({
     ...thread,
     reasoningEffort: result.reasoningEffort || thread.reasoningEffort || null,
+    industryPlugin: result.industryPlugin || thread.industryPlugin || null,
   });
   setRunning(Boolean(result.running));
   if (result.running) setThreadRuntimeState(thread.id, "working");
@@ -2226,6 +2354,7 @@ function activateThread(result) {
   renderThreadHistory(thread);
   renderGoal(result.goal);
   if (result.provider) renderProvider(result.provider);
+  void refreshContext();
   void refreshAgents();
   loadThreads();
   promptInput.focus();
@@ -2341,6 +2470,15 @@ async function persistTaskModelSelection() {
   providerStatus.textContent = result.pending
     ? "模型将在当前 Turn 完成后切换"
     : currentThreadId ? "已应用到当前任务" : "已设为新任务默认";
+}
+
+async function restoreProviderAfterSaveError(error) {
+  const message = cloudErrorMessage(error);
+  try {
+    renderProvider(await window.workbench.getProviderSettings(null, currentThreadId));
+  } catch {}
+  providerStatus.textContent = message;
+  return message;
 }
 
 function modelSourceForProvider(type) {
@@ -2785,6 +2923,32 @@ async function refreshCloudAccount({ quiet = false } = {}) {
   }
 }
 
+function shouldRetryStartupCloudModels(state, error = null) {
+  if (error) return true;
+  if (!state?.signedIn || state.modelsLive && state.models?.length) return false;
+  return !/余额不足|Insufficient account balance|没有可用模型分组/i.test(String(state.modelsError || ""));
+}
+
+async function bootstrapCloudAccountModels({
+  refresh = () => refreshCloudAccount({ quiet: true }),
+  wait = (delay) => new Promise((resolve) => window.setTimeout(resolve, delay)),
+  retryDelays = [800, 2_000, 5_000],
+} = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    if (attempt > 0) await wait(retryDelays[attempt - 1]);
+    try {
+      const state = await refresh();
+      lastError = null;
+      if (!shouldRetryStartupCloudModels(state)) return state;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return cloudAccountState;
+}
+
 const tokenCountFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 });
 
 function formatTokenCount(value) {
@@ -3028,9 +3192,23 @@ function renderImages() {
 }
 
 function renderSelectedCapability() {
-  capabilitySelection.hidden = !selectedCapability;
-  capabilitySelection.textContent = selectedCapability ? `${CAPABILITY_COPY[selectedCapability]}  ×` : "";
-  capabilitySelection.title = selectedCapability ? "点击移除当前能力" : "";
+  const selections = [
+    !currentThreadId && activeIndustryPlugin ? activeIndustryPlugin.displayName || activeIndustryPlugin.id : null,
+    selectedCapability ? CAPABILITY_COPY[selectedCapability] : null,
+  ].filter(Boolean);
+  capabilitySelection.hidden = selections.length === 0;
+  capabilitySelection.textContent = selections.length ? `${selections.join(" · ")}  ×` : "";
+  capabilitySelection.title = selections.length ? "点击移除当前选择" : "";
+}
+
+function syncIndustryPluginCapability() {
+  const heading = $("#industry-plugin-capability-heading");
+  const button = $("#industry-plugin-capability");
+  const available = Boolean(availableIndustryPlugin);
+  heading.hidden = !available;
+  button.hidden = !available;
+  button.dataset.industryPlugin = availableIndustryPlugin?.pluginId || availableIndustryPlugin?.id || "";
+  $("#industry-plugin-capability-name").textContent = availableIndustryPlugin?.displayName || "行业插件";
 }
 
 function formatGoalUsage(goal) {
@@ -3133,26 +3311,35 @@ function selectMode(mode) {
     option.setAttribute("aria-pressed", String(active));
   }
   goalBudgetWrap.hidden = mode !== "goal";
-  promptInput.placeholder = mode === "goal" ? "描述可验证的结果、约束和完成标准。" : mode === "plan" ? "描述任务；Agent 会先调查并生成实施计划。" : DEFAULT_PROMPT_PLACEHOLDER;
+  promptInput.placeholder = mode === "goal" ? "描述可验证的结果、约束和完成标准。" : mode === "plan" ? "描述任务；Agent 会先调查并生成实施计划。" : defaultPromptPlaceholder();
 }
 
 function setRunning(value) {
   running = value;
-  // A running turn still accepts a follow-up from the composer. The main
-  // process routes it through turn/steer. With an empty composer the same
-  // primary action becomes Stop; typing a follow-up changes it back to Send.
   sendButton.disabled = submitting;
   promptInput.disabled = false;
-  promptInput.placeholder = value ? "补充指令；发送后会加入当前运行任务…" : (
+  promptInput.placeholder = value ? "输入下一条消息；发送后加入队列…" : (
       selectedMode === "goal" ? "描述可验证的结果、约束和完成标准。" :
       selectedMode === "plan" ? "描述任务；Agent 会先调查并生成实施计划。" :
-        DEFAULT_PROMPT_PLACEHOLDER
+        defaultPromptPlaceholder()
   );
   for (const option of modeOptions) option.disabled = value;
   goalBudgetMode.disabled = value;
   goalBudget.disabled = value;
   updateComposerPrimaryAction();
+  updateComposerRunState();
   updateProviderFields();
+}
+
+function updateComposerRunState() {
+  const hasQueue = queuedComposerMessages > 0;
+  composerRunState.hidden = !running && !hasQueue;
+  composerRunStateLabel.textContent = running ? "当前任务运行中" : "消息等待执行";
+  composerQueueCount.hidden = !hasQueue;
+  composerQueueCount.textContent = `队列 ${queuedComposerMessages}`;
+  composerRunStateHint.textContent = running
+    ? "输入新消息后发送，将在当前任务完成后执行"
+    : "已排队，将自动开始";
 }
 
 function setSubmitting(value) {
@@ -3162,20 +3349,21 @@ function setSubmitting(value) {
     promptInput.placeholder = submitting ? "正在确认消息已进入任务…"
       : (selectedMode === "goal" ? "描述可验证的结果、约束和完成标准。" :
         selectedMode === "plan" ? "描述任务；Agent 会先调查并生成实施计划。" :
-          DEFAULT_PROMPT_PLACEHOLDER);
+          defaultPromptPlaceholder());
   }
   updateComposerPrimaryAction();
 }
 
 function updateComposerPrimaryAction() {
   const stopping = running && !submitting && !promptInput.value.trim();
-  sendButton.dataset.action = stopping ? "stop" : "send";
+  const queueing = running && !stopping;
+  sendButton.dataset.action = stopping ? "stop" : queueing ? "queue" : "send";
   sendButton.setAttribute("aria-label", stopping
     ? "停止当前任务"
-    : (running ? "发送补充指令" : "运行任务"));
+    : (queueing ? "加入消息队列" : "运行任务"));
   sendButton.title = stopping
     ? "停止当前任务"
-    : (running ? "发送补充指令" : "运行任务");
+    : (queueing ? "加入消息队列" : "运行任务");
 }
 
 const terminalTheme = {
@@ -3906,27 +4094,61 @@ function renderSkills(skills, skillsHome = "", updatedAt = null) {
 function renderPlugins(plugins) {
   const list = $("#plugins-list");
   list.replaceChildren();
-  if (!plugins.length) list.innerHTML = '<span class="empty-list">没有发现可用插件市场</span>';
+  const notice = document.createElement("div");
+  notice.className = "skills-scope-note";
+  notice.innerHTML = "<strong>可插拔行业能力</strong><span>启用后，插件会出现在输入框的加号菜单中；只有主动选择时才注入本次任务。</span>";
+  list.append(notice);
+  if (!plugins.length) list.insertAdjacentHTML("beforeend", '<span class="empty-list">没有发现可用插件市场</span>');
   for (const plugin of plugins) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = plugin.installed ? "secondary danger" : "settings-save";
-    button.textContent = plugin.installed ? "卸载" : "安装";
-    button.disabled = plugin.availability && plugin.availability !== "AVAILABLE";
-    button.addEventListener("click", async () => {
-      button.disabled = true;
+    const actions = document.createElement("div");
+    actions.className = "extension-card-actions";
+    const installButton = document.createElement("button");
+    installButton.type = "button";
+    installButton.className = plugin.installed ? "secondary danger" : "settings-save";
+    installButton.textContent = plugin.installed ? "卸载" : "安装";
+    installButton.disabled = plugin.availability && plugin.availability !== "AVAILABLE";
+    installButton.addEventListener("click", async () => {
+      installButton.disabled = true;
       try {
         if (plugin.installed) await window.workbench.uninstallPlugin(plugin.id);
         else await window.workbench.installPlugin({ name: plugin.name, marketplace: plugin.marketplace, marketplacePath: plugin.marketplacePath });
         await refreshExtensions();
       } catch (error) { $("#extension-errors").hidden = false; $("#extension-errors").textContent = error.message; }
     });
+    if (plugin.industry && plugin.installed) {
+      const activateButton = document.createElement("button");
+      activateButton.type = "button";
+      activateButton.className = `toggle-control ${plugin.industry.active ? "enabled" : ""}`;
+      activateButton.textContent = plugin.industry.active ? "停用" : "启用";
+      activateButton.addEventListener("click", async () => {
+        activateButton.disabled = true;
+        try {
+          if (plugin.industry.active) await window.workbench.deactivateIndustryPlugin(plugin.id);
+          else await window.workbench.activateIndustryPlugin({ pluginId: plugin.id, name: plugin.name, cwd: cwdInput.value.trim() });
+          await refreshExtensions();
+        } catch (error) { $("#extension-errors").hidden = false; $("#extension-errors").textContent = error.message; }
+      });
+      actions.append(activateButton);
+    }
+    actions.append(installButton);
+    const description = plugin.industry?.description
+      || plugin.interface?.longDescription
+      || plugin.interface?.shortDescription
+      || plugin.keywords?.join(" · ");
+    const industryMeta = plugin.industry
+      ? `${plugin.industry.displayName} · ${plugin.industry.languages.join(" / ")} · ${plugin.industry.workflows.length} 个工作流`
+      : plugin.industryError ? `行业声明无效 · ${plugin.industryError}` : null;
+    const status = plugin.industry?.active
+      ? { label: "可从＋添加", tone: "healthy" }
+      : plugin.industryError
+        ? { label: "声明无效", tone: "warning" }
+        : { label: plugin.installed ? "已安装" : "可安装", tone: plugin.installed ? "healthy" : "available" };
     list.append(extensionCard(
-      plugin.name,
-      plugin.interface?.description || plugin.keywords?.join(" · "),
-      `${plugin.marketplace} · ${plugin.version || plugin.localVersion || "local"}`,
-      button,
-      { label: plugin.installed ? "已安装" : "可安装", tone: plugin.installed ? "healthy" : "available" },
+      plugin.interface?.displayName || plugin.name,
+      description,
+      [plugin.marketplace, plugin.version || plugin.localVersion || "local", industryMeta].filter(Boolean).join(" · "),
+      actions,
+      status,
     ));
   }
 }
@@ -4397,6 +4619,8 @@ async function refreshWorktrees() {
 }
 
 function renderContext(state) {
+  queuedComposerMessages = Array.isArray(state?.queued) ? state.queued.length : 0;
+  updateComposerRunState();
   const usage = state?.usage;
   const total = usage?.total || {};
   const windowSize = Number(usage?.modelContextWindow || 0);
@@ -4407,6 +4631,12 @@ function renderContext(state) {
   $("#context-breakdown").textContent = usage
     ? `${used.toLocaleString()} / ${windowSize ? windowSize.toLocaleString() : "?"} · input ${Number(total.inputTokens || 0).toLocaleString()} · cached ${Number(total.cachedInputTokens || 0).toLocaleString()} · output ${Number(total.outputTokens || 0).toLocaleString()} · reasoning ${Number(total.reasoningOutputTokens || 0).toLocaleString()}`
     : "尚未收到 Token 使用信息。运行一次任务后会自动更新。";
+  const checkpoint = state?.checkpoint || {};
+  const checkpointElement = $("#context-checkpoint");
+  checkpointElement.classList.toggle("has-conflict", Number(checkpoint.conflictCount || 0) > 0);
+  checkpointElement.textContent = checkpoint.available
+    ? `校准 R${checkpoint.revision} · ${checkpoint.rebuildMode === "full" ? "原始记录重建" : "增量更新"} · ${checkpoint.evidenceCount || 0} 条证据${checkpoint.conflictCount ? ` · ${checkpoint.conflictCount} 处冲突待确认` : ""} · ${checkpoint.updatedAt ? new Date(checkpoint.updatedAt).toLocaleString() : ""}`
+    : "上下文校准尚未建立；首次压缩后会自动创建，也可手动建立。";
   const list = $("#context-queue-list");
   list.replaceChildren();
   for (const item of state?.queued || []) list.append(controlCard("NEXT TURN", "queued", item.text, new Date(item.queuedAt).toLocaleString()));
@@ -6008,8 +6238,7 @@ taskModelOptions.addEventListener("click", async (event) => {
   try {
     await persistTaskModelSelection();
   } catch (error) {
-    providerStatus.textContent = cloudErrorMessage(error);
-    addEvent("error", "MODEL", cloudErrorMessage(error));
+    addEvent("error", "MODEL", await restoreProviderAfterSaveError(error));
   }
 });
 taskEffortOptions.addEventListener("click", async (event) => {
@@ -6440,7 +6669,7 @@ $("#save-provider").addEventListener("click", async () => {
     providerStatus.textContent = result.pending
       ? `当前轮结束后切换至 ${result.settings.model}`
       : (result.changed ? `当前任务已切换至 ${result.settings.model}` : "当前任务模型配置已保存");
-  } catch (error) { providerStatus.textContent = error.message; }
+  } catch (error) { await restoreProviderAfterSaveError(error); }
   finally { updateProviderFields(); }
 });
 
@@ -6465,7 +6694,12 @@ function setCapabilityMenu(open) {
 }
 
 attachImageButton.addEventListener("click", () => setCapabilityMenu(capabilityMenu.hidden));
-capabilitySelection.addEventListener("click", () => { selectedCapability = null; renderSelectedCapability(); });
+capabilitySelection.addEventListener("click", () => {
+  selectedCapability = null;
+  if (!currentThreadId) activeIndustryPlugin = null;
+  renderSelectedCapability();
+  syncPluginWorkbench();
+});
 
 capabilityMenu.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
@@ -6500,6 +6734,13 @@ capabilityMenu.addEventListener("click", async (event) => {
   }
   if (action === "apps") {
     await selectToolView("extensions");
+    return;
+  }
+  if (button.dataset.industryPlugin) {
+    activeIndustryPlugin = availableIndustryPlugin ? { ...availableIndustryPlugin } : null;
+    renderSelectedCapability();
+    syncPluginWorkbench();
+    promptInput.focus();
     return;
   }
   if (button.dataset.capability) {
@@ -6644,6 +6885,7 @@ async function startFreshTask(options = {}) {
     if (running && currentThreadId) setThreadRuntimeState(currentThreadId, "working");
     await window.workbench.newTask();
     setRunning(false);
+    activeIndustryPlugin = null;
     setThreadHeader(null);
     selectedWorkspaceMode = requested.workspaceMode || "isolated";
     selectedWorkspaceBaseCwd = requested.workspaceBaseCwd || null;
@@ -7564,8 +7806,18 @@ $("#context-compact").addEventListener("click", async () => {
     confirmLabel: "开始压缩",
     tone: "neutral",
   })) return;
-  try { await window.workbench.compactContext(); addEvent("tool", "CONTEXT", "已开始压缩当前任务上下文。"); }
+  try { await window.workbench.compactContext(); }
   catch (error) { addEvent("error", "CONTEXT", error.message); }
+});
+$("#context-recalibrate").addEventListener("click", async () => {
+  const button = $("#context-recalibrate");
+  button.disabled = true;
+  try {
+    const result = await window.workbench.recalibrateContext();
+    await refreshContext();
+    if (result.warning) addEvent("error", "CONTEXT CALIBRATION", result.warning);
+  } catch (error) { addEvent("error", "CONTEXT CALIBRATION", error.message); }
+  finally { button.disabled = false; }
 });
 
 $("#policy-form").addEventListener("submit", async (event) => {
@@ -7706,33 +7958,56 @@ async function createScheduleFromConversation(prompt) {
   return true;
 }
 
+function setPluginComposerDraft(value) {
+  promptInput.value = value;
+  promptInput.dispatchEvent(new Event("input", { bubbles: true }));
+  promptInput.focus();
+  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+}
+
+timeline.addEventListener("click", (event) => {
+  const workflowId = event.target.closest("[data-plugin-workflow]")?.dataset.pluginWorkflow;
+  if (!workflowId) return;
+  const workflow = (activeIndustryPlugin?.workflows || []).find((item) => item.id === workflowId);
+  if (workflow?.prompt) setPluginComposerDraft(workflow.prompt);
+});
+
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (submitting) return;
+  if (submitting || composerSubmitLocked) return;
   const wasRunning = running;
   const typedPrompt = promptInput.value.trim();
   if (!typedPrompt && !selectedImages.length && !selectedAttachments.length) return;
   const prompt = typedPrompt || (selectedAttachments.length ? "请分析所附文件或文件夹。" : "请分析所附图片。");
+  if (wasRunning && (selectedImages.length || selectedAttachments.length)) {
+    addEvent("error", "QUEUE", "运行中的消息队列暂不支持附件。请等待当前任务完成后再发送附件。");
+    return;
+  }
   if (selectedMode === "goal" && goalBudgetMode.value === "limited" && !goalBudget.value) {
     goalBudget.focus();
     addEvent("error", "GOAL BUDGET", "请输入 Token 预算，或选择“∞ 无限”。");
     return;
   }
-  if (!wasRunning && selectedMode === "default" && !selectedImages.length && !selectedAttachments.length) {
-    try {
+  composerSubmitLocked = true;
+  let clientMessageId = null;
+  try {
+    if (!wasRunning && selectedMode === "default" && !selectedImages.length && !selectedAttachments.length) {
       if (await createScheduleFromConversation(prompt)) return;
-    } catch (error) {
-      addEvent("error", "SCHEDULED", error.message);
+    }
+    taskTitle.textContent = titleFrom(prompt);
+    clientMessageId = crypto.randomUUID();
+    const userContent = addEvent("user", "YOU", prompt, { clientMessageId, deliveryStatus: wasRunning ? "queued" : "pending", deliveryCopy: wasRunning ? "正在加入队列…" : "正在发送…" });
+    promptInput.value = "";
+    activeAgentMessage = null;
+    setSubmitting(true);
+    if (wasRunning) {
+      const state = await window.workbench.queueMessage(prompt);
+      const queuedItem = state?.queued?.at(-1);
+      if (queuedItem?.id) userContent.closest(".event")?.setAttribute("data-queue-id", queuedItem.id);
+      setUserMessageDelivery(clientMessageId, "queued");
+      renderContext(state);
       return;
     }
-  }
-  taskTitle.textContent = titleFrom(prompt);
-  const clientMessageId = crypto.randomUUID();
-  addEvent("user", "YOU", prompt, { clientMessageId, deliveryStatus: "pending" });
-  promptInput.value = "";
-  activeAgentMessage = null;
-  setSubmitting(true);
-  try {
     const common = {
       threadId: currentThreadId,
       browserRouteId: activeBrowserRouteId,
@@ -7745,10 +8020,11 @@ composer.addEventListener("submit", async (event) => {
       reasoningEffort: selectedReasoningEffort,
       baseUrl: baseUrlInput.value.trim(),
       apiKey: apiKeyInput.value,
+      industryPluginId: !currentThreadId ? (activeIndustryPlugin?.pluginId || activeIndustryPlugin?.id || null) : null,
     };
-    const result = !wasRunning && selectedMode === "goal"
+    const result = selectedMode === "goal"
       ? await window.workbench.setGoal({ ...common, objective: prompt, tokenBudget: goalBudgetMode.value === "limited" ? goalBudget.value : null, attachments: selectedAttachments, capability: selectedCapability })
-      : await window.workbench.sendPrompt({ ...common, prompt, mode: wasRunning ? "default" : selectedMode, images: wasRunning ? [] : selectedImages, attachments: wasRunning ? [] : selectedAttachments, capability: wasRunning ? null : selectedCapability });
+      : await window.workbench.sendPrompt({ ...common, prompt, mode: selectedMode, images: selectedImages, attachments: selectedAttachments, capability: selectedCapability });
     setUserMessageDelivery(clientMessageId, result.queued ? "queued" : "sent");
     selectedImages = [];
     selectedAttachments = [];
@@ -7757,6 +8033,9 @@ composer.addEventListener("submit", async (event) => {
     renderImages();
     renderSelectedCapability();
     currentThreadId = result.threadId;
+    activeIndustryPlugin = result.industryPlugin || activeIndustryPlugin || null;
+    renderSelectedCapability();
+    syncPluginWorkbench();
     if (result.cwd) {
       cwdInput.value = result.cwd;
       selectedWorkspaceMode = result.workspaceMode || selectedWorkspaceMode;
@@ -7769,10 +8048,13 @@ composer.addEventListener("submit", async (event) => {
     if (result.goal) renderGoal(result.goal);
     await loadThreads();
   } catch (error) {
-    setUserMessageDelivery(clientMessageId, "failed", error.message);
+    if (clientMessageId) setUserMessageDelivery(clientMessageId, "failed", error.message);
     setThreadRuntimeState(currentThreadId, "failed");
-    addEvent("error", "AGENT", error.message);
-  } finally { setSubmitting(false); }
+    addEvent("error", clientMessageId ? "AGENT" : "SCHEDULED", error.message);
+  } finally {
+    setSubmitting(false);
+    composerSubmitLocked = false;
+  }
 });
 promptInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
@@ -7825,6 +8107,14 @@ liveMuteButton.addEventListener("click", () => {
 });
 
 window.workbench.onAgentEvent((event) => {
+  if (event.type === "industry-plugin-changed") {
+    availableIndustryPlugin = event.active || null;
+    if (!currentThreadId && activeIndustryPlugin && !availableIndustryPlugin) activeIndustryPlugin = null;
+    syncIndustryPluginCapability();
+    renderSelectedCapability();
+    syncPluginWorkbench();
+    return;
+  }
   if (event.type === "skills-changed") {
     const refreshButton = $("#extensions-refresh");
     refreshButton.classList.add("attention");
@@ -7908,10 +8198,57 @@ window.workbench.onAgentEvent((event) => {
   if (event.type === "goal-state") { renderGoal(event.goal); return; }
   if (event.type === "agents-updated") { renderAgents(event.agents || [], event.maxAgents || policyState?.maxAgents || 4, event.board); return; }
   if (event.type === "context-updated") { if (!event.state?.threadId || event.state.threadId === currentThreadId) renderContext(event.state); return; }
-  if (event.type === "context-compacted") { if (activeToolView === "control" && activeControlView === "context") refreshContext(); return; }
+  if (event.type === "context-recalibration-started") {
+    if (!event.threadId || event.threadId === currentThreadId) addProcessUpdate("正在从原始任务记录核对目标、约束、决策与最近对话…");
+    return;
+  }
+  if (event.type === "context-recalibration-completed") {
+    if (!event.threadId || event.threadId === currentThreadId) {
+      const checkpoint = event.checkpoint || {};
+      const conflictCopy = checkpoint.conflictCount ? `，发现 ${checkpoint.conflictCount} 处冲突，后续会先向你确认` : "";
+      const injectionCopy = event.injected ? "，已写入后续模型上下文" : event.deferred ? "，将在本轮完成后写入后续上下文" : "";
+      addProcessUpdate(`上下文校准 R${checkpoint.revision || "?"} 已完成（${checkpoint.rebuildMode === "full" ? "原始记录重建" : "增量核对"}）${injectionCopy}${conflictCopy}${event.warning ? `。${event.warning}` : ""}`);
+      finishProcessFlow(event.warning ? "failed" : "completed");
+      if (activeToolView === "control" && activeControlView === "context") void refreshContext();
+    }
+    return;
+  }
+  if (event.type === "context-recalibration-injected") {
+    if (!event.threadId || event.threadId === currentThreadId) {
+      addProcessUpdate(`上下文校准 R${event.checkpoint?.revision || "?"} 已写入后续模型上下文。`);
+      finishProcessFlow("completed");
+      if (activeToolView === "control" && activeControlView === "context") void refreshContext();
+    }
+    return;
+  }
+  if (event.type === "context-recalibration-failed") {
+    if (!event.threadId || event.threadId === currentThreadId) {
+      addProcessUpdate(`上下文校准失败：${event.message || "未知错误"}`);
+      finishProcessFlow("failed");
+    }
+    return;
+  }
+  if (event.type === "context-compacted") {
+    if ((!event.threadId || event.threadId === currentThreadId) && activeToolView === "control" && activeControlView === "context") refreshContext();
+    return;
+  }
+  if (event.type === "context-compaction-placeholder") {
+    if (!event.threadId || event.threadId === currentThreadId) upsertContextCompaction(event.item, "started");
+    return;
+  }
+  if (event.type === "context-compaction-cleanup") {
+    if (!event.threadId || event.threadId === currentThreadId) removeContextCompactions(event.itemIds);
+    return;
+  }
   if (event.type === "queued-message-started") {
     if (!event.state?.threadId || event.state.threadId === currentThreadId) {
-      addEvent("user", "QUEUED", event.message.text);
+      const queuedCard = event.message?.id ? timeline.querySelector(`[data-queue-id="${CSS.escape(event.message.id)}"]`) : null;
+      if (queuedCard) {
+        queuedCard.classList.remove("is-queued");
+        queuedCard.classList.add("is-sent");
+        const delivery = queuedCard.querySelector(".message-delivery");
+        if (delivery) delivery.textContent = "已从队列开始执行";
+      } else addEvent("user", "队列", event.message.text);
       renderContext(event.state);
       setRunning(true);
     }
@@ -7970,6 +8307,13 @@ window.workbench.onTurnEvent((event) => {
   else if (message.method === "thread/goal/updated") renderGoal(message.params.goal);
   else if (message.method === "thread/goal/cleared") renderGoal(null);
   else if (message.method === "turn/plan/updated") renderPlan(message.params);
+  else if (message.method === "item/started" && message.params?.item?.type === "contextCompaction") {
+    upsertContextCompaction(message.params.item, "started");
+  }
+  else if (message.method === "item/completed" && message.params?.item?.type === "contextCompaction") {
+    upsertContextCompaction(message.params.item, "completed");
+    if (activeToolView === "control" && activeControlView === "context") void refreshContext();
+  }
   else if (message.method === "item/started" && message.params?.item?.type === "agentMessage") {
     activeAgentMessagePhase = message.params.item.phase === "commentary" ? "commentary" : "final";
     if (activeAgentMessagePhase === "commentary") activeAgentMessage = addProcessUpdate();
@@ -8105,6 +8449,9 @@ window.addEventListener("beforeunload", () => releaseLiveConversation());
 
 window.workbench.agentStatus().then((status) => {
   defaultWorkspaceCwd = status.defaultCwd || "";
+  activeIndustryPlugin = status.industryPlugin || null;
+  availableIndustryPlugin = status.availableIndustryPlugin || null;
+  syncIndustryPluginCapability();
   if (status.ready) setRuntime("ready", "Agent 已连接");
   // Application-level runtime state can point at a task running in another
   // window. Only the window-scoped binding proves this pane rendered it.
@@ -8125,6 +8472,7 @@ window.workbench.agentStatus().then((status) => {
     renderPolicy({ policy: status.policy, audit: [] });
   }
   renderContext(status.context || {});
+  syncPluginWorkbench();
   if (status.windowThreadId) {
     return window.workbench.resumeThread(status.windowThreadId).then((result) => {
       activateThread(result);
@@ -8136,7 +8484,7 @@ window.workbench.agentStatus().then((status) => {
 window.workbench.getPetState().then((state) => {
   $("#pet-toggle").classList.toggle("active", Boolean(state?.visible));
 }).catch(() => {});
-void refreshCloudAccount({ quiet: true }).catch(() => {});
+void bootstrapCloudAccountModels().catch(() => {});
 window.workbench.getAppUpdateState().then(renderAppUpdate).catch((error) => {
   renderAppUpdate({ supported: false, status: "error", message: error.message });
 });

@@ -95,6 +95,14 @@ OnPeople automatically offers common `package.json` scripts such as `dev`, `star
 
 Commands are limited in size, displayed verbatim with a fingerprint, and require a user confirmation before being written to the project terminal. Setup is never triggered automatically merely because a repository was opened or a worktree was created.
 
+### Industry plugins
+
+OnPeople supports one primary industry plugin for each new task, composed with any number of standard capability plugins, Skills, Apps, and MCP servers. Industry plugins remain standard Codex plugins and add a validated `.onpeople/industry.json` companion manifest for their domain instructions, workflows, templates, policies, and evaluations.
+
+Installed, configured, and active are separate states. Activating an industry plugin changes the default for new tasks only. Each task snapshots the plugin ID, exact version, and instructions; upgrades, deactivation, and uninstall do not silently change an existing task. Industry manifests are declarative and cannot inject Electron code, access secrets directly, or widen the active sandbox.
+
+The bundled `research-paper` plugin is the reference implementation. It provides Chinese and English academic research workflows, literature review, evidence-grounded writing, citation verification, peer-review response, and research-integrity rules. See [`docs/industry-plugin-spec.md`](docs/industry-plugin-spec.md) for the v1 package contract.
+
 To use another Cua Driver binary:
 
 ```bash
@@ -181,6 +189,29 @@ npm run package:win:portable
 ```
 
 Do not distribute that portable archive or the unpacked `OnPeople.exe`. Public downloads and GitHub Releases must contain only the NSIS `OnPeople-Setup-<version>-win-x64.exe` installer.
+
+### Release artifact cleanup
+
+Packaging can leave unpacked applications, previews, unsigned intermediate artifacts, and old installers under `release/`. Preview the cleanup plan first; this command does not delete anything:
+
+```bash
+npm run clean:release
+```
+
+The default plan keeps artifacts for the newest two detected release versions. After verifying the list, apply it explicitly:
+
+```bash
+npm run clean:release -- --apply
+```
+
+Use `--keep 3` (or another positive number) to retain more release versions. Rebuildable runtime and dependency directories are excluded unless explicitly requested:
+
+```bash
+npm run clean:release -- --apply --include-runtime
+npm run clean:release -- --apply --include-runtime --include-dependencies
+```
+
+Removing `.embedded-runtime/` requires staging the runtime again before packaging. Removing `node_modules/` requires `npm ci` before development or packaging. Published artifacts should remain in durable release storage rather than relying on this local directory as an archive.
 
 The build stages runtimes under `.embedded-runtime/`, which is gitignored. Packaged apps prefer these embedded copies and start the matching Cua Driver daemon. A provenance manifest records the target platform, architecture, public npm package and integrity fields (or an explicit file override), target path, and SHA-256 binary digest. Local packaging no longer silently copies Codex out of ChatGPT.app.
 

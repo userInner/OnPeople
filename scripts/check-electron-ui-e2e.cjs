@@ -15,8 +15,81 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "onpeople-electron-e2e-"
 const userData = path.join(temporary, "user-data");
 const defaultWorkspace = path.join(temporary, "default-workspace");
 const alternateWorkspace = path.join(temporary, "alternate-workspace");
+const markdownPreviewFile = path.join(defaultWorkspace, "测试成稿.md");
 fs.mkdirSync(defaultWorkspace, { recursive: true });
 fs.mkdirSync(alternateWorkspace, { recursive: true });
+fs.writeFileSync(markdownPreviewFile, "# Markdown 成稿\n\n这是**排版后的正文**。\n\n| 检查项 | 结果 |\n| --- | --- |\n| 标题与表格 | 通过 |\n");
+
+async function checkPluginWorkbench(page) {
+  await page.evaluate(() => {
+    availableIndustryPlugin = {
+      id: "research-paper",
+      pluginId: "research-paper@onpeople-official",
+      displayName: "科研论文",
+      description: "从文献研究到投稿返修的中英文科研论文工作台。",
+      languages: ["zh-CN", "en"],
+      workflows: [
+        { id: "literature-review", name: "找文献、写综述", description: "检索、筛选并梳理研究进展。", prompt: "请先询问我的研究主题和筛选要求，再查找文献并撰写综述。" },
+        { id: "academic-writing", name: "写作或修改论文", description: "从提纲、草稿或已有文件开始。", prompt: "请先了解论文背景，再帮助我写作或修改。" },
+        { id: "citation-verification", name: "核验引用与参考文献", description: "检查论断、正文引文和文献表。", prompt: "请核验我提供的论文引用与参考文献。" },
+      ],
+    };
+    activeIndustryPlugin = null;
+    currentThreadId = null;
+    syncIndustryPluginCapability();
+    syncPluginWorkbench();
+  });
+  assert.equal(await page.locator("#plugin-workbench").isHidden(), true);
+  assert.equal(await page.locator(".welcome-card").isVisible(), true);
+  assert.equal(await page.locator("#task-title").textContent(), "新任务");
+  await page.screenshot({ path: "/tmp/onpeople-electron-generic-new-task.png" });
+  await page.locator("#attach-image").click();
+  assert.equal(await page.locator("#industry-plugin-capability").isVisible(), true);
+  await page.locator("#industry-plugin-capability").click();
+  assert.equal(await page.locator("#plugin-workbench").isVisible(), true);
+  assert.equal(await page.locator(".welcome-card").isHidden(), true);
+  assert.equal(await page.locator("#task-title").textContent(), "科研论文");
+  assert.equal(await page.locator("#plugin-workbench-label").textContent(), "科研论文 · 已注入本次任务");
+  assert.deepEqual(
+    await page.locator(".plugin-workflows button > strong").allTextContents(),
+    ["找文献、写综述", "写作或修改论文", "核验引用与参考文献"],
+  );
+  await page.locator('[data-plugin-workflow="literature-review"]').click();
+  assert.equal(await page.locator("#prompt").inputValue(), "请先询问我的研究主题和筛选要求，再查找文献并撰写综述。");
+  await page.screenshot({ path: "/tmp/onpeople-electron-research-plugin.png" });
+  await page.evaluate(() => {
+    activeIndustryPlugin = {
+      id: "contract-review",
+      displayName: "合同审阅",
+      description: "检查合同风险与待确认条款。",
+      languages: ["zh-CN"],
+      workflows: [{ id: "risk-review", name: "检查合同风险", description: "识别风险并列出修改建议。", prompt: "请检查这份合同的风险。" }],
+    };
+    document.querySelector("#prompt").value = "";
+    syncPluginWorkbench();
+  });
+  assert.equal(await page.locator("#task-title").textContent(), "合同审阅");
+  assert.deepEqual(await page.locator(".plugin-workflows button > strong").allTextContents(), ["检查合同风险"]);
+  const originalViewport = page.viewportSize() || await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  await page.setViewportSize({ width: 680, height: 760 });
+  const pluginLayout = await page.locator("#plugin-workbench").evaluate((element) => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: document.documentElement.clientWidth,
+    workbenchRight: element.getBoundingClientRect().right,
+  }));
+  assert.ok(pluginLayout.documentWidth <= pluginLayout.viewportWidth, `plugin workbench should not overflow horizontally: ${JSON.stringify(pluginLayout)}`);
+  await page.screenshot({ path: "/tmp/onpeople-electron-plugin-workbench-mobile.png" });
+  await page.setViewportSize(originalViewport);
+  await page.screenshot({ path: "/tmp/onpeople-electron-plugin-workbench.png" });
+  await page.evaluate(() => {
+    activeIndustryPlugin = null;
+    availableIndustryPlugin = null;
+    document.querySelector("#prompt").value = "";
+    syncIndustryPluginCapability();
+    syncPluginWorkbench();
+  });
+  assert.equal(await page.locator(".welcome-card").isVisible(), true);
+}
 
 async function run() {
   const packagedExecutablePath = String(process.env.ONPEOPLE_E2E_EXECUTABLE_PATH || "").trim();
@@ -36,6 +109,7 @@ async function run() {
   const errors = [];
   try {
     const page = await application.firstWindow();
+    assert.equal(await application.evaluate(({ app }) => app.getName()), "OnPeople");
     page.on("pageerror", (error) => errors.push(error.stack || error.message));
     await page.waitForSelector("#cwd", { state: "attached" });
     await page.waitForFunction(() => document.querySelector("#cwd")?.value === "");
@@ -45,6 +119,43 @@ async function run() {
     assert.equal(await page.locator('[data-tool-view="browser"]').getAttribute("aria-pressed"), "false");
     assert.match(await page.locator("#prompt").getAttribute("placeholder"), /今天帮你做些什么/);
     await page.waitForFunction(() => typeof cloudAccountState !== "undefined");
+    assert.equal(
+      fs.existsSync(path.join(userData, "provider-settings.json")),
+      false,
+      "a fresh signed-out install must not persist a provider choice during startup",
+    );
+    const startupModelRetry = await page.evaluate(async () => {
+      let attempts = 0;
+      const live = await bootstrapCloudAccountModels({
+        refresh: async () => {
+          attempts += 1;
+          return attempts < 3
+            ? { signedIn: true, modelsLive: false, models: [], modelsError: "Bad gateway (502)" }
+            : { signedIn: true, modelsLive: true, models: [{ id: "gpt-5.6-sol" }] };
+        },
+        wait: async () => {},
+        retryDelays: [1, 1, 1],
+      });
+      let permanentAttempts = 0;
+      const insufficient = await bootstrapCloudAccountModels({
+        refresh: async () => {
+          permanentAttempts += 1;
+          return { signedIn: true, modelsLive: false, models: [], modelsError: "Insufficient account balance" };
+        },
+        wait: async () => {},
+        retryDelays: [1, 1, 1],
+      });
+      return { attempts, live, permanentAttempts, insufficient };
+    });
+    assert.equal(startupModelRetry.attempts, 3, "startup must retry a transient model catalog failure");
+    assert.equal(startupModelRetry.live.modelsLive, true);
+    assert.equal(startupModelRetry.permanentAttempts, 1, "startup must not retry insufficient balance");
+    assert.equal(startupModelRetry.insufficient.modelsLive, false);
+    if (process.env.ONPEOPLE_E2E_PLUGIN_ONLY === "1") {
+      await checkPluginWorkbench(page);
+      assert.deepEqual(errors, []);
+      return;
+    }
     await page.evaluate(() => {
       cloudAccountState = {
         ...cloudAccountState,
@@ -179,9 +290,78 @@ async function run() {
       document.querySelector("#live-call-panel").classList.remove("is-connecting");
       document.querySelector("#composer").classList.remove("live-active");
     });
-    const brandMarkBounds = await page.locator(".brand-mark").boundingBox();
+    const compactionLifecycle = await page.evaluate(() => {
+      const placeholder = upsertContextCompaction({
+        id: PENDING_MANUAL_CONTEXT_COMPACTION_ID,
+        type: "contextCompaction",
+        source: "manual",
+      }, "started");
+      const manualRunning = placeholder.querySelector(".context-compaction-copy").textContent;
+      const real = upsertContextCompaction({
+        id: "manual-compaction-1",
+        type: "contextCompaction",
+        source: "manual",
+      }, "started");
+      const placeholderWasReplaced = real === placeholder
+        && !contextCompactionCards.has(PENDING_MANUAL_CONTEXT_COMPACTION_ID);
+      upsertContextCompaction({
+        id: "manual-compaction-1",
+        type: "contextCompaction",
+        source: "manual",
+        completed: true,
+      }, "completed");
+      const manualCompleted = real.querySelector(".context-compaction-copy").textContent;
+      const automatic = upsertContextCompaction({
+        id: "automatic-compaction-1",
+        type: "contextCompaction",
+        source: "automatic",
+      }, "started");
+      const automaticRunning = automatic.querySelector(".context-compaction-copy").textContent;
+      upsertContextCompaction({
+        id: "automatic-compaction-1",
+        type: "contextCompaction",
+        source: "automatic",
+        completed: true,
+      }, "completed");
+      const automaticCompleted = automatic.querySelector(".context-compaction-copy").textContent;
+      return {
+        manualRunning,
+        manualCompleted,
+        automaticRunning,
+        automaticCompleted,
+        placeholderWasReplaced,
+        rows: document.querySelectorAll(".context-compaction-row").length,
+      };
+    });
+    assert.deepEqual(compactionLifecycle, {
+      manualRunning: "正在压缩上下文",
+      manualCompleted: "上下文已压缩",
+      automaticRunning: "正在自动压缩上下文",
+      automaticCompleted: "上下文已自动压缩",
+      placeholderWasReplaced: true,
+      rows: 2,
+    });
+    await page.screenshot({ path: "/tmp/onpeople-context-compaction.png" });
+    await page.evaluate(() => resetTimeline());
+    assert.equal(await page.locator(".context-compaction-row").count(), 0);
+    await page.evaluate(() => renderContext({
+      usage: null,
+      queued: [],
+      checkpoint: {
+        available: true,
+        revision: 4,
+        rebuildMode: "full",
+        evidenceCount: 12,
+        conflictCount: 1,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      },
+    }));
+    assert.match(await page.locator("#context-checkpoint").textContent(), /校准 R4 · 原始记录重建 · 12 条证据 · 1 处冲突待确认/);
+    assert.equal(await page.locator("#context-checkpoint").evaluate((element) => element.classList.contains("has-conflict")), true);
+    assert.equal(await page.locator("#context-recalibrate").textContent(), "重新校准上下文");
     const welcomeMarkBounds = await page.locator(".welcome-mark").boundingBox();
-    assert.ok(brandMarkBounds.width >= 30, "sidebar brand mark should be visually prominent");
+    assert.equal(await page.locator(".brand-mark").count(), 0, "the in-app sidebar must not repeat the desktop app icon");
+    assert.equal(await page.locator(".sidebar-brand strong").textContent(), "OnPeople");
     assert.ok(welcomeMarkBounds.width >= 58, "welcome mark should anchor the empty state");
     assert.equal(await page.locator("#welcome-account-cta").isVisible(), true);
     assert.equal(await page.locator("#cloud-account-label").textContent(), "登录或注册");
@@ -234,6 +414,27 @@ async function run() {
     assert.equal(await page.locator("#settings-live-title").textContent(), "插件");
     assert.equal(await page.locator("#settings-live-host .extensions-view").isVisible(), true);
     assert.equal(await page.locator("#settings-live-host [data-extension-list='plugins']").isVisible(), true);
+    await page.waitForFunction(() => document.querySelector("#extensions-refresh")?.disabled === false);
+    await page.evaluate(() => renderPlugins([{
+      id: "research-paper@onpeople-official",
+      name: "research-paper",
+      installed: true,
+      enabled: true,
+      marketplace: "onpeople-official",
+      localVersion: "1.0.0",
+      interface: { displayName: "科研论文" },
+      industry: {
+        active: true,
+        displayName: "科研论文",
+        description: "中英文科研论文工作台。",
+        languages: ["zh-CN", "en"],
+        workflows: [{ id: "new-paper" }],
+      },
+    }]));
+    assert.equal(await page.locator("#plugins-list .extension-card-heading strong").textContent(), "科研论文");
+    assert.equal(await page.locator("#plugins-list .extension-status").textContent(), "可从＋添加");
+    assert.deepEqual(await page.locator("#plugins-list .extension-card-actions button").allTextContents(), ["停用", "卸载"]);
+    await page.screenshot({ path: "/tmp/onpeople-electron-industry-plugin.png" });
     await page.locator("[data-settings-route='hooks']").click();
     await page.waitForFunction(() => document.querySelector("#settings-live-title")?.textContent === "钩子");
     assert.equal(await page.locator("#settings-live-title").textContent(), "钩子");
@@ -339,6 +540,7 @@ async function run() {
     await page.locator("#settings-close").click();
     assert.equal(await page.locator("#settings-center").isHidden(), true);
     assert.equal(await page.locator("#app-shell").getAttribute("aria-hidden"), null);
+    await checkPluginWorkbench(page);
     assert.equal(await page.locator(".topbar .permission-control").count(), 0);
     assert.equal(await page.locator(".composer-context-row .permission-control").isVisible(), true);
     assert.equal(await page.locator("#composer-workspace-label").textContent(), "独立空间");
@@ -389,7 +591,7 @@ async function run() {
         },
       ]);
     });
-    assert.equal(await page.locator("#pinned-section").isVisible(), true);
+    assert.equal(await page.locator("#pinned-section").getAttribute("hidden"), null);
     assert.equal(await page.locator("#pinned-task-list .task-row").count(), 1);
     assert.match(await page.locator("#pinned-task-list").innerText(), /全局置顶任务/);
     assert.equal(await page.locator("#task-list .task-row").count(), 2);
@@ -431,14 +633,25 @@ async function run() {
     await page.evaluate(() => setRunning(true));
     assert.equal(await page.locator("#send").getAttribute("data-action"), "stop");
     assert.equal(await page.locator("#send").getAttribute("aria-label"), "停止当前任务");
+    assert.equal(await page.locator("#composer-run-state").isVisible(), true);
+    assert.match(await page.locator("#composer-run-state").innerText(), /当前任务运行中/);
     await page.locator("#prompt").fill("补充一条指令");
-    assert.equal(await page.locator("#send").getAttribute("data-action"), "send");
-    assert.equal(await page.locator("#send").getAttribute("aria-label"), "发送补充指令");
+    assert.equal(await page.locator("#send").getAttribute("data-action"), "queue");
+    assert.equal(await page.locator("#send").getAttribute("aria-label"), "加入消息队列");
+    await page.screenshot({ path: "/tmp/onpeople-electron-message-queue.png" });
     await page.locator("#prompt").fill("");
     assert.equal(await page.locator("#send").getAttribute("data-action"), "stop");
     await page.evaluate(() => setRunning(false));
     assert.equal(await page.locator("#send").getAttribute("data-action"), "send");
     assert.ok(contextBounds.y >= surfaceBounds.y + surfaceBounds.height, "workspace and permission controls should sit below the input surface");
+    await page.evaluate(() => addEvent("agent", "", "内容与发送框对齐检查"));
+    const conversationBounds = await page.locator("#timeline > .event.agent").last().boundingBox();
+    const composerBounds = await page.locator("#composer").boundingBox();
+    assert.ok(
+      Math.abs(conversationBounds.x - composerBounds.x) <= 1,
+      `conversation content and composer should share a left edge: ${JSON.stringify({ conversationBounds, composerBounds })}`,
+    );
+    await page.evaluate(() => resetTimeline());
     const permissionTrigger = page.locator(".composer-permission .op-select-trigger");
     await permissionTrigger.click();
     assert.equal(await page.locator('#onpeople-select-popover .op-select-option[data-value="ask"]').isVisible(), true);
@@ -473,7 +686,22 @@ async function run() {
     await page.locator('[data-tool-view="browser"]').click();
     assert.equal(await page.locator("#content-area").evaluate((element) => element.classList.contains("utility-collapsed")), false);
     assert.equal(await page.locator("#utility-panel").getAttribute("aria-hidden"), "false");
-    await page.waitForTimeout(250);
+    const markdownPreview = await page.evaluate(
+      ({ cwd, file }) => openWorkspacePreview(file, activeBrowserRouteId, cwd),
+      { cwd: defaultWorkspace, file: path.basename(markdownPreviewFile) },
+    );
+    assert.equal(markdownPreview.preview, true);
+    assert.equal(markdownPreview.name, "测试成稿.md");
+    await page.waitForTimeout(700);
+    const markdownWebviews = await application.evaluate(async ({ webContents }) => {
+      const items = webContents.getAllWebContents().filter((contents) => contents.getType() === "webview");
+      return Promise.all(items.map(async (contents) => ({ url: contents.getURL(), text: await contents.executeJavaScript("document.body.innerText") })));
+    });
+    const markdownWebview = markdownWebviews.find((item) => /\/preview\//.test(item.url));
+    assert.match(markdownWebview?.url || "", /\/preview\//, JSON.stringify(markdownWebviews));
+    assert.match(markdownWebview?.text || "", /Markdown 成稿/);
+    assert.match(markdownWebview?.text || "", /排版后的正文/);
+    await page.screenshot({ path: "/tmp/onpeople-electron-markdown-preview.png" });
     await page.screenshot({ path: "/tmp/onpeople-electron-utility-visible.png" });
     await page.locator("#utility-close").click();
     assert.equal(await page.locator("#content-area").evaluate((element) => element.classList.contains("utility-collapsed")), true);

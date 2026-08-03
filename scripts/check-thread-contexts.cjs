@@ -5,6 +5,7 @@ const registry = new ThreadContextRegistry();
 registry.bindWindow(10, "thread-a");
 registry.bindWindow(11, "thread-b");
 registry.update("thread-a", { model: "model-a", cwd: "/tmp/a" });
+registry.update("thread-a", { industryPlugin: { id: "research-paper", version: "1.0.0" } });
 registry.update("thread-b", { model: "model-b", cwd: "/tmp/b" });
 registry.startTurn("thread-a", "turn-a");
 registry.startTurn("thread-b", "turn-b");
@@ -12,6 +13,7 @@ registry.startTurn("thread-b", "turn-b");
 assert.equal(registry.contextForWindow(10).turnId, "turn-a");
 assert.equal(registry.contextForWindow(11).turnId, "turn-b");
 assert.equal(registry.contextForWindow(10).model, "model-a");
+assert.equal(registry.contextForWindow(10).industryPlugin.id, "research-paper");
 assert.equal(registry.contextForWindow(11).model, "model-b");
 
 registry.completeTurn("thread-a", "different-turn");

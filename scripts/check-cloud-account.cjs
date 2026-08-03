@@ -6,6 +6,10 @@ const path = require("node:path");
 const {
   CloudAccountClient,
   DEFAULT_SERVICE_URL,
+  ONPEOPLE_MODEL_CATALOG,
+  isOnPeopleModelAllowed,
+  modelPlatformHint,
+  shouldPromoteOnPeopleProviderStore,
   normalizeServiceUrl,
   preferredModelId,
 } = require("../src/cloud-account.cjs");
@@ -30,6 +34,7 @@ assert.match(
   "email sign-in must apply the live OnPeople model to the current task or new-task default",
 );
 assert.match(mainSource, /cloudAccount\.resolveModelId\(\)/, "execution must resolve an empty OnPeople model from the live Sub2API catalog");
+assert.match(mainSource, /!isOnPeopleModelAllowed\(requestedModel\)/, "execution must replace a stale OnPeople model with an allowed live default");
 assert.match(mainSource, /settings\.type !== "onpeople" && settings\.apiKey/, "dynamic OnPeople group credentials must not require a manual Router save");
 assert.doesNotMatch(
   mainSource,
@@ -60,6 +65,36 @@ function success(response, data) {
 }
 
 async function main() {
+  assert.deepEqual(ONPEOPLE_MODEL_CATALOG.map((model) => model.id), [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+  ]);
+  assert.equal(isOnPeopleModelAllowed("gpt-5.6-luna"), true);
+  assert.equal(isOnPeopleModelAllowed("claude-opus-5"), false);
+  assert.equal(modelPlatformHint({ id: "gpt-5.6-sol", platform: "openai" }), "openai");
+  assert.equal(modelPlatformHint({ id: "grok-4.5", ownedBy: "xai" }), "grok");
+  assert.equal(modelPlatformHint({ id: "claude-opus-5", groupName: "default" }), "anthropic");
+  assert.equal(shouldPromoteOnPeopleProviderStore({
+    type: "openai",
+    profiles: { openai: { model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1" } },
+  }, true), true);
+  assert.equal(shouldPromoteOnPeopleProviderStore({
+    type: "openai",
+    profiles: { openai: { model: "gpt-5.6-terra", baseUrl: "https://api.openai.com/v1", encryptedApiKey: "saved" } },
+  }, true), false, "a configured Router must remain selected");
+  assert.equal(shouldPromoteOnPeopleProviderStore({
+    type: "openai",
+    model: "gpt-5.6-terra",
+    baseUrl: "https://api.openai.com/v1",
+    encryptedApiKey: "legacy-saved",
+    profiles: {},
+  }, true), false, "a legacy configured Router must remain selected");
+  assert.equal(shouldPromoteOnPeopleProviderStore({
+    type: "openai",
+    profiles: { openai: { model: "custom-model", baseUrl: "https://router.example.com/v1" } },
+  }, true), false, "a custom Router must remain selected");
+  assert.equal(shouldPromoteOnPeopleProviderStore({ type: "openai", profiles: {} }, false), false);
   assert.equal(preferredModelId([
     { id: "gpt-5.6-terra", groupId: 4 },
     { id: "gpt-5.6-sol", groupId: 3 },
@@ -77,9 +112,10 @@ async function main() {
   }));
   const migratedClient = new CloudAccountClient({ filePath: legacyFile, safeStorage });
   assert.equal(migratedClient.serviceUrl(), DEFAULT_SERVICE_URL);
+
   const legacyProductionFile = path.join(root, "legacy-production-account.json");
   fs.writeFileSync(legacyProductionFile, JSON.stringify({
-    schemaVersion: 4,
+    schemaVersion: 5,
     serviceUrl: "https://sub2api.aibro.vip",
     encryptedAccessToken: Buffer.from("encrypted:production-access").toString("base64"),
     encryptedRefreshToken: Buffer.from("encrypted:production-refresh").toString("base64"),
@@ -102,7 +138,7 @@ async function main() {
   const credentialMigrationFile = path.join(root, "credential-migration-account.json");
   fs.writeFileSync(credentialMigrationFile, JSON.stringify({
     schemaVersion: 2,
-    serviceUrl: "https://sub2api.aibro.vip",
+    serviceUrl: "https://api.aibro.vip",
     encryptedAccessToken: Buffer.from("encrypted:legacy-access").toString("base64"),
     encryptedRefreshToken: Buffer.from("encrypted:legacy-refresh").toString("base64"),
     encryptedApiKey: Buffer.from("encrypted:legacy-api-key").toString("base64"),
@@ -117,7 +153,7 @@ async function main() {
   assert.equal(credentialMigrationClient.refreshToken(), "legacy-refresh");
   assert.equal(credentialMigrationClient.apiKey(), "legacy-api-key");
   const migratedCredentials = JSON.parse(fs.readFileSync(credentialMigrationFile, "utf8"));
-  assert.equal(migratedCredentials.schemaVersion, 4);
+  assert.equal(migratedCredentials.schemaVersion, 5);
   assert.ok(migratedCredentials.encryptedAccessToken);
   assert.ok(migratedCredentials.groupCredentials["3"], "legacy active key must migrate into the per-group key ring");
 
@@ -132,7 +168,7 @@ async function main() {
       && error.message.includes("无法连接 OnPeople 服务")
       && error.message.includes("http://127.0.0.1:1"),
   );
-  unreachableClient.saveCredentials("https://sub2api.aibro.vip", {
+  unreachableClient.saveCredentials("https://api.aibro.vip", {
     accessToken: "existing-access",
     refreshToken: "existing-refresh",
     apiKey: "existing-key",
@@ -141,7 +177,7 @@ async function main() {
     email: "new@example.com",
     serviceUrl: "http://127.0.0.1:1",
   }));
-  assert.equal(unreachableClient.serviceUrl(), "https://sub2api.aibro.vip");
+  assert.equal(unreachableClient.serviceUrl(), "https://api.aibro.vip");
   assert.equal(unreachableClient.accessToken(), "existing-access");
 
   let createdKey = false;
@@ -186,7 +222,11 @@ async function main() {
       if (request.headers.authorization === "Bearer sk-onpeople-openai") {
         return response.end(JSON.stringify({
           object: "list",
-          data: [{ id: "gpt-5.6-terra", object: "model", owned_by: "sub2api" }],
+          data: [
+            { id: "gpt-5.6-terra", object: "model", owned_by: "sub2api" },
+            { id: "gpt-5.6-luna", object: "model", owned_by: "sub2api" },
+            { id: "claude-opus-5", object: "model", owned_by: "sub2api" },
+          ],
         }));
       }
       assert.equal(request.headers.authorization, "Bearer sk-onpeople-desktop");
@@ -305,7 +345,12 @@ async function main() {
     assert.equal(status.account.group.id, 3);
     assert.equal(status.modelsLive, true);
     assert.equal(status.models[0].id, "gpt-5.6-sol");
+    assert.equal(status.models[0].platform, "composite");
     assert.equal(status.models.some((model) => model.id === "gpt-5.6-terra"), true, "the account model catalog must include every available group");
+    assert.deepEqual(status.models.map((model) => model.id), ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    assert.equal(status.models.some((model) => model.id.startsWith("claude-")), false, "the desktop catalog must enforce the OnPeople product allowlist");
+    assert.equal(client.modelPlatform("gpt-5.6-sol"), "openai", "GPT models in a composite group must retain their effective provider capability");
+    assert.equal(client.modelPlatform("gpt-5.6-terra"), "openai");
     assert.equal((await client.resolveModelId()).modelId, "gpt-5.6-sol");
     assert.equal((await client.resolveModelId("gpt-5.6-terra")).modelId, "gpt-5.6-terra");
     assert.deepEqual(client.providerCredentials("gpt-5.6-sol"), {
@@ -335,7 +380,7 @@ async function main() {
     assert.equal(groups.groups.find((group) => group.id === 4).allowLive, true);
     const switched = await client.selectGroup(4);
     assert.equal(switched.account.group.id, 4);
-    assert.deepEqual(switched.models.map((model) => model.id), ["gpt-5.6-terra", "gpt-5.6-sol"]);
+    assert.deepEqual(switched.models.map((model) => model.id), ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     assert.equal(client.apiKey(), "sk-onpeople-openai");
     await client.selectGroup(3);
     assert.equal(client.apiKey(), "sk-onpeople-desktop");

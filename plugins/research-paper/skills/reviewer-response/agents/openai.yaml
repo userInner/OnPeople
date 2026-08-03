@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reviewer Response"
+  short_description: "Traceable peer-review revision and point-by-point response"
+  default_prompt: "Turn these reviewer comments into a revision matrix and a point-by-point response."

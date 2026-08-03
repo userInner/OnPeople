@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "type": "industry",
+  "id": "research-paper",
+  "displayName": "科研论文",
+  "industry": "academic-research",
+  "description": "从文献研究到投稿返修的中英文科研论文工作台。",
+  "compatibleOnPeople": ">=0.29.0",
+  "instructions": "./instructions/research-agent.md",
+  "languages": ["zh-CN", "en"],
+  "capabilities": [
+    "literature-review",
+    "research-design",
+    "bilingual-academic-writing",
+    "citation-verification",
+    "submission-and-revision"
+  ],
+  "workflows": [
+    {
+      "id": "literature-review",
+      "name": "找文献、写综述",
+      "description": "检索、筛选并梳理研究进展。",
+      "prompt": "帮我查找文献并撰写综述。请先询问研究主题、时间范围、文献语言、期望数量和筛选要求；信息足够后再检索。结果区分仅书目信息、有摘要和可读全文，并总结已有共识、主要争议和研究空白。"
+    },
+    {
+      "id": "academic-writing",
+      "name": "写作或修改论文",
+      "description": "从提纲、草稿或已有文件开始。",
+      "prompt": "帮我写作或修改一篇科研论文。请先询问研究领域、论文类型、目标语言、目标期刊、当前阶段和已有材料，再从我最需要的部分开始；不要编造数据、来源或研究结论。"
+    },
+    {
+      "id": "citation-verification",
+      "name": "核验引用与参考文献",
+      "description": "检查论断、正文引文和文献表。",
+      "prompt": "帮我核验论文中的引用与参考文献。请先让我提供稿件或文献表，再检查论断是否得到来源支持、正文引文与文献表是否对应，并标明仅有书目信息、有摘要或可读全文；无法确认的内容要明确指出。"
+    }
+  ],
+  "templates": [
+    {
+      "id": "article-outline",
+      "name": "通用论文结构",
+      "path": "./templates/article-outline.md",
+      "description": "可按学科和目标期刊调整的中英文论文结构。"
+    }
+  ],
+  "policies": [
+    {
+      "id": "research-integrity",
+      "name": "科研诚信规则",
+      "path": "./policies/research-integrity.md",
+      "description": "证据、引文、数据、作者贡献和披露边界。"
+    }
+  ],
+  "evals": [
+    {
+      "id": "citation-grounding",
+      "name": "引文可追溯评测",
+      "path": "./evals/citation-grounding.json",
+      "description": "检查论断、来源和不确定性表达。"
+    }
+  ]
+}

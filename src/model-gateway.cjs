@@ -324,19 +324,40 @@ class ModelGateway {
     return `${this.url}/routes/${encodeURIComponent(id)}/v1`;
   }
 
-  resolveSettings(url) {
-    if (url === "/v1/responses" && this.getFallbackSettings) return this.getFallbackSettings();
-    const match = /^\/routes\/([^/]+)\/v1\/responses(?:\?.*)?$/.exec(url || "");
-    return match ? this.routes.get(decodeURIComponent(match[1])) || null : null;
+  resolveRequest(url) {
+    const parsed = new URL(url || "/", "http://127.0.0.1");
+    const fallback = /^\/v1\/(responses|alpha\/search)$/.exec(parsed.pathname);
+    if (fallback && this.getFallbackSettings) {
+      return {
+        settings: this.getFallbackSettings(),
+        upstreamPath: `/${fallback[1]}${parsed.search}`,
+      };
+    }
+    const match = /^\/routes\/([^/]+)\/v1\/(responses|alpha\/search)$/.exec(parsed.pathname);
+    if (!match) return null;
+    const settings = this.routes.get(decodeURIComponent(match[1])) || null;
+    return settings ? { settings, upstreamPath: `/${match[2]}${parsed.search}` } : null;
   }
 
-  async fetchUpstream(settings, pathname, body, signal) {
+  resolveSettings(url) {
+    return this.resolveRequest(url)?.settings || null;
+  }
+
+  async fetchUpstream(settings, pathname, body, signal, incomingHeaders = {}) {
+    const codexBetaFeatures = settings.remoteCompactionV2
+      ? String(incomingHeaders["x-codex-beta-features"] || "").trim()
+      : "";
+    const codexTurnMetadata = String(incomingHeaders["x-codex-turn-metadata"] || "").trim();
+    const originator = String(incomingHeaders.originator || "").trim();
     const request = () => fetch(`${settings.baseUrl.replace(/\/$/, "")}${pathname}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         accept: "text/event-stream, application/json",
         ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}),
+        ...(codexBetaFeatures ? { "x-codex-beta-features": codexBetaFeatures } : {}),
+        ...(codexTurnMetadata ? { "x-codex-turn-metadata": codexTurnMetadata } : {}),
+        ...(originator ? { originator } : {}),
       },
       body,
       signal,
@@ -371,12 +392,13 @@ class ModelGateway {
   }
 
   async handle(request, response) {
-    const settings = request.method === "POST" ? this.resolveSettings(request.url) : null;
-    if (!settings) {
+    const resolved = request.method === "POST" ? this.resolveRequest(request.url) : null;
+    if (!resolved) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: "Model route not found" } }));
       return;
     }
+    const { settings, upstreamPath } = resolved;
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
     response.once("close", () => {
@@ -384,12 +406,31 @@ class ModelGateway {
     });
     try {
       const body = await readJson(request);
+      if (upstreamPath.startsWith("/alpha/search")) {
+        const upstream = await this.fetchUpstream(
+          settings,
+          upstreamPath,
+          JSON.stringify(body),
+          controller.signal,
+          request.headers,
+        );
+        response.writeHead(upstream.status, {
+          "content-type": upstream.headers.get("content-type") || "application/json",
+          "cache-control": upstream.headers.get("cache-control") || "no-cache",
+        });
+        if (upstream.body) {
+          for await (const chunk of upstream.body) response.write(chunk);
+        }
+        response.end();
+        return;
+      }
       if (settings.protocol === "responses") {
         const upstream = await this.fetchUpstream(
           settings,
           "/responses",
           JSON.stringify(body),
           controller.signal,
+          request.headers,
         );
         response.writeHead(upstream.status, {
           "content-type": upstream.headers.get("content-type") || "application/json",
@@ -406,6 +447,7 @@ class ModelGateway {
         "/chat/completions",
         JSON.stringify(toChatRequest(body, true)),
         controller.signal,
+        request.headers,
       );
       if (!upstream.ok) {
         const raw = await upstream.text();

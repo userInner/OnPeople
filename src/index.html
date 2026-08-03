@@ -314,7 +314,6 @@
     <div id="app-shell" class="app-shell">
       <aside id="app-sidebar" class="app-sidebar" aria-label="任务侧栏">
         <div class="sidebar-brand">
-          <span class="brand-mark" aria-hidden="true"><img src="../assets/onpeople-app-icon.png" alt="" /></span>
           <strong>OnPeople</strong>
           <button id="sidebar-toggle" class="icon-button sidebar-hide" type="button" aria-label="收起侧栏">◧</button>
         </div>
@@ -606,11 +605,28 @@
                 <span>Plan</span><span>Goals</span><span>Browser</span><span>Computer Use</span>
               </div>
             </div>
+
+            <section id="plugin-workbench" class="plugin-workbench" aria-labelledby="plugin-workbench-title" hidden>
+              <header class="plugin-workbench-header">
+                <div>
+                  <span id="plugin-workbench-label" class="plugin-workbench-label">插件已启用</span>
+                  <h1 id="plugin-workbench-title">从哪一步开始？</h1>
+                  <p id="plugin-workbench-description"></p>
+                </div>
+                <span id="plugin-workbench-meta" class="plugin-workbench-meta"></span>
+              </header>
+              <nav id="plugin-workflows" class="plugin-workflows" aria-label="插件开始方式"></nav>
+            </section>
           </div>
 
           <div class="composer-dock">
             <form id="composer" class="composer">
               <div class="composer-surface">
+                <div id="composer-run-state" class="composer-run-state" role="status" aria-live="polite" hidden>
+                  <span class="composer-run-state-main"><i aria-hidden="true"></i><strong id="composer-run-state-label">当前任务运行中</strong></span>
+                  <span id="composer-queue-count" class="composer-queue-count" hidden>队列 0</span>
+                  <small id="composer-run-state-hint">输入新消息后发送，将在当前任务完成后执行</small>
+                </div>
                 <div id="image-attachments" class="image-attachments" hidden></div>
                 <div id="capability-selection" class="capability-selection" hidden></div>
                 <div id="capability-menu" class="capability-menu" hidden role="menu" aria-label="添加内容和能力">
@@ -631,6 +647,8 @@
                   <button type="button" data-capability="computer"><i class="capability-icon computer">✦</i><span><strong>电脑</strong><small id="computer-capability-copy">控制 macOS 原生应用</small></span></button>
                   <button type="button" data-capability="visualize"><i class="capability-icon visualize">✧</i><span><strong>Visualize</strong><small>生成交互式数据可视化</small></span></button>
                   <button type="button" data-capability="default-templates"><i class="capability-icon defaults">◇</i><span><strong>Default templates</strong><small>生成文档、表格、演示和网站模板</small></span></button>
+                  <span id="industry-plugin-capability-heading" class="capability-heading" hidden>插件</span>
+                  <button id="industry-plugin-capability" type="button" data-industry-plugin hidden><i class="capability-icon plugin">◆</i><span><strong id="industry-plugin-capability-name">行业插件</strong><small>注入到本次任务</small></span></button>
                   <span class="capability-heading">应用</span>
                   <button type="button" data-capability-action="apps"><i>⊞</i><span><strong>应用与连接器</strong><small>从 Plugins 与 MCP 管理中心安装</small></span></button>
                 </div>
@@ -1001,10 +1019,11 @@
                 <div class="context-gauge-copy"><strong id="context-percent">0%</strong><span>CONTEXT WINDOW</span></div>
                 <div class="context-track"><i id="context-fill"></i></div>
                 <div id="context-breakdown" class="context-breakdown">尚未收到 Token 使用信息。</div>
+                <div id="context-checkpoint" class="context-checkpoint">上下文校准尚未建立。</div>
               </div>
               <div class="control-form">
                 <textarea id="context-message" rows="3" placeholder="在运行中转向，或排队到下一轮…"></textarea>
-                <div class="control-actions"><button id="context-steer" type="button">立即转向</button><button id="context-queue" type="button">排队下一轮</button><button id="context-compact" type="button" class="danger-outline">压缩上下文</button></div>
+                <div class="control-actions"><button id="context-steer" type="button">立即转向</button><button id="context-queue" type="button">排队下一轮</button><button id="context-recalibrate" type="button">重新校准上下文</button><button id="context-compact" type="button" class="danger-outline">压缩上下文</button></div>
               </div>
               <div id="context-queue-list" class="control-list"></div>
             </div>

@@ -23,6 +23,7 @@ assert.ok(styles.includes(".browser-slot webview[hidden]"), "inactive task brows
 assert.ok(main.includes("openWorkspacePreview"), "workspace artifacts must support embedded preview");
 assert.ok(main.includes("watchWorkspacePreview"), "embedded workspace previews must refresh after edits");
 assert.ok(main.includes("pdfPreviewHtml"), "PDF previews must use the polished embedded PDF viewer");
+assert.ok(main.includes("renderMarkdownPreview"), "Markdown files must use the rendered embedded document preview");
 assert.ok(renderer.includes("await openWorkspacePreview(target)"), "artifact links must open in the current task browser");
 
 process.stdout.write("Browser task isolation checks passed.\n");

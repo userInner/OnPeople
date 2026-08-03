@@ -12,6 +12,8 @@ publish:
 files:
   - src/**/*
   - assets/**/*
+  - plugins/**/*
+  - .agents/plugins/marketplace.json
   - package.json
   - README.md
   - THIRD_PARTY_NOTICES.md

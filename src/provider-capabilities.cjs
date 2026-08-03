@@ -23,4 +23,11 @@ function imageGenerationCapability(providerType, hasApiKey) {
   return { available: true, model, reason: null };
 }
 
-module.exports = { IMAGE_MODELS, imageGenerationCapability };
+function codexProviderName(providerType, upstreamPlatform, displayName = "OnPeople") {
+  const type = String(providerType || "").trim().toLowerCase();
+  const platform = String(upstreamPlatform || "").trim().toLowerCase();
+  if (type === "openai" || (type === "onpeople" && platform === "openai")) return "OpenAI";
+  return `${String(displayName || "OnPeople").trim() || "OnPeople"} via OnPeople`;
+}
+
+module.exports = { IMAGE_MODELS, codexProviderName, imageGenerationCapability };

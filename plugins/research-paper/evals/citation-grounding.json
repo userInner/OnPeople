@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "citation-grounding",
+  "criteria": [
+    "Every material factual claim is supported, qualified, or marked as needing a source.",
+    "Every verified reference resolves to real bibliographic metadata.",
+    "The cited source supports the nearby claim rather than merely sharing keywords.",
+    "Quotations and page locations match the source.",
+    "Uncertainty and conflicting evidence are represented explicitly."
+  ]
+}

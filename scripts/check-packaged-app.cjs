@@ -39,6 +39,7 @@ const dependencyProbe = `
   for (const dependency of dependencies) require.resolve(dependency, { paths: [appRoot] });
   require(require.resolve("rrule", { paths: [appRoot] }));
   require(require.resolve("node-pty", { paths: [appRoot] }));
+  ${isMacBundle ? 'require(require.resolve("@napi-rs/canvas", { paths: [appRoot] }));' : ""}
 `;
 const canExecutePackagedBinary = isMacBundle || process.platform === "win32";
 if (canExecutePackagedBinary) {
@@ -92,6 +93,11 @@ if (isMacBundle) {
   );
   assert.equal(readPlistValue("LSBackgroundOnly"), null, "OnPeople must not be packaged as a background-only app");
   assert.equal(readPlistValue("LSUIElement"), null, "OnPeople must keep a normal Dock/window presence");
+  assert.equal(readPlistValue("CFBundleIconFile"), "Logo", "macOS package must use the Icon Composer fallback icon");
+  assert.equal(readPlistValue("CFBundleIconName"), "Logo", "macOS package must register the Icon Composer asset name");
+  assert.ok(fs.existsSync(path.join(resourcesRoot, "Assets.car")), "macOS package must include compiled Icon Composer assets");
+  assert.ok(fs.existsSync(path.join(resourcesRoot, "Logo.icns")), "macOS package must include the Icon Composer fallback icon");
+  assert.equal(fs.existsSync(path.join(resourcesRoot, "electron.icns")), false, "stale Electron icon must not remain in the package");
   execFileSync("/usr/bin/codesign", [
     "--verify",
     "--deep",

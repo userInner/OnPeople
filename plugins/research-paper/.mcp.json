@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "research-sources": {
+      "command": "node",
+      "args": ["./scripts/research-sources-mcp.cjs"],
+      "cwd": ".",
+      "tool_timeout_sec": 45
+    }
+  }
+}

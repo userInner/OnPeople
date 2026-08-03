@@ -11,7 +11,7 @@ function insideRoot(root, candidate) {
 }
 
 function resolveWorkspaceFile(cwd, filePath) {
-  const root = path.resolve(String(cwd || ""));
+  const root = fs.realpathSync(path.resolve(String(cwd || "")));
   const candidate = resolveWorkspaceInput(root, filePath);
   const stat = fs.statSync(candidate);
   if (!stat.isFile()) throw new Error("所选项目不是文件");

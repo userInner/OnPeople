@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 
 const root = path.resolve(__dirname, "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -16,6 +17,7 @@ const cuaMcpProxy = fs.readFileSync(path.join(root, "src", "cua-driver-mcp.cjs")
 assert.equal(manifest.devDependencies["electron-builder"], "^26.0.12");
 assert.match(manifest.scripts["package:win"], /package-win-installer\.cjs/);
 assert.match(manifest.scripts["package:win:cross"], /ONPEOPLE_ALLOW_CROSS_WINDOWS_BUILD=1/);
+assert.match(manifest.scripts["package:win:cross"], /icons:windows/);
 assert.match(manifest.scripts["package:win:store"], /package-win-store\.cjs/);
 assert.match(manifest.scripts["package:win:store:cross"], /package-win-store-cross\.cjs/);
 assert.match(manifest.scripts["package:win:portable"], /package-win\.cjs/);
@@ -74,4 +76,21 @@ assert.match(packageCheck, /app\.asar/);
 assert.match(packageCheck, /asar\.extractFile/);
 assert.match(packageCheck, /ELECTRON_RUN_AS_NODE/);
 
-console.log("Windows installer checks passed.");
+async function checkWindowsIcon() {
+  const ico = fs.readFileSync(path.join(root, "assets", "OnPeople.ico"));
+  assert.equal(ico.readUInt16LE(4), 7, "Windows icon must include all seven desktop sizes");
+
+  const image = await loadImage(path.join(root, "assets", "platform-icons", "windows", "OnPeople-256.png"));
+  const canvas = createCanvas(image.width, image.height);
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0);
+  assert.equal(context.getImageData(0, 0, 1, 1).data[3], 0, "Windows icon corners must be transparent");
+  assert.equal(context.getImageData(image.width / 2, image.height / 2, 1, 1).data[3], 255, "Windows icon subject must remain opaque");
+}
+
+checkWindowsIcon().then(() => {
+  console.log("Windows installer checks passed.");
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

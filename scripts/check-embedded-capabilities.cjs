@@ -4,7 +4,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const artifacts = require("../src/artifact-mcp.cjs");
-const { imageGenerationCapability } = require("../src/provider-capabilities.cjs");
+const { codexProviderName, imageGenerationCapability } = require("../src/provider-capabilities.cjs");
 
 const artifactToolNames = new Set(artifacts.definitions.map((tool) => tool.name));
 for (const name of [
@@ -30,6 +30,9 @@ assert.equal(imageGenerationCapability("deepseek", true).available, false);
 assert.equal(imageGenerationCapability("kimi", true).available, false);
 assert.equal(imageGenerationCapability("minimax", true).available, false);
 assert.equal(imageGenerationCapability("openai", false).available, false);
+assert.equal(codexProviderName("openai", "openai", "OpenAI"), "OpenAI");
+assert.equal(codexProviderName("onpeople", "openai", "OnPeople"), "OpenAI");
+assert.equal(codexProviderName("onpeople", "grok", "OnPeople"), "OnPeople via OnPeople");
 
 for (const dependency of ["docx", "pdfkit", "exceljs", "pptxgenjs", "mammoth", "pdf-parse", "adm-zip"]) {
   assert.doesNotThrow(() => require.resolve(dependency), `${dependency} should be a production dependency`);

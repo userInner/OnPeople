@@ -38,10 +38,18 @@ const { LocalMemoryStore } = require("./local-memory.cjs");
 const { UsageLedger } = require("./usage-ledger.cjs");
 const { SecretStore } = require("./secret-store.cjs");
 const { PetStateStore } = require("./pet-state.cjs");
-const { CloudAccountClient } = require("./cloud-account.cjs");
+const {
+  CloudAccountClient,
+  isOnPeopleModelAllowed,
+  shouldPromoteOnPeopleProviderStore,
+} = require("./cloud-account.cjs");
 const { AppUpdateService } = require("./app-updater.cjs");
 const { createCodexMultiAgentAdapter } = require("./codex-multi-agent-adapter.cjs");
-const { imageGenerationCapability } = require("./provider-capabilities.cjs");
+const { ContextCompactionTracker } = require("./context-compaction.cjs");
+const { ContextCheckpointStore, formatContextCheckpointItem } = require("./context-checkpoints.cjs");
+const { IndustryPluginStore, publicProfile: publicIndustryPlugin } = require("./industry-plugins.cjs");
+const { renderMarkdownPreview } = require("./markdown-preview.cjs");
+const { codexProviderName, imageGenerationCapability } = require("./provider-capabilities.cjs");
 const { closeLiveCall, createLiveCall, LIVE_VOICES } = require("./live-session.cjs");
 const { connectLiveSideband } = require("./live-sideband.cjs");
 const { isWithin, resolveWorkspaceInput } = require("./workspace-boundary.cjs");
@@ -64,6 +72,8 @@ const {
 } = require("./platform-runtime.cjs");
 const { version: APP_VERSION } = require("../package.json");
 
+app.setName("OnPeople");
+
 // Keep the original data directory as a compatibility invariant. Electron
 // derives userData from package.json name by default, which made dev builds and
 // renamed packages appear to lose sessions after an upgrade.
@@ -76,8 +86,25 @@ const EMBEDDED_BROWSER_PARTITION = "persist:internal-agent-browser";
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const APP_ICON_PNG = path.join(APP_ROOT, "assets", "onpeople-app-icon.png");
+const MAC_DOCK_ICON_PNG = path.join(APP_ROOT, "assets", "onpeople-dock-icon.png");
 const PDFJS_ROOT = path.dirname(require.resolve("pdfjs-dist/package.json"));
-const PREVIEWABLE_EXTENSIONS = new Set([".html", ".htm", ".pdf", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"]);
+const PREVIEWABLE_EXTENSIONS = new Set([".html", ".htm", ".md", ".markdown", ".pdf", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"]);
+
+function materializeOfficialPluginMarketplace() {
+  const sourceMarketplace = path.join(APP_ROOT, ".agents", "plugins", "marketplace.json");
+  const sourcePlugins = path.join(APP_ROOT, "plugins");
+  if (!fs.existsSync(sourceMarketplace) || !fs.existsSync(sourcePlugins)) return null;
+  const root = path.join(app.getPath("userData"), "official-plugin-marketplace", APP_VERSION);
+  const marketplacePath = path.join(root, ".agents", "plugins", "marketplace.json");
+  const targetPlugins = path.join(root, "plugins");
+  if (!app.isPackaged || !fs.existsSync(marketplacePath) || !fs.existsSync(targetPlugins)) {
+    fs.mkdirSync(path.dirname(marketplacePath), { recursive: true, mode: 0o700 });
+    fs.cpSync(sourcePlugins, targetPlugins, { recursive: true, force: true });
+    fs.copyFileSync(sourceMarketplace, marketplacePath);
+    fs.chmodSync(marketplacePath, 0o600);
+  }
+  return { root, marketplacePath };
+}
 const PREVIEW_MIME_TYPES = Object.freeze({
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
@@ -170,7 +197,7 @@ const PROVIDERS = {
   lmstudio: { name: "LM Studio", protocol: "local", baseUrl: "", model: "", vision: false },
 };
 const DEVELOPER_INSTRUCTIONS = AGENT_BEHAVIOR_CONTRACT;
-function developerInstructionsFor(cwd, extra = "") {
+function developerInstructionsFor(cwd, extra = "", industryPlugin = null) {
   const p0 = readP0Settings();
   const policy = p0.policy;
   const permission = policy.sandbox === "danger-full-access" && policy.approvalPolicy === "never"
@@ -181,7 +208,8 @@ function developerInstructionsFor(cwd, extra = "") {
   const personalization = customInstructions
     ? `<onpeople_personal_instructions>\n${customInstructions}\n</onpeople_personal_instructions>`
     : "";
-  return [DEVELOPER_INSTRUCTIONS, permission, personalization, memory, extra].filter(Boolean).join("\n\n");
+  const industryInstructions = industryPluginStore?.runtimeInstructions(industryPlugin) || "";
+  return [DEVELOPER_INSTRUCTIONS, permission, personalization, memory, industryInstructions, extra].filter(Boolean).join("\n\n");
 }
 const CAPABILITY_INSTRUCTIONS = {
   documents: "Create or edit a DOCX document. Use workspace_artifacts.artifact_create_document for the final file.",
@@ -946,6 +974,25 @@ class EmbeddedBrowserBridge {
         response.end(this.pdfPreviewHtml(entry, rawUrl));
         return;
       }
+      if (new Set([".md", ".markdown"]).has(path.extname(requested).toLowerCase())) {
+        if (parsed.searchParams.get("raw") === "1") {
+          response.setHeader("content-type", "text/plain; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.setHeader("x-content-type-options", "nosniff");
+          response.end(fs.readFileSync(requested, "utf8"));
+          return;
+        }
+        response.setHeader("content-type", "text/html; charset=utf-8");
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("x-content-type-options", "nosniff");
+        response.end(renderMarkdownPreview({
+          source: fs.readFileSync(requested, "utf8"),
+          name: path.basename(requested),
+          relativePath: rootRelative.split(path.sep).join("/"),
+          rawUrl: `${parsed.pathname}?raw=1`,
+        }));
+        return;
+      }
       response.setHeader("content-type", this.previewMimeType(requested));
       response.setHeader("cache-control", "no-store");
       response.setHeader("x-content-type-options", "nosniff");
@@ -1423,6 +1470,9 @@ let scheduledTaskStore;
 let agentProfileStore;
 let agentTaskBoardStore;
 let localMemoryStore;
+let industryPluginStore;
+let officialPluginMarketplace;
+let contextCheckpointStore;
 let usageLedger;
 let secretStore;
 let cloudAccount;
@@ -1465,10 +1515,12 @@ const lastAgentMessageByThread = new Map();
 const queuedMessages = new Map();
 const hookRuns = new Map();
 const runtimeEvents = [];
+const contextCompactions = new ContextCompactionTracker();
+const contextCheckpointJobsByThread = new Map();
+const pendingCheckpointInjectionsByThread = new Map();
 const THREAD_RESTORE_SOFT_TIMEOUT_MS = 8_000;
 const THREAD_RESTORE_TIMEOUT_MS = 120_000;
 const TURN_CONTROL_TIMEOUT_MS = 15_000;
-const AUTO_COMPACT_TOKEN_LIMIT = 220_000;
 let runtimeRestartTimer = null;
 let runtimeRestartAttempt = 0;
 let runtimeRestartAt = null;
@@ -1706,13 +1758,14 @@ async function restoreActiveThread(client, threadId) {
     approvalsReviewer: policy.approvalsReviewer,
     sandbox: policy.sandbox,
     config: buildThreadConfig(settings, knownThreadCwd(threadId), threadId),
-    developerInstructions: developerInstructionsFor(knownThreadCwd(threadId)),
+    developerInstructions: developerInstructionsFor(knownThreadCwd(threadId), "", knownThreadIndustryPlugin(threadId)),
     deferGoalContinuation: true,
   }, { timeoutMs: THREAD_RESTORE_TIMEOUT_MS });
   runtimeLoadedThreadIds.add(threadId);
   applyActiveThread(result, threadId);
   agentRuntime?.rememberSession(result.thread, { model: result.model || model, cwd: result.thread?.cwd || knownThreadCwd(threadId) });
   threadContexts.update(threadId, { model: result.model || model });
+  scheduleStoredCheckpointInjection(threadId);
   recordRuntimeEvent("success", "已恢复当前会话", threadId);
   sendToTaskThread(threadId, "agent:event", { type: "thread-recovered", threadId });
 }
@@ -1738,7 +1791,12 @@ async function restartAppServer(reason = "manual") {
     threadContexts.completeTurn(context.id, null, "interrupted");
   }
   runtimeStatus = "starting";
-  recordRuntimeEvent("info", reason === "manual" ? "正在手动重启 Agent 运行时" : "正在自动恢复 Agent 运行时");
+  const restartMessage = reason === "manual"
+    ? "正在手动重启 Agent 运行时"
+    : reason === "plugin-change"
+      ? "插件已变更，正在重新载入 Agent 运行时"
+      : "正在自动恢复 Agent 运行时";
+  recordRuntimeEvent("info", restartMessage);
   runtimeStartPromise = initializeAppServer({ restoreThreadId: threadId })
     .then(() => runtimeSnapshot())
     .finally(() => { runtimeStartPromise = null; });
@@ -2095,7 +2153,11 @@ async function runScheduledTask(task) {
       sandbox,
       multiAgentMode: "explicitRequestOnly",
       config: buildThreadConfig(settings, taskCwd, task.destination?.threadId || `scheduled-${run.id}`),
-      developerInstructions: developerInstructionsFor(taskCwd, "This is an unattended scheduled task. Stay within the configured sandbox. Do not request interactive approval; report any blocked action clearly."),
+      developerInstructions: developerInstructionsFor(
+        taskCwd,
+        "This is an unattended scheduled task. Stay within the configured sandbox. Do not request interactive approval; report any blocked action clearly.",
+        task.destination?.threadId ? knownThreadIndustryPlugin(task.destination.threadId) : undefined,
+      ),
     };
     const started = task.destination?.mode === "thread"
       ? await appServer.request("thread/resume", { ...threadOptions, threadId: task.destination.threadId, deferGoalContinuation: true })
@@ -2280,37 +2342,43 @@ function persistThreadProviderSettings(threadId, settings) {
 }
 
 function readProviderStore() {
+  let store;
   try {
-    const store = JSON.parse(fs.readFileSync(providerSettingsPath(), "utf8"));
-    let changed = false;
-    if (store.type === "sub2api") {
-      store.type = "onpeople";
-      changed = true;
-    }
-    store.profiles ||= {};
-    const legacySub2 = store.profiles.sub2api;
-    if (!store.profiles.onpeople && legacySub2 && typeof legacySub2 === "object") {
-      store.profiles.onpeople = {
-        model: legacySub2.model || "",
-        baseUrl: PROVIDERS.onpeople.baseUrl,
-      };
-      changed = true;
-    }
-    if (store.profiles.onpeople?.baseUrl !== PROVIDERS.onpeople.baseUrl) {
-      store.profiles.onpeople = {
-        ...(store.profiles.onpeople || {}),
-        baseUrl: PROVIDERS.onpeople.baseUrl,
-      };
-      delete store.profiles.onpeople.encryptedApiKey;
-      changed = true;
-    }
-    if (changed) {
-      atomicWriteFile(providerSettingsPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-    }
-    return store;
+    store = JSON.parse(fs.readFileSync(providerSettingsPath(), "utf8"));
   } catch {
-    return { type: "openai", profiles: {} };
+    store = { type: "openai", profiles: {} };
   }
+  let changed = false;
+  if (store.type === "sub2api") {
+    store.type = "onpeople";
+    changed = true;
+  }
+  store.profiles ||= {};
+  const legacySub2 = store.profiles.sub2api;
+  if (!store.profiles.onpeople && legacySub2 && typeof legacySub2 === "object") {
+    store.profiles.onpeople = {
+      model: legacySub2.model || "",
+      baseUrl: PROVIDERS.onpeople.baseUrl,
+    };
+    changed = true;
+  }
+  if (shouldPromoteOnPeopleProviderStore(store, Boolean(cloudAccount?.accessToken()))) {
+    store.type = "onpeople";
+    changed = true;
+  }
+  if ((store.type === "onpeople" || store.profiles.onpeople)
+    && store.profiles.onpeople?.baseUrl !== PROVIDERS.onpeople.baseUrl) {
+    store.profiles.onpeople = {
+      ...(store.profiles.onpeople || {}),
+      baseUrl: PROVIDERS.onpeople.baseUrl,
+    };
+    delete store.profiles.onpeople.encryptedApiKey;
+    changed = true;
+  }
+  if (changed) {
+    atomicWriteFile(providerSettingsPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  }
+  return store;
 }
 
 function readProviderSettings(requestedType = null) {
@@ -2360,7 +2428,10 @@ function publicProviderSettings(settings = readProviderSettings()) {
 function normalizeProviderSettings(input = {}, saved = readProviderSettings()) {
   const type = Object.hasOwn(PROVIDERS, input.type) ? input.type : saved.type;
   const baseline = type === saved.type ? saved : readProviderSettings(type);
-  const model = String(input.model ?? baseline.model ?? "").trim();
+  const requestedModel = String(input.model ?? baseline.model ?? "").trim();
+  const model = type === "onpeople" && !isOnPeopleModelAllowed(requestedModel)
+    ? ""
+    : requestedModel;
   let baseUrl = String(type === "onpeople" && cloudAccount ? cloudAccount.apiBaseUrl() : (input.baseUrl ?? baseline.baseUrl ?? "")).trim().replace(/\/$/, "");
   if (PROVIDERS[type].protocol !== "local") {
     if (!baseUrl) throw new Error(`${PROVIDERS[type].name} 需要 API Base URL`);
@@ -2383,7 +2454,8 @@ async function providerSettingsForExecution(input, { refresh = false, saved = nu
   let candidate = { ...(input || {}) };
   const baseline = saved || readProviderSettings(candidate.type);
   const type = Object.hasOwn(PROVIDERS, candidate.type) ? candidate.type : baseline.type;
-  if (type === "onpeople" && !String(candidate.model ?? baseline.model ?? "").trim()) {
+  const requestedModel = String(candidate.model ?? baseline.model ?? "").trim();
+  if (type === "onpeople" && !isOnPeopleModelAllowed(requestedModel)) {
     if (!cloudAccount?.accessToken()) {
       throw new Error("请先登录 OnPeople 账号，再选择模型");
     }
@@ -2428,19 +2500,16 @@ function persistProviderSettings(input) {
 
 function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = null) {
   const p0 = readP0Settings();
+  const standaloneWebSearch = providerSettings.type === "onpeople";
   const browserRouteId = String(routeId || crypto.randomUUID());
   browserBridge?.setWorkspaceRoot(browserRouteId, workspaceRoot || DEFAULT_CWD);
   const config = {
-    features: { goals: true, collaboration_modes: true, hooks: true },
+    features: { goals: true, collaboration_modes: true, hooks: true, standalone_web_search: standaloneWebSearch },
+    ...(standaloneWebSearch ? { web_search: "live" } : {}),
     agents: {
       enabled: true,
       max_concurrent_threads_per_session: p0.policy.maxAgents,
     },
-    // Third-party model metadata is not always rich enough for Codex Core to
-    // choose a useful automatic compaction threshold. Keep long-running Goal
-    // threads responsive instead of replaying an unbounded transcript.
-    model_auto_compact_token_limit: AUTO_COMPACT_TOKEN_LIMIT,
-    model_auto_compact_token_limit_scope: "total",
     sandbox_workspace_write: { network_access: Boolean(p0.policy.networkAccess) },
     mcp_servers: {
       internal_browser: {
@@ -2484,11 +2553,12 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
   };
   if (!p0.preferences.browserEnabled) delete config.mcp_servers.internal_browser;
   const preset = PROVIDERS[providerSettings.type];
+  const providerMetadata = codexProviderMetadata(providerSettings);
   const imageGeneration = imageGenerationCapability(providerSettings.type, Boolean(providerSettings.apiKey));
   if (preset.protocol !== "local") {
     const gatewayBaseUrl = modelGateway.registerRoute(
       routeId || crypto.randomUUID(),
-      { ...providerSettings, protocol: preset.protocol },
+      modelGatewayRouteSettings(providerSettings),
     );
     if (imageGeneration.available) {
       config.mcp_servers.image_generation = {
@@ -2508,10 +2578,11 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
     }
     config.model_providers = {
       onpeople: {
-        name: `${preset.name} via OnPeople`,
+        name: providerMetadata.name,
         base_url: gatewayBaseUrl,
         wire_api: "responses",
         requires_openai_auth: false,
+        supports_standalone_web_search: providerSettings.type === "onpeople",
       },
     };
   }
@@ -2533,6 +2604,38 @@ function buildThreadConfig(providerSettings, workspaceRoot = null, routeId = nul
     };
   }
   return config;
+}
+
+function codexProviderMetadata(providerSettings = {}) {
+  const preset = PROVIDERS[providerSettings.type] || PROVIDERS.openai;
+  const upstreamPlatform = providerSettings.type === "onpeople"
+    ? cloudAccount?.modelPlatform(providerSettings.model)
+    : providerSettings.type;
+  const name = codexProviderName(providerSettings.type, upstreamPlatform, preset.name);
+  return { name, remoteCompactionV2: name === "OpenAI", upstreamPlatform };
+}
+
+function modelGatewayRouteSettings(providerSettings = {}) {
+  const preset = PROVIDERS[providerSettings.type] || PROVIDERS.openai;
+  const providerMetadata = codexProviderMetadata(providerSettings);
+  return {
+    ...providerSettings,
+    protocol: preset.protocol,
+    remoteCompactionV2: providerMetadata.remoteCompactionV2,
+  };
+}
+
+function codexProviderIdentity(providerSettings = {}) {
+  const preset = PROVIDERS[providerSettings.type] || PROVIDERS.openai;
+  if (preset.protocol === "local") return `local:${providerSettings.type}`;
+  return `gateway:${codexProviderMetadata(providerSettings).name}`;
+}
+
+function assertThreadProviderCanHotSwitch(threadId, previousSettings, nextSettings) {
+  const id = String(threadId || "").trim();
+  if (!id || !runtimeLoadedThreadIds.has(id)) return;
+  if (codexProviderIdentity(previousSettings) === codexProviderIdentity(nextSettings)) return;
+  throw new Error("这个模型使用不同的运行时 Provider。Codex 不能在已加载任务中热切换 Provider，请新建任务后选择该模型。");
 }
 
 async function resolveNewThreadWorkspace(payload = {}) {
@@ -2566,6 +2669,7 @@ async function ensureThread(payload = {}) {
       provider: existing?.provider || null,
       workspaceMode: workspace.workspaceMode,
       workspaceBaseCwd: workspace.workspaceBaseCwd,
+      industryPlugin: existing?.industryPlugin || knownThreadIndustryPlugin(requestedThreadId),
     };
   }
   const workspace = await resolveNewThreadWorkspace(payload);
@@ -2584,6 +2688,13 @@ async function ensureThread(payload = {}) {
   const model = settings.model || null;
   const p0 = readP0Settings();
   const gatewayRouteId = `pending-${crypto.randomUUID()}`;
+  const requestedIndustryPluginId = String(payload.industryPluginId || "").trim();
+  const availableIndustryPlugin = industryPluginStore?.active() || null;
+  const industryPlugin = requestedIndustryPluginId
+    && (requestedIndustryPluginId === availableIndustryPlugin?.id || requestedIndustryPluginId === availableIndustryPlugin?.pluginId)
+    ? availableIndustryPlugin
+    : null;
+  if (requestedIndustryPluginId && !industryPlugin) throw new Error("所选插件当前不可用，请从加号菜单重新选择");
   if (payload.browserRouteId) browserBridge.bindRoute(gatewayRouteId, payload.browserRouteId);
   const result = await appServer.request("thread/start", {
     cwd,
@@ -2597,7 +2708,7 @@ async function ensureThread(payload = {}) {
     ephemeral: false,
     serviceName: "onpeople",
     threadSource: "appServer",
-    developerInstructions: developerInstructionsFor(cwd),
+    developerInstructions: developerInstructionsFor(cwd, "", industryPlugin),
   });
   runtimeLoadedThreadIds.add(result.thread.id);
   const threadCwd = result.thread.cwd || cwd;
@@ -2611,8 +2722,9 @@ async function ensureThread(payload = {}) {
     gatewayRouteId,
     workspaceMode: workspace.workspaceMode,
     workspaceBaseCwd: workspace.workspaceBaseCwd,
+    industryPlugin,
   });
-  rememberThread({ ...result.thread, cwd: threadCwd, ...workspace });
+  rememberThread({ ...result.thread, cwd: threadCwd, ...workspace, industryPlugin });
   agentRuntime?.rememberSession(result.thread, { model: threadModel, cwd: threadCwd });
   return {
     threadId: result.thread.id,
@@ -2623,6 +2735,7 @@ async function ensureThread(payload = {}) {
     provider: context.provider,
     workspaceMode: workspace.workspaceMode,
     workspaceBaseCwd: workspace.workspaceBaseCwd,
+    industryPlugin,
   };
 }
 
@@ -2675,6 +2788,7 @@ function rememberRuntimeThread(threadId, result, fallback = {}) {
     provider: previous?.provider || null,
     turnId: activeTurnIdsByThread.get(id) || previous?.turnId || null,
   });
+  scheduleStoredCheckpointInjection(id);
   setThreadLifecycle(id, activeTurnIdsByThread.has(id) ? "running" : "idle");
   return { ...thread, id, cwd, model, reasoningEffort: result?.reasoningEffort || null };
 }
@@ -2714,7 +2828,7 @@ async function ensureRuntimeThread(threadId, options = {}) {
       approvalsReviewer: policy.approvalsReviewer,
       sandbox: policy.sandbox,
       config: buildThreadConfig(settings, cwd, id),
-      developerInstructions: developerInstructionsFor(cwd),
+      developerInstructions: developerInstructionsFor(cwd, "", knownThreadIndustryPlugin(id)),
       // Restoring a Session must not synchronously continue a persistent
       // Goal. The UI and queued user input decide what happens next.
       deferGoalContinuation: true,
@@ -2845,6 +2959,7 @@ async function startAgentTurn(payload) {
     cwd,
     workspaceMode: thread.workspaceMode,
     workspaceBaseCwd: thread.workspaceBaseCwd,
+    industryPlugin: publicIndustryPlugin(thread.industryPlugin, true),
   };
 }
 
@@ -2930,6 +3045,7 @@ async function setGoal(payload) {
   goalsByThread.set(threadId, result.goal);
   threadContexts.update(threadId, { goal: result.goal });
   sendToTaskThread(threadId, "agent:event", { type: "goal-state", threadId, goal: result.goal });
+  refreshExistingCheckpointForMetadataChange(threadId, "goal-change");
   return {
     threadId,
     goal: result.goal,
@@ -2947,6 +3063,7 @@ async function updateGoal(threadId, action, value) {
     goalsByThread.delete(id);
     threadContexts.update(id, { goal: null });
     sendToTaskThread(id, "agent:event", { type: "goal-state", threadId: id, goal: null });
+    refreshExistingCheckpointForMetadataChange(id, "goal-change");
     return { goal: null };
   }
   const params = { threadId: id };
@@ -2962,6 +3079,7 @@ async function updateGoal(threadId, action, value) {
   goalsByThread.set(id, result.goal);
   threadContexts.update(id, { goal: result.goal });
   sendToTaskThread(id, "agent:event", { type: "goal-state", threadId: id, goal: result.goal });
+  if (action === "edit") refreshExistingCheckpointForMetadataChange(id, "goal-change");
   return { goal: result.goal };
 }
 
@@ -2994,7 +3112,7 @@ function refreshOnPeopleRoutes() {
     threadContexts.update(context.id, { provider: { ...settings } });
     if (context.gatewayRouteId) {
       if (settings.apiKey) {
-        modelGateway.registerRoute(context.gatewayRouteId, { ...settings, protocol: PROVIDERS.onpeople.protocol });
+        modelGateway.registerRoute(context.gatewayRouteId, modelGatewayRouteSettings(settings));
       } else {
         modelGateway.removeRoute(context.gatewayRouteId);
       }
@@ -3007,9 +3125,10 @@ async function applyThreadProvider(threadId, settings) {
   if (!id) return { applied: false, reason: "no-thread" };
   const executableSettings = await providerSettingsForExecution(settings);
   const context = threadContexts.ensure(id);
+  if (context.provider) assertThreadProviderCanHotSwitch(id, context.provider, executableSettings);
   const routeId = context.gatewayRouteId || id;
   const protocol = PROVIDERS[executableSettings.type].protocol;
-  if (protocol !== "local") modelGateway.registerRoute(routeId, { ...executableSettings, protocol });
+  if (protocol !== "local") modelGateway.registerRoute(routeId, modelGatewayRouteSettings(executableSettings));
   threadContexts.update(id, {
     provider: { ...executableSettings },
     model: executableSettings.model || null,
@@ -3141,6 +3260,13 @@ function knownThreadCwd(threadId) {
   const contextCwd = threadContexts.get(id)?.cwd;
   const saved = readThreadUiState().threads.find((thread) => thread.id === id)?.cwd;
   return contextCwd || saved || DEFAULT_CWD;
+}
+
+function knownThreadIndustryPlugin(threadId) {
+  const id = String(threadId || "");
+  const contextValue = threadContexts.get(id)?.industryPlugin;
+  const saved = readThreadUiState().threads.find((thread) => thread.id === id)?.industryPlugin;
+  return contextValue || saved || null;
 }
 
 function knownThreadWorkspace(threadId) {
@@ -3331,6 +3457,9 @@ function rememberThread(thread) {
     workspaceMode: normalizeTaskWorkspaceMode(thread.workspaceMode || previous.workspaceMode, thread.cwd || previous.cwd),
     workspaceBaseCwd: thread.workspaceBaseCwd ?? previous.workspaceBaseCwd ?? null,
     worktree: thread.worktree || previous.worktree || null,
+    industryPlugin: thread.industryPlugin === undefined
+      ? (previous.industryPlugin || null)
+      : (thread.industryPlugin || null),
     updatedAt: new Date().toISOString(),
     recencyAt: Math.floor(Date.now() / 1000),
   };
@@ -3468,6 +3597,7 @@ function applyActiveThread(result, requestedThreadId = null) {
     goal: goalsByThread.get(threadId) || previous?.goal || null,
     workspaceMode: workspace.workspaceMode,
     workspaceBaseCwd: workspace.workspaceBaseCwd,
+    industryPlugin: previous?.industryPlugin || knownThreadIndustryPlugin(threadId),
   });
   rememberThread({ ...(result?.thread || {}), id: threadId, cwd, ...workspace });
   return context;
@@ -3491,6 +3621,7 @@ async function resumeThread(threadId) {
       turnId: activeTurnIdsByThread.get(id) || null,
       workspaceMode: local.thread.workspaceMode,
       workspaceBaseCwd: local.thread.workspaceBaseCwd,
+      industryPlugin: local.thread.industryPlugin || knownThreadIndustryPlugin(id),
     });
     // An unfinished turn in a persisted rollout may simply mean the previous
     // app process exited mid-turn. Only live App Server events are allowed to
@@ -3500,7 +3631,15 @@ async function resumeThread(threadId) {
     void ensureRuntimeThread(id, { cwd: local.thread.cwd, model }).catch((error) => {
       recordRuntimeEvent("warning", "历史任务后台恢复失败", `${id}: ${error.message}`);
     });
-    return { ...local, model, provider, running: Boolean(liveTurnId), restoring, turnId: liveTurnId };
+    return {
+      ...local,
+      model,
+      provider,
+      industryPlugin: publicIndustryPlugin(local.thread.industryPlugin || knownThreadIndustryPlugin(id), true),
+      running: Boolean(liveTurnId),
+      restoring,
+      turnId: liveTurnId,
+    };
   }
   await ensureRuntimeThread(id, { cwd: knownThreadCwd(id), model });
   const result = await appServer.request("thread/read", { threadId: id, includeTurns: true }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
@@ -3533,8 +3672,18 @@ async function resumeThread(threadId) {
     turnId: activeTurnIdsByThread.get(thread.id) || null,
     workspaceMode: thread.workspaceMode,
     workspaceBaseCwd: thread.workspaceBaseCwd,
+    industryPlugin: knownThreadIndustryPlugin(thread.id),
   });
-  return { thread, goal, model: result.model || model, provider, running: statusIsActive || activeTurnIdsByThread.has(thread.id), restoring: false, turnId: activeTurnIdsByThread.get(thread.id) || null };
+  return {
+    thread,
+    goal,
+    model: result.model || model,
+    provider,
+    industryPlugin: publicIndustryPlugin(knownThreadIndustryPlugin(thread.id), true),
+    running: statusIsActive || activeTurnIdsByThread.has(thread.id),
+    restoring: false,
+    turnId: activeTurnIdsByThread.get(thread.id) || null,
+  };
 }
 
 async function forkThread(threadId) {
@@ -3548,19 +3697,20 @@ async function forkThread(threadId) {
     approvalsReviewer: p0.policy.approvalsReviewer,
     sandbox: p0.policy.sandbox,
     config: buildThreadConfig(settings, knownThreadCwd(threadId), `fork-${crypto.randomUUID()}`),
-    developerInstructions: developerInstructionsFor(knownThreadCwd(threadId)),
+    developerInstructions: developerInstructionsFor(knownThreadCwd(threadId), "", knownThreadIndustryPlugin(threadId)),
     deferGoalContinuation: true,
     ephemeral: false,
   });
   const thread = result.thread;
   const sourceWorkspace = knownThreadWorkspace(threadId);
+  const industryPlugin = knownThreadIndustryPlugin(threadId);
   runtimeLoadedThreadIds.add(thread.id);
   const threadName = thread.name ? `${thread.name} · 分叉` : "分叉任务";
   await appServer.request("thread/name/set", { threadId: thread.id, name: threadName });
   thread.name = threadName;
   thread.workspaceMode = sourceWorkspace.workspaceMode;
   thread.workspaceBaseCwd = sourceWorkspace.workspaceBaseCwd;
-  rememberThread({ ...thread, cwd: thread.cwd || knownThreadCwd(threadId) || DEFAULT_CWD });
+  rememberThread({ ...thread, cwd: thread.cwd || knownThreadCwd(threadId) || DEFAULT_CWD, industryPlugin });
   goalsByThread.delete(thread.id);
   threadContexts.ensure(thread.id, {
     name: threadName,
@@ -3570,8 +3720,15 @@ async function forkThread(threadId) {
     provider: { ...settings },
     workspaceMode: thread.workspaceMode,
     workspaceBaseCwd: thread.workspaceBaseCwd,
+    industryPlugin,
   });
-  return { thread, goal: null, model: result.model || model, provider: publicProviderSettings(settings) };
+  return {
+    thread,
+    goal: null,
+    model: result.model || model,
+    provider: publicProviderSettings(settings),
+    industryPlugin: publicIndustryPlugin(industryPlugin, true),
+  };
 }
 
 async function archiveThread(threadId) {
@@ -3999,16 +4156,193 @@ function contextState(threadId = null) {
     lifecycle: threadId ? (threadLifecycleById.get(threadId) || null) : null,
     usage,
     queued: threadId ? queuedMessages.get(threadId) || [] : [],
+    checkpoint: threadId && contextCheckpointStore ? contextCheckpointStore.summary(threadId) : { available: false, revision: 0, compactionCount: 0 },
   };
+}
+
+function sendContextCompactionCleanup(threadId, cleanup) {
+  if (!threadId || (!cleanup?.hadPendingManual && !(cleanup?.itemIds || []).length)) return;
+  sendToTaskThread(threadId, "agent:event", {
+    type: "context-compaction-cleanup",
+    threadId,
+    itemIds: [
+      ...(cleanup.hadPendingManual ? ["pending-manual-context-compaction"] : []),
+      ...(cleanup.itemIds || []),
+    ],
+  });
 }
 
 async function compactThread(threadId) {
   const id = String(threadId || "").trim();
   if (!id) throw new Error("当前没有任务");
   if (activeTurnIdsByThread.has(id)) throw new Error("当前任务仍在运行，请等待或先停止");
-  const result = await appServer.request("thread/compact/start", { threadId: id });
-  appendAudit("context.compact", { threadId: id });
-  return { ...result, state: contextState(id) };
+  const placeholder = contextCompactions.beginManual(id);
+  sendToTaskThread(id, "agent:event", {
+    type: "context-compaction-placeholder",
+    threadId: id,
+    item: placeholder,
+  });
+  try {
+    const result = await appServer.request("thread/compact/start", { threadId: id });
+    appendAudit("context.compact", { threadId: id });
+    return { ...result, state: contextState(id) };
+  } catch (error) {
+    const itemId = contextCompactions.failManual(id);
+    sendToTaskThread(id, "agent:event", {
+      type: "context-compaction-cleanup",
+      threadId: id,
+      itemIds: [itemId],
+    });
+    throw error;
+  }
+}
+
+async function recalibrateThreadContext(threadId, options = {}) {
+  const id = String(threadId || "").trim();
+  if (!id) throw new Error("当前没有任务");
+  if (!contextCheckpointStore) throw new Error("上下文检查点尚未初始化");
+  if (activeTurnIdsByThread.has(id) && options.compaction !== true) {
+    throw new Error("当前任务仍在运行，请等待或先停止后再重新校准");
+  }
+  const reason = String(options.reason || "manual-recalibration");
+  const previousJob = contextCheckpointJobsByThread.get(id);
+  const job = (previousJob ? previousJob.catch(() => {}) : Promise.resolve()).then(async () => {
+    sendToTaskThread(id, "agent:event", {
+      type: "context-recalibration-started",
+      threadId: id,
+      reason,
+    });
+    try {
+      if (activeTurnIdsByThread.has(id) && options.compaction !== true) {
+        throw new Error("当前任务仍在运行，请等待或先停止后再重新校准");
+      }
+      const rolloutPath = await findLocalRolloutPath(id);
+      if (!rolloutPath) throw new Error("尚未找到当前任务的原始记录；先运行一轮任务后再试");
+      const context = contextForThread(id);
+      const provider = providerContextForThread(id).settings;
+      const result = await contextCheckpointStore.rebuild({
+        threadId: id,
+        rolloutPath,
+        goal: goalsByThread.get(id) || context?.goal || null,
+        model: provider.model || context?.model || null,
+        cwd: context?.cwd || knownThreadCwd(id) || DEFAULT_CWD,
+        reason,
+        compaction: options.compaction === true,
+        forceFull: options.forceFull === true,
+      });
+      let injected = false;
+      let deferred = false;
+      let warning = null;
+      if (result.shouldInject && activeTurnIdsByThread.has(id)) {
+        pendingCheckpointInjectionsByThread.set(id, result.checkpoint.revision);
+        deferred = true;
+      } else if (result.shouldInject) {
+        try {
+          await appServer.request("thread/inject_items", {
+            threadId: id,
+            items: [formatContextCheckpointItem(result.checkpoint)],
+          }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
+          injected = true;
+          contextCheckpointStore.markInjection(id, result.checkpoint.revision, { injected: true });
+        } catch (error) {
+          warning = `检查点已保存，但未能注入当前任务：${error.message}`;
+          contextCheckpointStore.markInjection(id, result.checkpoint.revision, { injected: false, error: warning });
+        }
+      }
+      const checkpoint = contextCheckpointStore.summary(id);
+      appendAudit("context.recalibrated", {
+        threadId: id,
+        reason,
+        revision: checkpoint.revision,
+        rebuildMode: checkpoint.rebuildMode,
+        injected,
+        deferred,
+        conflictCount: checkpoint.conflictCount,
+        warning: Boolean(warning),
+      });
+      sendToTaskThread(id, "agent:event", {
+        type: "context-recalibration-completed",
+        threadId: id,
+        reason,
+        checkpoint,
+        trigger: result.trigger,
+        injected,
+        deferred,
+        warning,
+      });
+      sendToTaskThread(id, "agent:event", { type: "context-updated", state: contextState(id) });
+      return { checkpoint, trigger: result.trigger, injected, deferred, warning };
+    } catch (error) {
+      appendAudit("context.recalibration.failed", { threadId: id, reason, error: error.message });
+      sendToTaskThread(id, "agent:event", {
+        type: "context-recalibration-failed",
+        threadId: id,
+        reason,
+        message: error.message,
+      });
+      throw error;
+    }
+  });
+  contextCheckpointJobsByThread.set(id, job);
+  try {
+    return await job;
+  } finally {
+    if (contextCheckpointJobsByThread.get(id) === job) contextCheckpointJobsByThread.delete(id);
+  }
+}
+
+async function flushPendingContextCheckpoint(threadId) {
+  const id = String(threadId || "").trim();
+  const revision = pendingCheckpointInjectionsByThread.get(id);
+  if (!id || !revision || activeTurnIdsByThread.has(id)) return { injected: false };
+  const checkpoint = contextCheckpointStore?.current(id);
+  if (!checkpoint || checkpoint.revision !== revision) {
+    pendingCheckpointInjectionsByThread.delete(id);
+    return { injected: false };
+  }
+  try {
+    await appServer.request("thread/inject_items", {
+      threadId: id,
+      items: [formatContextCheckpointItem(checkpoint)],
+    }, { timeoutMs: TURN_CONTROL_TIMEOUT_MS });
+    pendingCheckpointInjectionsByThread.delete(id);
+    contextCheckpointStore.markInjection(id, revision, { injected: true });
+    appendAudit("context.checkpoint.injected", { threadId: id, revision, deferred: true });
+    sendToTaskThread(id, "agent:event", {
+      type: "context-recalibration-injected",
+      threadId: id,
+      checkpoint: contextCheckpointStore.summary(id),
+    });
+    sendToTaskThread(id, "agent:event", { type: "context-updated", state: contextState(id) });
+    return { injected: true };
+  } catch (error) {
+    pendingCheckpointInjectionsByThread.delete(id);
+    contextCheckpointStore.markInjection(id, revision, { injected: false, error: error.message });
+    recordRuntimeEvent("warning", "上下文检查点延后注入失败", `${id}: ${error.message}`);
+    sendToTaskThread(id, "agent:event", {
+      type: "context-recalibration-failed",
+      threadId: id,
+      reason: "deferred-injection",
+      message: `检查点已保存，但延后注入失败：${error.message}`,
+    });
+    return { injected: false, error: error.message };
+  }
+}
+
+function scheduleStoredCheckpointInjection(threadId) {
+  const id = String(threadId || "").trim();
+  const checkpoint = id ? contextCheckpointStore?.current(id) : null;
+  if (!checkpoint || checkpoint.rebuildMode !== "full" || checkpoint.injected === true) return;
+  pendingCheckpointInjectionsByThread.set(id, checkpoint.revision);
+  if (!activeTurnIdsByThread.has(id)) void flushPendingContextCheckpoint(id);
+}
+
+function refreshExistingCheckpointForMetadataChange(threadId, reason) {
+  const id = String(threadId || "").trim();
+  if (!id || !contextCheckpointStore?.current(id) || activeTurnIdsByThread.has(id)) return;
+  void recalibrateThreadContext(id, { reason, forceFull: true }).catch((error) => {
+    recordRuntimeEvent("warning", "上下文元数据校准失败", `${id}: ${error.message}`);
+  });
 }
 
 async function steerTurn(threadId, text) {
@@ -4389,10 +4723,11 @@ async function startReview({ threadId = null, cwd, targetType, value }) {
 
 async function listExtensions(cwd, threadId = null) {
   const workdir = cwd || DEFAULT_CWD;
+  const pluginCwds = [...new Set([workdir, officialPluginMarketplace?.root].filter(Boolean))];
   const skillsHome = path.join(app.getPath("userData"), "codex-home", "skills");
   const [skillsResult, pluginsResult, mcpResult] = await Promise.allSettled([
     refreshSkillCatalog(workdir, { forceReload: true }),
-    appServer.request("plugin/list", { cwds: [workdir] }),
+    appServer.request("plugin/list", { cwds: pluginCwds }),
     threadId
       ? appServer.request("mcpServerStatus/list", { threadId, detail: "full", limit: 100 })
       : Promise.resolve({ data: [] }),
@@ -4415,13 +4750,23 @@ async function listExtensions(cwd, threadId = null) {
     })
     : [];
   const marketplaces = pluginsResult.status === "fulfilled" ? pluginsResult.value.marketplaces || [] : [];
-  const plugins = marketplaces.flatMap((marketplace) => (marketplace.plugins || []).map((plugin) => ({ ...plugin, marketplace: marketplace.name, marketplacePath: marketplace.path || null })));
+  const plugins = industryPluginStore.decorate(marketplaces.flatMap((marketplace) => (marketplace.plugins || []).map((plugin) => ({
+    ...plugin,
+    marketplace: marketplace.name,
+    marketplacePath: marketplace.path || null,
+  }))));
   return {
     skills,
     skillsHome,
     skillsUpdatedAt: skillCatalogRefreshedAt,
     skillsRevision: skillCatalogRevision,
     plugins,
+    activeIndustryPlugin: industryPluginStore.active() ? {
+      id: industryPluginStore.active().id,
+      pluginId: industryPluginStore.active().pluginId,
+      version: industryPluginStore.active().version,
+      displayName: industryPluginStore.active().displayName,
+    } : null,
     mcpServers: mcpResult.status === "fulfilled" ? mcpResult.value.data || [] : [],
     errors: [skillsResult, pluginsResult, mcpResult].filter((item) => item.status === "rejected").map((item) => item.reason?.message || String(item.reason)),
   };
@@ -4494,6 +4839,9 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     if (event.type === "server-log") recordRuntimeEvent("log", "App Server", event.text);
     if (event.type === "server-exit" && appServer === client) {
       if (scheduledRunsByThread.size) failActiveScheduledRuns("Agent 运行时在计划任务完成前退出");
+      for (const [threadId, cleanup] of contextCompactions.clearAll()) {
+        sendContextCompactionCleanup(threadId, cleanup);
+      }
       appServer = null;
       for (const [threadId, turnId] of activeTurnIdsByThread) {
         threadContexts.completeTurn(threadId, turnId, "interrupted");
@@ -4530,6 +4878,8 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
       // would re-send the same base64 payload to every window.
       return;
     }
+    const trackedCompaction = contextCompactions.observe(message);
+    message = trackedCompaction.message;
     const messageThreadId = message.params?.threadId || message.params?.thread?.id || null;
     const messageTurnId = message.params?.turn?.id || message.params?.turnId || null;
     if (messageThreadId && handleScheduledNotification(message, messageThreadId)) return;
@@ -4574,6 +4924,22 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
     if (message.method === "item/completed" && message.params?.item) {
       usageLedger?.recordItem({ item: message.params.item });
     }
+    if (trackedCompaction.lifecycle?.completed) {
+      appendAudit("context.compacted", {
+        threadId: trackedCompaction.lifecycle.threadId,
+        source: trackedCompaction.lifecycle.source,
+      });
+      sendToTaskThread(trackedCompaction.lifecycle.threadId, "agent:event", {
+        type: "context-compacted",
+        threadId: trackedCompaction.lifecycle.threadId,
+      });
+      void recalibrateThreadContext(trackedCompaction.lifecycle.threadId, {
+        reason: trackedCompaction.lifecycle.source === "manual" ? "manual-compaction" : "automatic-compaction",
+        compaction: true,
+      }).catch((error) => {
+        recordRuntimeEvent("warning", "上下文自动校准失败", `${trackedCompaction.lifecycle.threadId}: ${error.message}`);
+      });
+    }
     if (message.method === "hook/started" || message.method === "hook/completed") {
       const run = message.params?.run;
       if (run?.id) {
@@ -4585,12 +4951,15 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
       sendToRenderer("agent:event", { type: "hooks-updated", runs: [...hookRuns.values()] });
     }
     if (message.method === "thread/compacted") {
-      appendAudit("context.compacted", { threadId: messageThreadId });
-      sendToRenderer("agent:event", { type: "context-compacted", threadId: messageThreadId });
+      sendToRenderer("agent:event", { type: "context-compacted", threadId: messageThreadId, legacy: true });
     }
     if (message.method === "turn/completed") {
+      if (messageThreadId && message.params?.turn?.status !== "completed") {
+        sendContextCompactionCleanup(messageThreadId, contextCompactions.clearThread(messageThreadId));
+      }
       const finalText = messageThreadId ? lastAgentMessageByThread.get(messageThreadId) : "";
       if (messageThreadId) clearActiveTurn(messageThreadId);
+      let postTurnMaintenance = Promise.resolve();
       if (messageThreadId && messageTurnId) {
         usageLedger?.turnCompleted({
           threadId: messageThreadId,
@@ -4633,11 +5002,18 @@ async function initializeAppServer({ restoreThreadId = null } = {}) {
       if (messageThreadId) lastAgentMessageByThread.delete(messageThreadId);
       const pendingProvider = messageThreadId ? threadContexts.get(messageThreadId)?.pendingProvider : null;
       if (messageThreadId && pendingProvider) {
-        void applyThreadProvider(messageThreadId, pendingProvider).catch((error) => {
-          recordRuntimeEvent("warning", "任务模型切换延后失败", error.message);
-        });
+        postTurnMaintenance = applyThreadProvider(messageThreadId, pendingProvider)
+          .then(() => contextCheckpointStore?.current(messageThreadId)
+            ? recalibrateThreadContext(messageThreadId, { reason: "model-change", forceFull: true })
+            : null)
+          .catch((error) => {
+            recordRuntimeEvent("warning", "任务模型切换延后失败", error.message);
+          });
       }
-      if (messageThreadId) void startNextQueuedMessage(messageThreadId);
+      if (messageThreadId && pendingCheckpointInjectionsByThread.has(messageThreadId)) {
+        postTurnMaintenance = postTurnMaintenance.then(() => flushPendingContextCheckpoint(messageThreadId));
+      }
+      if (messageThreadId) void postTurnMaintenance.finally(() => startNextQueuedMessage(messageThreadId));
     }
     if (message.method === "thread/goal/updated" && messageThreadId) {
       const goal = message.params?.goal || null;
@@ -4814,13 +5190,19 @@ function installApplicationMenu() {
 }
 
 async function createWindow() {
+  if (process.platform === "darwin" && !app.isPackaged && app.dock && fs.existsSync(MAC_DOCK_ICON_PNG)) {
+    try { app.dock.setIcon(MAC_DOCK_ICON_PNG); }
+    catch (error) { recordRuntimeEvent("warning", "开发态 Dock 图标加载失败", error.message); }
+  }
   computerUseStatus = await prepareComputerUse(cuaDriverBinary, cuaDriverApp);
-  if (process.platform === "darwin" && app.dock && fs.existsSync(APP_ICON_PNG)) app.dock.setIcon(APP_ICON_PNG);
   petStateStore = new PetStateStore(path.join(app.getPath("userData"), "pet-settings.json"));
   scheduledTaskStore = new ScheduledTaskStore(path.join(app.getPath("userData"), "scheduled-tasks.json"));
   agentProfileStore = new AgentProfileStore(path.join(app.getPath("userData"), "agent-profiles.json"));
   agentTaskBoardStore = new AgentTaskBoardStore(path.join(app.getPath("userData"), "agent-task-board.json"));
   localMemoryStore = new LocalMemoryStore(path.join(app.getPath("userData"), "local-memories.json"));
+  industryPluginStore = new IndustryPluginStore(path.join(app.getPath("userData"), "industry-plugin-state.json"), { appVersion: APP_VERSION });
+  officialPluginMarketplace = materializeOfficialPluginMarketplace();
+  contextCheckpointStore = new ContextCheckpointStore(path.join(app.getPath("userData"), "context-checkpoints"));
   usageLedger = new UsageLedger(path.join(app.getPath("userData"), "usage-ledger.json"));
   secretStore = new SecretStore(path.join(app.getPath("userData"), "secure-variables.json"), safeStorage);
   cloudAccount = new CloudAccountClient({
@@ -5164,6 +5546,8 @@ ipcMain.handle("agent:status", async (event) => {
       extensions: { available: Boolean(appServer?.ready) },
     },
     provider: publicProviderSettings(providerSettings),
+    industryPlugin: publicIndustryPlugin(context?.industryPlugin || null, true),
+    availableIndustryPlugin: publicIndustryPlugin(industryPluginStore?.active() || null, false),
     policy: readP0Settings().policy,
     context: contextState(threadId),
   };
@@ -5389,11 +5773,31 @@ ipcMain.handle("plugins:install", async (_event, plugin) => {
   if (plugin.marketplacePath) params.marketplacePath = plugin.marketplacePath;
   else if (plugin.marketplace) params.remoteMarketplaceName = plugin.marketplace;
   const result = await appServer.request("plugin/install", params);
+  await restartAppServer("plugin-change");
   return { installed: true, ...result };
 });
 ipcMain.handle("plugins:uninstall", async (_event, pluginId) => {
   await appServer.request("plugin/uninstall", { pluginId });
+  industryPluginStore.deactivate(pluginId);
+  await restartAppServer("plugin-change");
   return { uninstalled: true };
+});
+ipcMain.handle("plugins:industry:activate", async (_event, payload = {}) => {
+  const extensions = await listExtensions(payload.cwd || DEFAULT_CWD);
+  const plugin = extensions.plugins.find((item) => item.id === payload.pluginId || item.name === payload.name);
+  if (!plugin) throw new Error("找不到这个行业插件，请刷新插件列表");
+  const { profile, error } = industryPluginStore.inspect(plugin);
+  if (error) throw new Error(`行业插件声明无效：${error}`);
+  const active = industryPluginStore.activate(profile, plugin);
+  appendAudit("plugin.industry.activated", { pluginId: plugin.id, name: plugin.name, version: active.version });
+  sendToRenderer("agent:event", { type: "industry-plugin-changed", active });
+  return { active };
+});
+ipcMain.handle("plugins:industry:deactivate", async (_event, pluginId = null) => {
+  const deactivated = industryPluginStore.deactivate(pluginId);
+  if (deactivated) appendAudit("plugin.industry.deactivated", { pluginId });
+  sendToRenderer("agent:event", { type: "industry-plugin-changed", active: null });
+  return { deactivated };
 });
 ipcMain.handle("mcp:reload", async () => {
   await appServer.request("config/mcpServer/reload", {});
@@ -5619,6 +6023,10 @@ ipcMain.handle("worktrees:snapshot", async (_event, worktreePath) => snapshotWor
 ipcMain.handle("worktrees:remove", async (_event, worktreePath) => removeWorktree(worktreePath));
 ipcMain.handle("context:state", async (event) => contextState(windowThreadIds.get(event.sender.id) || null));
 ipcMain.handle("context:compact", async (event) => compactThread(windowThreadIds.get(event.sender.id) || null));
+ipcMain.handle("context:recalibrate", async (event) => recalibrateThreadContext(
+  windowThreadIds.get(event.sender.id) || null,
+  { reason: "manual-recalibration", forceFull: true },
+));
 ipcMain.handle("context:steer", async (event, text) => steerTurn(windowThreadIds.get(event.sender.id) || null, text));
 ipcMain.handle("context:queue", async (event, text) => queueThreadMessage(windowThreadIds.get(event.sender.id) || null, text));
 ipcMain.handle("policy:get", async () => ({ policy: readP0Settings().policy, audit: readAudit(100) }));
@@ -5793,6 +6201,7 @@ ipcMain.handle("agent:provider:save", async (event, input) => {
   const threadId = senderThreadId(event, resolvedInput?.threadId);
   const before = providerContextForThread(threadId).settings;
   const normalized = normalizeProviderSettings(resolvedInput, before);
+  assertThreadProviderCanHotSwitch(threadId, before, normalized);
   const changed = before.type !== normalized.type
     || before.model !== normalized.model
     || before.baseUrl !== normalized.baseUrl
@@ -5811,6 +6220,7 @@ ipcMain.handle("agent:provider:save", async (event, input) => {
       pending = true;
     } else if (threadId) {
       await applyThreadProvider(threadId, normalized);
+      refreshExistingCheckpointForMetadataChange(threadId, "model-change");
     }
   }
   return {

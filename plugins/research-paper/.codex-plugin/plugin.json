@@ -1,0 +1,27 @@
+{
+  "name": "research-paper",
+  "version": "1.0.0+codex.20260803062130",
+  "description": "Evidence-grounded bilingual research and academic paper workflows for OnPeople.",
+  "author": {
+    "name": "OnPeople"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "\u79d1\u7814\u8bba\u6587",
+    "shortDescription": "\u4e2d\u82f1\u6587\u79d1\u7814\u3001\u8bba\u6587\u5199\u4f5c\u3001\u5f15\u6587\u6838\u9a8c\u4e0e\u6295\u7a3f\u8fd4\u4fee",
+    "longDescription": "\u4ece\u9009\u9898\u3001\u6587\u732e\u7efc\u8ff0\u3001\u7814\u7a76\u8bbe\u8ba1\u548c\u6570\u636e\u89e3\u91ca\uff0c\u5230\u6709\u8bc1\u636e\u652f\u6491\u7684\u4e2d\u82f1\u6587\u8bba\u6587\u5199\u4f5c\u3001\u6295\u7a3f\u4e0e\u8fd4\u4fee\u3002\u91cd\u8981\u8bba\u65ad\u5fc5\u987b\u80fd\u591f\u8ffd\u6eaf\u5230\u7528\u6237\u6750\u6599\u3001\u771f\u5b9e\u6587\u732e\u6216\u7814\u7a76\u6570\u636e\u3002",
+    "developerName": "OnPeople",
+    "category": "Education & Research",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "\u57fa\u4e8e\u6211\u7684\u6750\u6599\u5efa\u7acb\u8bba\u6587\u9879\u76ee\u5e76\u751f\u6210\u53ef\u8ffd\u6eaf\u7684\u7814\u7a76\u8ba1\u5212\u3002",
+      "\u6574\u7406\u8fd9\u4e9b\u6587\u732e\uff0c\u751f\u6210\u7efc\u8ff0\u77e9\u9635\u5e76\u8bc6\u522b\u7814\u7a76\u7a7a\u767d\u3002",
+      "\u6838\u9a8c\u8fd9\u7bc7\u8bba\u6587\u7684\u8bba\u65ad\u3001\u5f15\u6587\u548c\u53c2\u8003\u6587\u732e\u3002"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "onpeople-official",
+  "interface": {
+    "displayName": "OnPeople Official"
+  },
+  "plugins": [
+    {
+      "name": "research-paper",
+      "source": {
+        "source": "local",
+        "path": "./plugins/research-paper"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Education & Research"
+    }
+  ]
+}

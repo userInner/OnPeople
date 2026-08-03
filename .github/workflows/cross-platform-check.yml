@@ -117,7 +117,7 @@ jobs:
           retention-days: 14
 
   package-macos:
-    name: Package macOS arm64 app
+    name: Package macOS apps
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     needs: check
     runs-on: macos-15
@@ -132,7 +132,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run rebuild:native
-      - name: Download and verify public macOS Cua Driver
+      - name: Download and verify public universal macOS Cua Driver
         shell: bash
         run: |
           set -euo pipefail
@@ -141,7 +141,7 @@ jobs:
           cua_extract="$runtime_cache/cua"
           mkdir -p "$runtime_cache" "$cua_extract"
 
-          cua_asset="cua-driver-rs-$CUA_DRIVER_VERSION-darwin-arm64.tar.gz"
+          cua_asset="cua-driver-rs-$CUA_DRIVER_VERSION-darwin-universal.tar.gz"
           cua_release="https://github.com/trycua/cua/releases/download/cua-driver-rs-v$CUA_DRIVER_VERSION"
           cua_archive="$runtime_cache/$cua_asset"
           checksums="$runtime_cache/cua-checksums.txt"
@@ -161,8 +161,12 @@ jobs:
       - name: Upload macOS app
         uses: actions/upload-artifact@v5
         with:
-          name: OnPeople-macOS-arm64
-          path: release/OnPeople-*-macos-arm64.zip
+          name: OnPeople-macOS
+          path: |
+            release/OnPeople-*-macos-arm64.zip
+            release/OnPeople-*-macos-arm64.dmg
+            release/OnPeople-*-macos-x64.zip
+            release/OnPeople-*-macos-x64.dmg
           if-no-files-found: error
           retention-days: 7
 
@@ -195,15 +199,21 @@ jobs:
           windows_installer="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe' -print -quit)"
           windows_blockmap="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe.blockmap' -print -quit)"
           windows_latest="release-assets/latest.yml"
-          macos_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.zip' -print -quit)"
+          macos_arm64_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.zip' -print -quit)"
+          macos_arm64_dmg="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.dmg' -print -quit)"
+          macos_x64_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-x64.zip' -print -quit)"
+          macos_x64_dmg="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-x64.dmg' -print -quit)"
           test -f "$windows_installer"
           test -f "$windows_blockmap"
           test -f "$windows_latest"
-          test -f "$macos_archive"
+          test -f "$macos_arm64_archive"
+          test -f "$macos_arm64_dmg"
+          test -f "$macos_x64_archive"
+          test -f "$macos_x64_dmg"
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_archive" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_arm64_archive" "$macos_arm64_dmg" "$macos_x64_archive" "$macos_x64_dmg" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_archive" \
+            gh release create "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_arm64_archive" "$macos_arm64_dmg" "$macos_x64_archive" "$macos_x64_dmg" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --generate-notes \

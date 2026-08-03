@@ -1,0 +1,4 @@
+interface:
+  display_name: "Literature Review"
+  short_description: "Reproducible bilingual literature review and evidence synthesis"
+  default_prompt: "Build a traceable literature review and evidence matrix for my research question."

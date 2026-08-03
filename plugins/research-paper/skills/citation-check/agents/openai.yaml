@@ -1,0 +1,4 @@
+interface:
+  display_name: "Citation Check"
+  short_description: "Audit claims, citations, quotations, and bibliography metadata"
+  default_prompt: "Audit this manuscript's claims and references and report unsupported or unverified items."

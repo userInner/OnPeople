@@ -1,0 +1,4 @@
+interface:
+  display_name: "Academic Writing"
+  short_description: "Evidence-grounded Chinese and English academic drafting"
+  default_prompt: "Draft or revise this section while preserving evidence, citations, and terminology."
