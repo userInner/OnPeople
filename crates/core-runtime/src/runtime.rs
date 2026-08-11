@@ -8,7 +8,10 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use chrono::{TimeZone, Utc};
 use onpeople_integrations::{
     CloudClient, CloudCredentials, LiveConnection, RuntimePaths, close_live_session,
@@ -21,9 +24,10 @@ use onpeople_types::{
     GitPushRequest, GitRequest, GitState, Goal, GoalRequest, GoalStatus, GoalUpdateRequest,
     LiveStatus, ModelDescriptor, Policy, PreferencePatchRequest, Preferences, PromptSubmission,
     ProviderKind, ProviderRequest, ProviderSettings, RuntimeDiagnostics, RuntimeSnapshot,
-    SchedulerSnapshot, SendPromptRequest, TerminalIdRequest, TerminalResizeRequest,
-    TerminalSession, TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList,
-    ThreadSummary, WorktreeRequest,
+    ScheduledTask, ScheduledTaskMutationRequest, ScheduledTaskRequest, SchedulerSnapshot,
+    SendPromptRequest, TerminalIdRequest, TerminalResizeRequest, TerminalSession,
+    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList, ThreadSummary,
+    WorktreeRequest,
 };
 use onpeople_workspace::{
     GitService, TerminalEvent, TerminalService, WorktreeService, discover_project_actions,
@@ -1589,6 +1593,12 @@ impl CoreRuntime {
         }
     }
 
+    pub async fn restart_runtime(&self) -> Result<RuntimeDiagnostics, AppError> {
+        self.stop().await;
+        self.start().await?;
+        Ok(self.runtime_diagnostics())
+    }
+
     pub fn preferences(&self) -> Result<Preferences, AppError> {
         self.storage.get_preferences()
     }
@@ -1646,6 +1656,21 @@ impl CoreRuntime {
             }
         }
         self.storage.list_threads(&filters)
+    }
+
+    pub fn thread_timeline(&self, thread_id: &str) -> Result<Vec<Value>, AppError> {
+        self.storage.timeline_items(thread_id)
+    }
+
+    pub async fn new_task(&self, cwd: Option<&str>) -> Result<Value, AppError> {
+        match cwd.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(cwd) => self.start_thread(cwd).await,
+            None => Ok(json!({
+                "pending": true,
+                "workspaceMode": "isolated",
+                "cwd": null,
+            })),
+        }
     }
 
     pub async fn start_thread(&self, cwd: &str) -> Result<Value, AppError> {
@@ -3321,7 +3346,18 @@ impl CoreRuntime {
             .join("hooks");
         std::fs::create_dir_all(&directory).map_err(AppError::storage)?;
         let path = directory.join(format!("{id}.json"));
-        let value = json!({ "id": id, "event": payload.get("event"), "command": payload.get("command"), "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true) });
+        let event = payload.get("event").cloned().unwrap_or(Value::Null);
+        let command = payload.get("command").cloned().unwrap_or(Value::Null);
+        let enabled = payload
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let value = json!({
+            "id": id,
+            "event": event,
+            "command": command,
+            "enabled": enabled,
+        });
         std::fs::write(
             &path,
             serde_json::to_vec_pretty(&value).map_err(AppError::internal)?,
@@ -3346,11 +3382,199 @@ impl CoreRuntime {
         search_files(Path::new(cwd), query)
     }
 
+    pub fn file_preview(
+        &self,
+        cwd: &str,
+        path: &str,
+        route_id: Option<&str>,
+    ) -> Result<Value, AppError> {
+        let root = onpeople_workspace::canonical_workspace(Path::new(cwd))?;
+        let resolved = onpeople_workspace::resolve_inside(&root, Path::new(path))?;
+        workspace_file_preview(&root, &resolved, route_id)
+    }
+
+    pub fn local_artifact_preview(
+        &self,
+        path: &str,
+        thread_id: Option<&str>,
+    ) -> Result<Value, AppError> {
+        let (root, resolved) = self.resolve_local_artifact(path, thread_id)?;
+        let extension = resolved
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !is_supported_local_artifact_extension(&extension) {
+            return Err(AppError::invalid("不支持打开这种本地文件类型"));
+        }
+        workspace_file_preview(&root, &resolved, None)
+    }
+
+    pub fn generated_image(&self, path: &str, thread_id: Option<&str>) -> Result<Value, AppError> {
+        let normalized = path
+            .strip_prefix("sandbox:")
+            .or_else(|| path.strip_prefix("file://"))
+            .unwrap_or(path);
+        let generated_path = if Path::new(normalized).is_relative() {
+            Path::new(".onpeople")
+                .join("generated-images")
+                .join(normalized)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            path.to_owned()
+        };
+        let (_, resolved) = self.resolve_local_artifact(&generated_path, thread_id)?;
+        let extension = resolved
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mime_type = match extension.as_str() {
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "jpg" | "jpeg" => "image/jpeg",
+            _ => return Err(AppError::invalid("不支持的生成图片格式")),
+        };
+        let bytes = std::fs::read(&resolved).map_err(AppError::storage)?;
+        if bytes.is_empty() || bytes.len() > 48 * 1024 * 1024 {
+            return Err(AppError::invalid("生成图片为空或超过 48 MB"));
+        }
+        Ok(json!({
+            "path": resolved,
+            "name": resolved.file_name().and_then(|value| value.to_str()).unwrap_or_default(),
+            "mimeType": mime_type,
+            "bytes": bytes.len(),
+            "dataUrl": format!("data:{mime_type};base64,{}", STANDARD.encode(bytes)),
+        }))
+    }
+
+    fn resolve_local_artifact(
+        &self,
+        path: &str,
+        thread_id: Option<&str>,
+    ) -> Result<(PathBuf, PathBuf), AppError> {
+        let thread = thread_id
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| self.storage.thread_json(value))
+            .transpose()?
+            .flatten();
+        let cwd = thread
+            .as_ref()
+            .and_then(|value| value.get("cwd"))
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.default_cwd());
+        let root = onpeople_workspace::canonical_workspace(&cwd)?;
+        let normalized = path
+            .strip_prefix("sandbox:")
+            .or_else(|| path.strip_prefix("file://"))
+            .unwrap_or(path);
+        let candidate = PathBuf::from(normalized);
+        let resolved = if candidate.is_absolute() {
+            candidate
+        } else {
+            root.join(candidate)
+        }
+        .canonicalize()
+        .map_err(AppError::storage)?;
+        let mut allowed_roots = vec![root.clone()];
+        if let Some(base) = thread
+            .as_ref()
+            .and_then(|value| value.get("workspaceBaseCwd"))
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .and_then(|value| value.canonicalize().ok())
+        {
+            allowed_roots.push(base);
+        }
+        for candidate_root in [self.storage.paths().root.clone(), std::env::temp_dir()] {
+            if let Ok(candidate_root) = candidate_root.canonicalize() {
+                allowed_roots.push(candidate_root);
+            }
+        }
+        let explicitly_attached = thread_id.is_some_and(|thread_id| {
+            self.storage.timeline_items(thread_id).is_ok_and(|items| {
+                items
+                    .iter()
+                    .any(|item| timeline_value_has_attachment_path(item, &resolved))
+            })
+        });
+        if !resolved.is_file()
+            || !(allowed_roots.iter().any(|root| resolved.starts_with(root)) || explicitly_attached)
+        {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceBoundary,
+                "文件不在当前任务目录或系统临时目录",
+            ));
+        }
+        Ok((root, resolved))
+    }
+
     pub fn project_actions(
         &self,
         cwd: &str,
     ) -> Result<Vec<onpeople_types::ProjectAction>, AppError> {
         discover_project_actions(Path::new(cwd))
+    }
+
+    pub fn update_project(
+        &self,
+        project_path: &str,
+        action: &str,
+        value: Option<&Value>,
+    ) -> Result<Value, AppError> {
+        self.storage.update_project(project_path, action, value)
+    }
+
+    pub async fn archive_project_tasks(&self, project_path: &str) -> Result<Value, AppError> {
+        let threads = self.storage.list_threads(&ThreadFilters {
+            archived: false,
+            query: String::new(),
+            project_path: Some(project_path.to_owned()),
+            limit: 1_000,
+        })?;
+        let mut archived = 0_u32;
+        for thread in threads.threads {
+            self.thread_command("archive_thread", &json!({ "threadId": thread.id }))
+                .await?;
+            archived = archived.saturating_add(1);
+        }
+        Ok(json!({ "projectPath": project_path, "archived": archived }))
+    }
+
+    pub fn quick_launcher_suggestions(
+        &self,
+        cwd: &str,
+        route_id: Option<&str>,
+        query: &str,
+    ) -> Result<Vec<Value>, AppError> {
+        let mut suggestions = self
+            .project_actions(cwd)?
+            .into_iter()
+            .map(|action| serde_json::to_value(action).map_err(AppError::internal))
+            .collect::<Result<Vec<_>, _>>()?;
+        let query = query.trim();
+        let files = if query.is_empty() {
+            self.files_list(cwd, "")?
+        } else {
+            self.files_search(cwd, query)?.entries
+        };
+        suggestions.extend(
+            files
+                .into_iter()
+                .filter(|entry| entry.kind == "file")
+                .take(20)
+                .map(|entry| {
+                    json!({
+                        "kind": "file",
+                        "routeId": route_id,
+                        "path": entry.path,
+                        "label": entry.name,
+                    })
+                }),
+        );
+        Ok(suggestions)
     }
 
     pub fn new_thread(&self, cwd: &str) -> Result<Value, AppError> {
@@ -3538,6 +3762,21 @@ impl CoreRuntime {
         Ok(json!({ "deleted": deleted, "id": id }))
     }
 
+    pub async fn save_agent_profile_and_reload(&self, profile: &Value) -> Result<Value, AppError> {
+        let saved = self.save_agent_profile(profile)?;
+        self.reload_agent_configuration().await?;
+        Ok(json!({
+            "profile": saved,
+            "profiles": self.list_agent_profiles()?,
+        }))
+    }
+
+    pub async fn delete_agent_profile_and_reload(&self, id: &str) -> Result<Value, AppError> {
+        let deleted = self.delete_agent_profile(id)?;
+        self.reload_agent_configuration().await?;
+        Ok(deleted)
+    }
+
     pub async fn reload_agent_configuration(&self) -> Result<(), AppError> {
         if !self.app_server.is_ready() {
             return Ok(());
@@ -3711,6 +3950,27 @@ impl CoreRuntime {
         }))
     }
 
+    pub fn save_memory(&self, entry: &Value, thread_id: Option<&str>) -> Result<Value, AppError> {
+        let saved = self.save_memory_from_payload(entry)?;
+        Ok(json!({
+            "entry": saved,
+            "state": self.memory_state(
+                entry.get("cwd").and_then(Value::as_str),
+                thread_id,
+            )?,
+        }))
+    }
+
+    pub fn delete_memory(&self, memory_id: &str) -> Result<Value, AppError> {
+        if memory_id.trim().is_empty() {
+            return Err(AppError::invalid("缺少 memoryId"));
+        }
+        Ok(json!({
+            "deleted": self.storage.delete_document("memories", memory_id)?,
+            "id": memory_id,
+        }))
+    }
+
     pub fn save_memory_from_payload(&self, payload: &Value) -> Result<Value, AppError> {
         let scope = payload
             .get("scope")
@@ -3792,6 +4052,33 @@ impl CoreRuntime {
         self.storage.list_secret_metadata()
     }
 
+    pub fn save_secret(&self, secret: &Value) -> Result<Value, AppError> {
+        let saved = self.save_secret_from_payload(secret)?;
+        Ok(json!({ "secret": saved, "secrets": self.list_secrets()? }))
+    }
+
+    pub fn delete_secret(&self, secret_id: &str) -> Result<Value, AppError> {
+        if secret_id.trim().is_empty() {
+            return Err(AppError::invalid("缺少 secretId"));
+        }
+        Ok(json!({
+            "deleted": self.storage.delete_secret(secret_id)?,
+            "secrets": self.list_secrets()?,
+        }))
+    }
+
+    pub fn policy_state(&self) -> Result<Value, AppError> {
+        Ok(json!({
+            "policy": self.agent_status()?.policy,
+            "audit": self
+                .storage
+                .metadata_prefix("audit.")?
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+        }))
+    }
+
     pub async fn save_policy(&self, value: Value) -> Result<Policy, AppError> {
         let policy = normalize_policy(serde_json::from_value(value).map_err(AppError::invalid)?);
         self.state.write().policy = policy.clone();
@@ -3831,6 +4118,30 @@ impl CoreRuntime {
             .storage
             .get_metadata("usage.snapshot")?
             .unwrap_or_else(|| json!({ "totals": {}, "prices": {}, "days": [] })))
+    }
+
+    pub fn save_usage_price(&self, key: &str, price: f64) -> Result<Value, AppError> {
+        if key.trim().is_empty() {
+            return Err(AppError::invalid("缺少价格键"));
+        }
+        if !price.is_finite() || price < 0.0 {
+            return Err(AppError::invalid("价格必须是非负数"));
+        }
+        let mut usage = self.usage_snapshot()?;
+        usage["prices"][key] = json!(price);
+        self.storage.put_metadata("usage.snapshot", &usage)?;
+        Ok(usage)
+    }
+
+    pub fn effective_config(&self, cwd: Option<&str>) -> Result<Value, AppError> {
+        let status = self.agent_status()?;
+        Ok(json!({
+            "source": "onpeople.db",
+            "cwd": cwd,
+            "provider": status.provider,
+            "policy": status.policy,
+            "preferences": self.preferences()?,
+        }))
     }
 
     pub async fn interrupt(&self, payload: &Value) -> Result<Value, AppError> {
@@ -3904,8 +4215,134 @@ impl CoreRuntime {
         }
     }
 
+    pub fn snapshot_worktree(
+        &self,
+        worktree_path: &str,
+        output: Option<&str>,
+    ) -> Result<Value, AppError> {
+        let root = onpeople_workspace::canonical_workspace(Path::new(worktree_path))?;
+        let output = output
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".onpeople.snapshot.patch"));
+        let path = self.worktrees.snapshot(&root, &output)?;
+        Ok(json!({ "path": path }))
+    }
+
+    pub fn handoff_worktree(&self, worktree_path: &str) -> Result<Value, AppError> {
+        self.worktrees.handoff(Path::new(worktree_path))?;
+        Ok(json!({ "handedOff": true, "path": worktree_path }))
+    }
+
     pub fn scheduler_snapshot(&self) -> SchedulerSnapshot {
         self.scheduler.snapshot()
+    }
+
+    pub fn create_scheduled_task(
+        &self,
+        request: ScheduledTaskRequest,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.create(
+            request.name,
+            request.prompt,
+            request.cwd,
+            request.schedule,
+            request.runtime,
+        )
+    }
+
+    pub fn create_scheduled_task_from_text(
+        &self,
+        payload: &Value,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.create(
+            payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("OnPeople 计划任务")
+                .to_owned(),
+            payload
+                .get("prompt")
+                .and_then(Value::as_str)
+                .or_else(|| payload.get("text").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_owned(),
+            payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            payload
+                .get("schedule")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .unwrap_or_else(|| json!({ "kind": "once" })),
+            payload
+                .get("runtime")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .unwrap_or(Value::Null),
+        )
+    }
+
+    pub fn update_scheduled_task(
+        &self,
+        request: ScheduledTaskMutationRequest,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.update(&request.task_id, request.patch)
+    }
+
+    pub fn delete_scheduled_task(&self, task_id: &str) -> Result<bool, AppError> {
+        self.scheduler.delete(task_id)
+    }
+
+    pub fn mark_scheduled_notifications_read(
+        &self,
+        run_id: Option<&str>,
+    ) -> Result<SchedulerSnapshot, AppError> {
+        self.scheduler.mark_read(run_id)?;
+        Ok(self.scheduler_snapshot())
+    }
+
+    pub async fn run_scheduled_task(&self, task_id: &str) -> Result<Value, AppError> {
+        let run = self.scheduler.run_now(task_id)?;
+        let task = self
+            .scheduler
+            .task(task_id)
+            .ok_or_else(|| AppError::new(onpeople_types::ErrorCode::NotFound, "计划任务不存在"))?;
+        let submission = self
+            .send_prompt(SendPromptRequest {
+                thread_id: None,
+                text: task.prompt,
+                cwd: Some(task.cwd),
+                workspace_mode: Some("local".to_owned()),
+                images: Vec::new(),
+                attachments: Vec::new(),
+                capability: None,
+                mode: None,
+                industry_plugin: None,
+                model: None,
+                reasoning_effort: None,
+            })
+            .await;
+        match submission {
+            Ok(submission) => {
+                self.scheduler.start_run(
+                    &run.id,
+                    submission.thread_id.clone(),
+                    submission.turn_id.clone(),
+                )?;
+                Ok(json!({
+                    "run": run,
+                    "submission": submission,
+                    "state": self.scheduler_snapshot(),
+                }))
+            }
+            Err(error) => {
+                self.scheduler
+                    .finish_run(&run.id, "failed", None, Some(error.message.clone()))?;
+                Err(error)
+            }
+        }
     }
 
     pub fn live_status(&self) -> LiveStatus {
@@ -6254,6 +6691,216 @@ fn rollout_message_item(payload: &Value) -> Option<Value> {
     }
 }
 
+fn timeline_value_has_attachment_path(value: &Value, candidate: &Path) -> bool {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .any(|value| timeline_value_has_attachment_path(value, candidate)),
+        Value::Object(object) => {
+            let is_attachment = object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| matches!(kind, "mention" | "localImage" | "image"));
+            if is_attachment
+                && object
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .and_then(|path| PathBuf::from(path).canonicalize().ok())
+                    .is_some_and(|path| path == candidate)
+            {
+                return true;
+            }
+            object
+                .values()
+                .any(|value| timeline_value_has_attachment_path(value, candidate))
+        }
+        _ => false,
+    }
+}
+
+fn is_supported_local_artifact_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "webp"
+            | "gif"
+            | "bmp"
+            | "svg"
+            | "avif"
+            | "pdf"
+            | "txt"
+            | "md"
+            | "markdown"
+            | "log"
+            | "json"
+            | "jsonl"
+            | "csv"
+            | "tsv"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "diff"
+            | "patch"
+            | "ini"
+            | "conf"
+            | "env"
+            | "rtf"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "ppt"
+            | "pptx"
+            | "zip"
+            | "tar"
+            | "gz"
+            | "7z"
+            | "mp3"
+            | "m4a"
+            | "wav"
+            | "ogg"
+            | "mp4"
+            | "mov"
+            | "webm"
+            | "rs"
+            | "go"
+            | "py"
+            | "js"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "ts"
+            | "tsx"
+            | "css"
+            | "html"
+            | "htm"
+            | "sql"
+            | "java"
+            | "kt"
+            | "kts"
+            | "c"
+            | "h"
+            | "cc"
+            | "cpp"
+            | "hpp"
+            | "swift"
+            | "rb"
+            | "php"
+            | "sh"
+            | "bash"
+            | "zsh"
+    )
+}
+
+fn workspace_file_preview(
+    root: &Path,
+    path: &Path,
+    route_id: Option<&str>,
+) -> Result<Value, AppError> {
+    if !path.is_file() {
+        return Err(AppError::invalid("只能预览工作区文件"));
+    }
+    let size = std::fs::metadata(path).map_err(AppError::storage)?.len();
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mime_type = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "pdf" => "application/pdf",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "md" | "markdown" => "text/markdown",
+        "json" | "jsonl" => "application/json",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" | "cjs" => "text/javascript",
+        "ts" | "tsx" => "text/typescript",
+        "rs" => "text/rust",
+        "go" => "text/go",
+        "py" => "text/python",
+        "java" => "text/java",
+        "kt" | "kts" => "text/kotlin",
+        "c" | "h" | "cc" | "cpp" | "hpp" => "text/x-c",
+        "swift" => "text/swift",
+        "rb" => "text/ruby",
+        "php" => "text/php",
+        "sh" | "bash" | "zsh" => "text/x-shellscript",
+        "sql" => "text/sql",
+        "toml" => "application/toml",
+        "yaml" | "yml" => "application/yaml",
+        "xml" => "application/xml",
+        "txt" | "log" | "csv" | "tsv" | "diff" | "patch" | "ini" | "conf" | "env" => "text/plain",
+        _ => "application/octet-stream",
+    };
+    let mut result = json!({
+        "opened": true,
+        "name": name,
+        "path": relative.to_string_lossy(),
+        "absolutePath": path.to_string_lossy(),
+        "size": size,
+        "mimeType": mime_type,
+        "kind": "binary",
+        "routeId": route_id,
+    });
+    if size > 24 * 1024 * 1024 {
+        result["message"] = Value::String("文件超过 24 MB，请使用外部应用打开".to_owned());
+        return Ok(result);
+    }
+    let bytes = std::fs::read(path).map_err(AppError::storage)?;
+    if mime_type.starts_with("image/") {
+        result["kind"] = Value::String("image".to_owned());
+        result["dataUrl"] = Value::String(format!(
+            "data:{mime_type};base64,{}",
+            STANDARD.encode(bytes)
+        ));
+    } else if mime_type == "application/pdf"
+        || mime_type.starts_with("audio/")
+        || mime_type.starts_with("video/")
+    {
+        result["kind"] = Value::String(
+            if mime_type == "application/pdf" {
+                "pdf"
+            } else if mime_type.starts_with("audio/") {
+                "audio"
+            } else {
+                "video"
+            }
+            .to_owned(),
+        );
+        result["dataUrl"] = Value::String(format!(
+            "data:{mime_type};base64,{}",
+            STANDARD.encode(bytes)
+        ));
+    } else if size <= 4 * 1024 * 1024
+        && let Ok(content) = String::from_utf8(bytes)
+    {
+        result["kind"] = Value::String("text".to_owned());
+        result["content"] = Value::String(content);
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use onpeople_storage::Storage;
@@ -6265,12 +6912,21 @@ mod tests {
     use super::{
         CoreRuntime, EventBus, EventHistory, MAX_EVENT_REPLAY_LIMIT, apply_turn_policy,
         bundled_connector_catalog, format_review_prompt, github_compare_url, goal_from_app_server,
-        legacy_exec_items_from_rollout, native_agent_summary, normalize_policy, parse_diff_hunks,
-        persist_timeline_item_from_event, plugin_catalog, policy_request_fields,
-        read_industry_plugin_instructions, rollout_message_item, serialized_event_size,
-        task_capability_instructions, timeline_items_from_rollout, update_agent_task_from_event,
-        validate_external_https_url, validate_remote_catalog_entries,
+        is_supported_local_artifact_extension, legacy_exec_items_from_rollout,
+        native_agent_summary, normalize_policy, parse_diff_hunks, persist_timeline_item_from_event,
+        plugin_catalog, policy_request_fields, read_industry_plugin_instructions,
+        rollout_message_item, serialized_event_size, task_capability_instructions,
+        timeline_items_from_rollout, update_agent_task_from_event, validate_external_https_url,
+        validate_remote_catalog_entries,
     };
+
+    #[test]
+    fn local_artifact_extension_allowlist_rejects_executables() {
+        assert!(is_supported_local_artifact_extension("md"));
+        assert!(is_supported_local_artifact_extension("pdf"));
+        assert!(!is_supported_local_artifact_extension("app"));
+        assert!(!is_supported_local_artifact_extension("exe"));
+    }
 
     fn event(sequence: u64) -> EventEnvelope {
         EventEnvelope {

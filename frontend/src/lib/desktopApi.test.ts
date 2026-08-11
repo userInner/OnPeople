@@ -192,6 +192,86 @@ describe("DesktopApiClient", () => {
     ]);
   });
 
+  it("routes browser and plugin capabilities through stable domain methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: request.method === "browser.state" ? { hostReady: true } : {},
+    }));
+    const client = createDesktopApiClient(transport, () => "request-domains");
+
+    await client.request("browser.state", {});
+    await client.request("browser.action", {
+      action: "navigate",
+      payload: { routeId: "route-1", url: "https://example.com" },
+    });
+    await client.request("plugin.uninstall", { pluginId: "example" });
+    await client.request("connector.disconnect", { pluginId: "example" });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "browser.state",
+      "browser.action",
+      "plugin.uninstall",
+      "connector.disconnect",
+    ]);
+  });
+
+  it("routes conversation, project, agent and worktree capabilities through stable methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {},
+    }));
+    const client = createDesktopApiClient(transport, () => "request-workbench");
+
+    await client.request("thread.timeline", { threadId: "thread-1" });
+    await client.request("project.update", {
+      projectPath: "/workspace",
+      action: "pin",
+      value: true,
+    });
+    await client.request("agent.message", {
+      agentId: "agent-1",
+      text: "继续",
+    });
+    await client.request("worktree.snapshot", {
+      worktreePath: "/workspace",
+      output: null,
+    });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread.timeline",
+      "project.update",
+      "agent.message",
+      "worktree.snapshot",
+    ]);
+  });
+
+  it("routes scheduler, cloud and live controls through stable methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {},
+    }));
+    const client = createDesktopApiClient(transport, () => "request-services");
+
+    await client.request("scheduler.mark-read", { runId: null });
+    await client.request("cloud.login", {
+      email: "user@example.com",
+      password: "secret",
+    });
+    await client.request("live.close", { callId: "call-1" });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "scheduler.mark-read",
+      "cloud.login",
+      "live.close",
+    ]);
+  });
+
   it("preserves legacy steering response shapes", () => {
     expect(
       legacySteerResult({
@@ -217,5 +297,66 @@ describe("DesktopApiClient", () => {
       id: "queue-1",
       result: { turn: { id: "turn-1" } },
     });
+  });
+
+  it("routes terminal, file and git calls through stable domain methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result:
+        request.method === "terminal.write"
+          ? null
+          : request.method === "file.list"
+            ? []
+            : {
+                repository: true,
+                root: "/workspace",
+                branch: "main",
+                upstream: null,
+                ahead: 0,
+                behind: 0,
+                files: [],
+              },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-native");
+
+    await client.request("terminal.write", {
+      processId: "terminal-1",
+      data: "pwd\n",
+    });
+    await client.request("file.list", { cwd: "/workspace", relative: "" });
+    await client.request("git.state", { cwd: "/workspace" });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "terminal.write",
+      "file.list",
+      "git.state",
+    ]);
+  });
+
+  it("routes native effects through typed shell host methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result:
+        request.method === "shell.images.pick"
+          ? { selected: ["/tmp/image.png"] }
+          : { opened: true, url: "https://example.com" },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-shell");
+
+    const opened = await client.request("shell.external-url.open", {
+      url: "https://example.com",
+    });
+    const picked = await client.request("shell.images.pick", { paths: [] });
+
+    expect(opened.url).toBe("https://example.com");
+    expect(picked.selected).toEqual(["/tmp/image.png"]);
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "shell.external-url.open",
+      "shell.images.pick",
+    ]);
   });
 });

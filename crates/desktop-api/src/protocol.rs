@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
-use onpeople_types::{AppError, EventEnvelope, EventKind};
+use onpeople_types::{
+    AppError, EventEnvelope, EventKind, ModelDescriptor, Policy, Preferences, ProviderSettings,
+    SecretMetadata,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::{Config, TS};
@@ -23,6 +26,8 @@ pub enum DesktopMethod {
     RuntimeSnapshot,
     #[serde(rename = "runtime.diagnostics")]
     RuntimeDiagnostics,
+    #[serde(rename = "runtime.restart")]
+    RuntimeRestart,
     #[serde(rename = "event.replay")]
     EventReplay,
     #[serde(rename = "preferences.get")]
@@ -31,8 +36,100 @@ pub enum DesktopMethod {
     PreferencesSave,
     #[serde(rename = "thread.list")]
     ThreadList,
+    #[serde(rename = "thread.timeline")]
+    ThreadTimeline,
+    #[serde(rename = "thread.new")]
+    ThreadNew,
+    #[serde(rename = "thread.fork")]
+    ThreadFork,
+    #[serde(rename = "thread.archive")]
+    ThreadArchive,
+    #[serde(rename = "thread.unarchive")]
+    ThreadUnarchive,
+    #[serde(rename = "thread.pin")]
+    ThreadPin,
+    #[serde(rename = "thread.unread")]
+    ThreadUnread,
+    #[serde(rename = "thread.rename")]
+    ThreadRename,
+    #[serde(rename = "thread.auto-name")]
+    ThreadAutoName,
+    #[serde(rename = "thread.reasoning")]
+    ThreadReasoning,
+    #[serde(rename = "goal.set")]
+    GoalSet,
+    #[serde(rename = "goal.update")]
+    GoalUpdate,
+    #[serde(rename = "context.state")]
+    ContextState,
+    #[serde(rename = "context.compact")]
+    ContextCompact,
+    #[serde(rename = "context.recalibrate")]
+    ContextRecalibrate,
+    #[serde(rename = "project.update")]
+    ProjectUpdate,
+    #[serde(rename = "project.archive-tasks")]
+    ProjectArchiveTasks,
+    #[serde(rename = "project.quick-launcher")]
+    ProjectQuickLauncher,
+    #[serde(rename = "agent.list")]
+    AgentList,
+    #[serde(rename = "agent.profile.list")]
+    AgentProfileList,
+    #[serde(rename = "agent.profile.save")]
+    AgentProfileSave,
+    #[serde(rename = "agent.profile.delete")]
+    AgentProfileDelete,
+    #[serde(rename = "agent.message")]
+    AgentMessage,
+    #[serde(rename = "agent.stop")]
+    AgentStop,
+    #[serde(rename = "agent.read")]
+    AgentRead,
+    #[serde(rename = "worktree.snapshot")]
+    WorktreeSnapshot,
+    #[serde(rename = "worktree.handoff")]
+    WorktreeHandoff,
     #[serde(rename = "scheduler.get")]
     SchedulerGet,
+    #[serde(rename = "scheduler.create")]
+    SchedulerCreate,
+    #[serde(rename = "scheduler.create-from-text")]
+    SchedulerCreateFromText,
+    #[serde(rename = "scheduler.update")]
+    SchedulerUpdate,
+    #[serde(rename = "scheduler.delete")]
+    SchedulerDelete,
+    #[serde(rename = "scheduler.run")]
+    SchedulerRun,
+    #[serde(rename = "scheduler.mark-read")]
+    SchedulerMarkRead,
+    #[serde(rename = "cloud.account")]
+    CloudAccount,
+    #[serde(rename = "cloud.login")]
+    CloudLogin,
+    #[serde(rename = "cloud.registration-code.send")]
+    CloudRegistrationCodeSend,
+    #[serde(rename = "cloud.register")]
+    CloudRegister,
+    #[serde(rename = "cloud.logout")]
+    CloudLogout,
+    #[serde(rename = "cloud.redeem")]
+    CloudRedeem,
+    #[serde(rename = "cloud.groups")]
+    CloudGroups,
+    #[serde(rename = "cloud.group.select")]
+    CloudGroupSelect,
+    #[serde(rename = "cloud.usage")]
+    CloudUsage,
+    #[serde(rename = "cloud.leaderboard.save")]
+    CloudLeaderboardSave,
+    #[serde(rename = "live.status")]
+    LiveStatus,
+    #[serde(rename = "live.create")]
+    LiveCreate,
+    #[serde(rename = "live.close")]
+    LiveClose,
     #[serde(rename = "task.start")]
     TaskStart,
     #[serde(rename = "task.cancel")]
@@ -53,21 +150,240 @@ pub enum DesktopMethod {
     TaskApprovalResolve,
     #[serde(rename = "task.input.resolve")]
     TaskInputResolve,
+    #[serde(rename = "terminal.start")]
+    TerminalStart,
+    #[serde(rename = "terminal.write")]
+    TerminalWrite,
+    #[serde(rename = "terminal.resize")]
+    TerminalResize,
+    #[serde(rename = "terminal.terminate")]
+    TerminalTerminate,
+    #[serde(rename = "terminal.ready")]
+    TerminalReady,
+    #[serde(rename = "terminal.focus")]
+    TerminalFocus,
+    #[serde(rename = "terminal.context-menu")]
+    TerminalContextMenu,
+    #[serde(rename = "file.list")]
+    FileList,
+    #[serde(rename = "file.search")]
+    FileSearch,
+    #[serde(rename = "file.preview")]
+    FilePreview,
+    #[serde(rename = "file.artifact.preview")]
+    FileArtifactPreview,
+    #[serde(rename = "file.generated-image.read")]
+    FileGeneratedImageRead,
+    #[serde(rename = "file.project-actions")]
+    FileProjectActions,
+    #[serde(rename = "file.project-action.authorize")]
+    FileProjectActionAuthorize,
+    #[serde(rename = "git.state")]
+    GitState,
+    #[serde(rename = "git.diff")]
+    GitDiff,
+    #[serde(rename = "git.mutate")]
+    GitMutate,
+    #[serde(rename = "git.commit")]
+    GitCommit,
+    #[serde(rename = "git.push")]
+    GitPush,
+    #[serde(rename = "git.initialize")]
+    GitInitialize,
+    #[serde(rename = "git.hunks")]
+    GitHunks,
+    #[serde(rename = "git.hunk.mutate")]
+    GitHunkMutate,
+    #[serde(rename = "git.pull-request.prepare")]
+    GitPullRequestPrepare,
+    #[serde(rename = "git.review.start")]
+    GitReviewStart,
+    #[serde(rename = "git.review.submit")]
+    GitReviewSubmit,
+    #[serde(rename = "git.worktree")]
+    GitWorktree,
+    #[serde(rename = "browser.state")]
+    BrowserState,
+    #[serde(rename = "browser.restart")]
+    BrowserRestart,
+    #[serde(rename = "browser.command")]
+    BrowserCommand,
+    #[serde(rename = "browser.surface.bounds")]
+    BrowserSurfaceBounds,
+    #[serde(rename = "browser.annotation.list")]
+    BrowserAnnotationList,
+    #[serde(rename = "browser.annotation.save")]
+    BrowserAnnotationSave,
+    #[serde(rename = "browser.annotation.delete")]
+    BrowserAnnotationDelete,
+    #[serde(rename = "browser.action")]
+    BrowserAction,
+    #[serde(rename = "plugin.install")]
+    PluginInstall,
+    #[serde(rename = "plugin.uninstall")]
+    PluginUninstall,
+    #[serde(rename = "plugin.industry.activate")]
+    PluginIndustryActivate,
+    #[serde(rename = "plugin.industry.deactivate")]
+    PluginIndustryDeactivate,
+    #[serde(rename = "plugin.mcp.reload")]
+    PluginMcpReload,
+    #[serde(rename = "plugin.catalog.sync")]
+    PluginCatalogSync,
+    #[serde(rename = "connector.oauth.start")]
+    ConnectorOauthStart,
+    #[serde(rename = "connector.oauth.complete")]
+    ConnectorOauthComplete,
+    #[serde(rename = "connector.disconnect")]
+    ConnectorDisconnect,
+    #[serde(rename = "provider.get")]
+    ProviderGet,
+    #[serde(rename = "provider.save")]
+    ProviderSave,
+    #[serde(rename = "models.discover")]
+    ModelsDiscover,
+    #[serde(rename = "models.validate")]
+    ModelsValidate,
+    #[serde(rename = "extensions.list")]
+    ExtensionsList,
+    #[serde(rename = "extensions.skill.set-enabled")]
+    ExtensionsSkillSetEnabled,
+    #[serde(rename = "policy.get")]
+    PolicyGet,
+    #[serde(rename = "policy.save")]
+    PolicySave,
+    #[serde(rename = "config.effective")]
+    ConfigEffective,
+    #[serde(rename = "usage.get")]
+    UsageGet,
+    #[serde(rename = "usage.price.save")]
+    UsagePriceSave,
+    #[serde(rename = "memory.list")]
+    MemoryList,
+    #[serde(rename = "memory.save")]
+    MemorySave,
+    #[serde(rename = "memory.delete")]
+    MemoryDelete,
+    #[serde(rename = "memory.settings.save")]
+    MemorySettingsSave,
+    #[serde(rename = "secret.list")]
+    SecretList,
+    #[serde(rename = "secret.save")]
+    SecretSave,
+    #[serde(rename = "secret.delete")]
+    SecretDelete,
+    #[serde(rename = "hook.list")]
+    HookList,
+    #[serde(rename = "hook.local.list")]
+    HookLocalList,
+    #[serde(rename = "hook.create")]
+    HookCreate,
+    #[serde(rename = "shell.deep-links.activate")]
+    ShellActivateDeepLinks,
+    #[serde(rename = "shell.frontend.ready")]
+    ShellFrontendReady,
+    #[serde(rename = "shell.task-window.open")]
+    ShellOpenTaskWindow,
+    #[serde(rename = "shell.microphone.request")]
+    ShellRequestMicrophoneAccess,
+    #[serde(rename = "shell.cloud-console.open")]
+    ShellOpenCloudConsole,
+    #[serde(rename = "shell.external-url.open")]
+    ShellOpenExternalUrl,
+    #[serde(rename = "shell.editor.open")]
+    ShellOpenEditor,
+    #[serde(rename = "shell.local-artifact.open")]
+    ShellOpenLocalArtifact,
+    #[serde(rename = "shell.generated-image.reveal")]
+    ShellRevealGeneratedImage,
+    #[serde(rename = "shell.generated-image.copy")]
+    ShellCopyGeneratedImage,
+    #[serde(rename = "shell.images.pick")]
+    ShellPickImages,
+    #[serde(rename = "shell.attachments.pick")]
+    ShellPickAttachments,
+    #[serde(rename = "shell.image.paste")]
+    ShellPasteImage,
+    #[serde(rename = "shell.thread.reveal")]
+    ShellRevealThread,
+    #[serde(rename = "shell.project.reveal")]
+    ShellRevealProject,
+    #[serde(rename = "shell.download-directory.pick")]
+    ShellPickDownloadDirectory,
+    #[serde(rename = "shell.scheduler.open")]
+    ShellOpenScheduler,
+    #[serde(rename = "shell.app-update.state")]
+    ShellAppUpdateState,
+    #[serde(rename = "shell.app-update.check")]
+    ShellAppUpdateCheck,
+    #[serde(rename = "shell.app-update.download")]
+    ShellAppUpdateDownload,
+    #[serde(rename = "shell.app-update.install")]
+    ShellAppUpdateInstall,
+    #[serde(rename = "shell.app-update.open-download")]
+    ShellAppUpdateOpenDownload,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 154] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
         Self::RuntimeStop,
         Self::RuntimeSnapshot,
         Self::RuntimeDiagnostics,
+        Self::RuntimeRestart,
         Self::EventReplay,
         Self::PreferencesGet,
         Self::PreferencesSave,
         Self::ThreadList,
+        Self::ThreadTimeline,
+        Self::ThreadNew,
+        Self::ThreadFork,
+        Self::ThreadArchive,
+        Self::ThreadUnarchive,
+        Self::ThreadPin,
+        Self::ThreadUnread,
+        Self::ThreadRename,
+        Self::ThreadAutoName,
+        Self::ThreadReasoning,
+        Self::GoalSet,
+        Self::GoalUpdate,
+        Self::ContextState,
+        Self::ContextCompact,
+        Self::ContextRecalibrate,
+        Self::ProjectUpdate,
+        Self::ProjectArchiveTasks,
+        Self::ProjectQuickLauncher,
+        Self::AgentList,
+        Self::AgentProfileList,
+        Self::AgentProfileSave,
+        Self::AgentProfileDelete,
+        Self::AgentMessage,
+        Self::AgentStop,
+        Self::AgentRead,
+        Self::WorktreeSnapshot,
+        Self::WorktreeHandoff,
         Self::SchedulerGet,
+        Self::SchedulerCreate,
+        Self::SchedulerCreateFromText,
+        Self::SchedulerUpdate,
+        Self::SchedulerDelete,
+        Self::SchedulerRun,
+        Self::SchedulerMarkRead,
+        Self::CloudAccount,
+        Self::CloudLogin,
+        Self::CloudRegistrationCodeSend,
+        Self::CloudRegister,
+        Self::CloudLogout,
+        Self::CloudRedeem,
+        Self::CloudGroups,
+        Self::CloudGroupSelect,
+        Self::CloudUsage,
+        Self::CloudLeaderboardSave,
+        Self::LiveStatus,
+        Self::LiveCreate,
+        Self::LiveClose,
         Self::TaskStart,
         Self::TaskCancel,
         Self::TaskSnapshot,
@@ -78,7 +394,761 @@ impl DesktopMethod {
         Self::TaskQueueSteer,
         Self::TaskApprovalResolve,
         Self::TaskInputResolve,
+        Self::TerminalStart,
+        Self::TerminalWrite,
+        Self::TerminalResize,
+        Self::TerminalTerminate,
+        Self::TerminalReady,
+        Self::TerminalFocus,
+        Self::TerminalContextMenu,
+        Self::FileList,
+        Self::FileSearch,
+        Self::FilePreview,
+        Self::FileArtifactPreview,
+        Self::FileGeneratedImageRead,
+        Self::FileProjectActions,
+        Self::FileProjectActionAuthorize,
+        Self::GitState,
+        Self::GitDiff,
+        Self::GitMutate,
+        Self::GitCommit,
+        Self::GitPush,
+        Self::GitInitialize,
+        Self::GitHunks,
+        Self::GitHunkMutate,
+        Self::GitPullRequestPrepare,
+        Self::GitReviewStart,
+        Self::GitReviewSubmit,
+        Self::GitWorktree,
+        Self::BrowserState,
+        Self::BrowserRestart,
+        Self::BrowserCommand,
+        Self::BrowserSurfaceBounds,
+        Self::BrowserAnnotationList,
+        Self::BrowserAnnotationSave,
+        Self::BrowserAnnotationDelete,
+        Self::BrowserAction,
+        Self::PluginInstall,
+        Self::PluginUninstall,
+        Self::PluginIndustryActivate,
+        Self::PluginIndustryDeactivate,
+        Self::PluginMcpReload,
+        Self::PluginCatalogSync,
+        Self::ConnectorOauthStart,
+        Self::ConnectorOauthComplete,
+        Self::ConnectorDisconnect,
+        Self::ProviderGet,
+        Self::ProviderSave,
+        Self::ModelsDiscover,
+        Self::ModelsValidate,
+        Self::ExtensionsList,
+        Self::ExtensionsSkillSetEnabled,
+        Self::PolicyGet,
+        Self::PolicySave,
+        Self::ConfigEffective,
+        Self::UsageGet,
+        Self::UsagePriceSave,
+        Self::MemoryList,
+        Self::MemorySave,
+        Self::MemoryDelete,
+        Self::MemorySettingsSave,
+        Self::SecretList,
+        Self::SecretSave,
+        Self::SecretDelete,
+        Self::HookList,
+        Self::HookLocalList,
+        Self::HookCreate,
+        Self::ShellActivateDeepLinks,
+        Self::ShellFrontendReady,
+        Self::ShellOpenTaskWindow,
+        Self::ShellRequestMicrophoneAccess,
+        Self::ShellOpenCloudConsole,
+        Self::ShellOpenExternalUrl,
+        Self::ShellOpenEditor,
+        Self::ShellOpenLocalArtifact,
+        Self::ShellRevealGeneratedImage,
+        Self::ShellCopyGeneratedImage,
+        Self::ShellPickImages,
+        Self::ShellPickAttachments,
+        Self::ShellPasteImage,
+        Self::ShellRevealThread,
+        Self::ShellRevealProject,
+        Self::ShellPickDownloadDirectory,
+        Self::ShellOpenScheduler,
+        Self::ShellAppUpdateState,
+        Self::ShellAppUpdateCheck,
+        Self::ShellAppUpdateDownload,
+        Self::ShellAppUpdateInstall,
+        Self::ShellAppUpdateOpenDownload,
     ];
+
+    #[must_use]
+    pub const fn requires_host(self) -> bool {
+        matches!(
+            self,
+            Self::BrowserState
+                | Self::BrowserRestart
+                | Self::BrowserCommand
+                | Self::BrowserSurfaceBounds
+                | Self::BrowserAnnotationList
+                | Self::BrowserAnnotationSave
+                | Self::BrowserAnnotationDelete
+                | Self::BrowserAction
+                | Self::ShellActivateDeepLinks
+                | Self::ShellFrontendReady
+                | Self::ShellOpenTaskWindow
+                | Self::ShellRequestMicrophoneAccess
+                | Self::ShellOpenCloudConsole
+                | Self::ShellOpenExternalUrl
+                | Self::ShellOpenEditor
+                | Self::ShellOpenLocalArtifact
+                | Self::ShellRevealGeneratedImage
+                | Self::ShellCopyGeneratedImage
+                | Self::ShellPickImages
+                | Self::ShellPickAttachments
+                | Self::ShellPasteImage
+                | Self::ShellRevealThread
+                | Self::ShellRevealProject
+                | Self::ShellPickDownloadDirectory
+                | Self::ShellOpenScheduler
+                | Self::ShellAppUpdateState
+                | Self::ShellAppUpdateCheck
+                | Self::ShellAppUpdateDownload
+                | Self::ShellAppUpdateInstall
+                | Self::ShellAppUpdateOpenDownload
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserHostOperation {
+    State,
+    Restart,
+    Command,
+    SurfaceBounds,
+    AnnotationList,
+    AnnotationSave,
+    AnnotationDelete,
+    Action,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellHostOperation {
+    ActivateDeepLinks,
+    FrontendReady,
+    OpenTaskWindow,
+    RequestMicrophoneAccess,
+    OpenCloudConsole,
+    OpenExternalUrl,
+    OpenEditor,
+    OpenLocalArtifact,
+    RevealGeneratedImage,
+    CopyGeneratedImage,
+    PickImages,
+    PickAttachments,
+    PasteImage,
+    RevealThread,
+    RevealProject,
+    PickDownloadDirectory,
+    OpenScheduler,
+    AppUpdateState,
+    AppUpdateCheck,
+    AppUpdateDownload,
+    AppUpdateInstall,
+    AppUpdateOpenDownload,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellOpenTaskWindowRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellExternalUrlRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellEditorOpenRequest {
+    pub cwd: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellGeneratedImageRequest {
+    pub image_path: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellFileSelectionRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellThreadRequest {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellProjectRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellPickDownloadDirectoryRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellMicrophoneAccess {
+    pub granted: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedUrl {
+    pub opened: bool,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedPath {
+    pub opened: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageReveal {
+    pub revealed: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageCopy {
+    pub copied: bool,
+    pub image: GeneratedImage,
+    pub clipboard: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellFileSelection {
+    pub selected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellThreadReveal {
+    pub thread_id: String,
+    pub cwd: String,
+    pub opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateCheck {
+    pub available: bool,
+    pub current_version: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateDownload {
+    pub available: bool,
+    #[serde(default)]
+    pub current_version: Option<String>,
+    #[serde(default)]
+    pub downloaded: Option<bool>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateInstall {
+    pub installed: bool,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserCommandRequest {
+    pub command: DesktopBrowserCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "command",
+    content = "payload"
+)]
+#[ts(export)]
+pub enum DesktopBrowserCommand {
+    CreateRoute {
+        route_id: String,
+        thread_id: String,
+        url: String,
+    },
+    Navigate {
+        route_id: String,
+        url: String,
+    },
+    Back {
+        route_id: String,
+    },
+    Forward {
+        route_id: String,
+    },
+    Reload {
+        route_id: String,
+    },
+    Resize {
+        route_id: String,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        visible: bool,
+    },
+    Click {
+        route_id: String,
+        selector: String,
+    },
+    Fill {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Select {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Press {
+        route_id: String,
+        key: String,
+    },
+    Scroll {
+        route_id: String,
+        x: f64,
+        y: f64,
+    },
+    Hover {
+        route_id: String,
+        selector: String,
+    },
+    Evaluate {
+        route_id: String,
+        expression: String,
+    },
+    DomSnapshot {
+        route_id: String,
+    },
+    VisualSnapshot {
+        route_id: String,
+    },
+    DeveloperInspect {
+        route_id: String,
+    },
+    Pointer {
+        route_id: String,
+        kind: String,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        button: i32,
+        click_count: i32,
+        modifiers: u32,
+    },
+    Key {
+        route_id: String,
+        kind: String,
+        key_code: i32,
+        native_key_code: i32,
+        character: String,
+        modifiers: u32,
+    },
+    CloseRoute {
+        route_id: String,
+    },
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserRouteRequest {
+    pub route_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserAnnotationDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum BrowserAction {
+    Navigate,
+    Back,
+    Forward,
+    Reload,
+    CaptureVisualSnapshot,
+    InspectDeveloperState,
+    BeginAnnotation,
+    CancelAnnotation,
+    SessionStatus,
+    OpenSignIn,
+    ClearSession,
+    ClearAllData,
+    ClearSettingsData,
+    FillSavedCredential,
+    ListImportProfiles,
+    ImportProfile,
+    Attach,
+    ActivateTab,
+    DetachTab,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserActionRequest {
+    pub action: BrowserAction,
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginPayloadRequest {
+    pub plugin: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginIdRequest {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginCatalogSyncRequest {
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ConnectorOauthCompleteRequest {
+    pub state: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ExtensionsListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SkillEnabledRequest {
+    pub skill_path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SkillEnabledState {
+    pub path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExtensionsSnapshot {
+    pub skills: Vec<Value>,
+    pub plugins: Vec<Value>,
+    pub catalog: Vec<Value>,
+    pub catalog_status: Value,
+    #[serde(default)]
+    pub active_industry_plugin: Option<Value>,
+    pub mcp_servers: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelCatalog {
+    pub models: Vec<ModelDescriptor>,
+    pub providers: Vec<String>,
+    pub errors: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ModelValidationRequest {
+    pub provider_type: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelValidation {
+    pub valid: bool,
+    pub model_id: String,
+    pub vision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PolicyState {
+    pub policy: Policy,
+    pub audit: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PolicySaveRequest {
+    pub thread_id: String,
+    pub policy: Policy,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct EffectiveConfigRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EffectiveConfig {
+    pub source: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub provider: ProviderSettings,
+    pub policy: Policy,
+    pub preferences: Preferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct UsagePriceRequest {
+    pub key: String,
+    pub price: f64,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryLifecycle {
+    #[ts(type = "number")]
+    pub dismissed_count: u64,
+    #[ts(type = "number")]
+    pub expired_count: u64,
+    #[ts(type = "number")]
+    pub superseded_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryState {
+    pub entries: Vec<Value>,
+    pub candidates: Vec<Value>,
+    pub lifecycle: MemoryLifecycle,
+    pub settings: Value,
+    pub chat_settings: Value,
+    pub effective_settings: Value,
+    pub last_recall: Value,
+    #[serde(default)]
+    pub scope_cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySaveRequest {
+    pub entry: Value,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemorySaveResult {
+    pub entry: Value,
+    pub state: MemoryState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryDeleteRequest {
+    pub memory_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySettingsRequest {
+    pub settings: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretList {
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretSaveRequest {
+    pub secret: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretSaveResult {
+    pub secret: Value,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretDeleteRequest {
+    pub secret_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretDeleteResult {
+    pub deleted: bool,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookListRequest {
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HookDefinition {
+    pub id: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub local: Option<bool>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    #[serde(default)]
+    pub command: Option<Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookCreateRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    #[serde(default)]
+    pub command: Option<Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -278,6 +1348,198 @@ const fn event_topic(kind: EventKind) -> &'static str {
 pub struct RuntimeSnapshotRequest {
     #[serde(default)]
     pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct NewTaskRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ContextRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ThreadAutoNameRequest {
+    pub thread_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectUpdateRequest {
+    pub project_path: String,
+    pub action: String,
+    #[serde(default)]
+    pub value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectPathRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct QuickLauncherRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+    #[serde(default)]
+    pub query: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentListRequest {
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentProfileSaveRequest {
+    pub profile: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentProfileIdRequest {
+    pub profile_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentMessageRequest {
+    pub agent_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentIdRequest {
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct WorktreePathRequest {
+    pub worktree_path: String,
+    #[serde(default)]
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ScheduledTaskFromTextRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<Value>,
+    #[serde(default)]
+    pub runtime: Option<Value>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SchedulerMarkReadRequest {
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRegistrationCodeRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRedeemRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudGroupSelectRequest {
+    pub group_id: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudPayloadRequest {
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LiveCreateRequest {
+    pub sdp: String,
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub initial_items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LiveCloseRequest {
+    pub call_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -517,6 +1779,187 @@ pub struct TaskInputResolution {
     pub answered: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TerminalFocusRequest {
+    pub focused: bool,
+    #[serde(default)]
+    pub process_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalFocusState {
+    pub focused: bool,
+    #[serde(default)]
+    pub process_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalReadyState {
+    pub ready: bool,
+    pub process_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TerminalContextMenuRequest {
+    pub process_id: String,
+    #[serde(default)]
+    pub has_selection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalContextMenu {
+    pub process_id: String,
+    pub items: Vec<String>,
+    pub has_selection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FileListRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub relative: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FileSearchRequest {
+    pub cwd: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FilePreviewRequest {
+    pub cwd: String,
+    pub path: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LocalArtifactRequest {
+    pub path: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FilePreview {
+    pub opened: bool,
+    pub name: String,
+    pub path: String,
+    pub absolute_path: String,
+    #[ts(type = "number")]
+    pub size: u64,
+    pub mime_type: String,
+    pub kind: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub data_url: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GeneratedImage {
+    pub path: String,
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: usize,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectActionAuthorizeRequest {
+    pub cwd: String,
+    pub action_id: String,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AuthorizedProjectAction {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    pub source: String,
+    pub fingerprint: String,
+    pub authorized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitHunkMutationRequest {
+    pub cwd: String,
+    pub patch: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitPullRequestRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitReviewStartRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitReviewSubmitRequest {
+    pub comments: Value,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub review: Option<Value>,
+}
+
 pub fn export_types(output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let config = Config::default().with_out_dir(output);
@@ -535,6 +1978,28 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         EventReplay,
         DesktopRecoveryRequired,
         RuntimeSnapshotRequest,
+        NewTaskRequest,
+        ContextRequest,
+        ThreadAutoNameRequest,
+        ProjectUpdateRequest,
+        ProjectPathRequest,
+        QuickLauncherRequest,
+        AgentListRequest,
+        AgentProfileSaveRequest,
+        AgentProfileIdRequest,
+        AgentMessageRequest,
+        AgentIdRequest,
+        WorktreePathRequest,
+        ScheduledTaskFromTextRequest,
+        SchedulerMarkReadRequest,
+        CloudLoginRequest,
+        CloudRegistrationCodeRequest,
+        CloudRegisterRequest,
+        CloudRedeemRequest,
+        CloudGroupSelectRequest,
+        CloudPayloadRequest,
+        LiveCreateRequest,
+        LiveCloseRequest,
         TaskStartRequest,
         TaskCancelRequest,
         TaskSnapshotRequest,
@@ -556,6 +2021,78 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         TaskApprovalResolution,
         TaskInputResolveRequest,
         TaskInputResolution,
+        TerminalFocusRequest,
+        TerminalFocusState,
+        TerminalReadyState,
+        TerminalContextMenuRequest,
+        TerminalContextMenu,
+        FileListRequest,
+        FileSearchRequest,
+        FilePreviewRequest,
+        LocalArtifactRequest,
+        FilePreview,
+        GeneratedImage,
+        ProjectActionAuthorizeRequest,
+        AuthorizedProjectAction,
+        GitHunkMutationRequest,
+        GitPullRequestRequest,
+        GitReviewStartRequest,
+        GitReviewSubmitRequest,
+        BrowserCommandRequest,
+        DesktopBrowserCommand,
+        BrowserRouteRequest,
+        BrowserAnnotationDeleteRequest,
+        BrowserAction,
+        BrowserActionRequest,
+        PluginPayloadRequest,
+        PluginIdRequest,
+        PluginCatalogSyncRequest,
+        ConnectorOauthCompleteRequest,
+        ExtensionsListRequest,
+        SkillEnabledRequest,
+        SkillEnabledState,
+        ExtensionsSnapshot,
+        ModelCatalog,
+        ModelValidationRequest,
+        ModelValidation,
+        PolicyState,
+        PolicySaveRequest,
+        EffectiveConfigRequest,
+        EffectiveConfig,
+        UsagePriceRequest,
+        MemoryListRequest,
+        MemoryLifecycle,
+        MemoryState,
+        MemorySaveRequest,
+        MemorySaveResult,
+        MemoryDeleteRequest,
+        MemorySettingsRequest,
+        SecretList,
+        SecretSaveRequest,
+        SecretSaveResult,
+        SecretDeleteRequest,
+        SecretDeleteResult,
+        HookListRequest,
+        HookDefinition,
+        HookCreateRequest,
+        ShellOpenTaskWindowRequest,
+        ShellExternalUrlRequest,
+        ShellEditorOpenRequest,
+        ShellGeneratedImageRequest,
+        ShellFileSelectionRequest,
+        ShellThreadRequest,
+        ShellProjectRequest,
+        ShellPickDownloadDirectoryRequest,
+        ShellMicrophoneAccess,
+        ShellOpenedUrl,
+        ShellOpenedPath,
+        ShellGeneratedImageReveal,
+        ShellGeneratedImageCopy,
+        ShellFileSelection,
+        ShellThreadReveal,
+        ShellAppUpdateCheck,
+        ShellAppUpdateDownload,
+        ShellAppUpdateInstall,
     );
     Ok(())
 }
@@ -581,6 +2118,112 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ApprovalDecision::AcceptForSession).expect("serialize decision"),
             r#""acceptForSession""#
+        );
+    }
+
+    #[test]
+    fn serializes_terminal_file_and_git_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::TerminalStart).expect("terminal method"),
+            r#""terminal.start""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::FileArtifactPreview).expect("file method"),
+            r#""file.artifact.preview""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::GitReviewSubmit).expect("git method"),
+            r#""git.review.submit""#
+        );
+    }
+
+    #[test]
+    fn serializes_conversation_project_agent_and_worktree_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::GoalSet).expect("goal method"),
+            r#""goal.set""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ProjectQuickLauncher).expect("project method"),
+            r#""project.quick-launcher""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::AgentProfileSave).expect("agent method"),
+            r#""agent.profile.save""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::WorktreeSnapshot).expect("worktree method"),
+            r#""worktree.snapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_scheduler_cloud_and_live_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::SchedulerCreateFromText)
+                .expect("scheduler method"),
+            r#""scheduler.create-from-text""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::CloudRegistrationCodeSend).expect("cloud method"),
+            r#""cloud.registration-code.send""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::LiveCreate).expect("live method"),
+            r#""live.create""#
+        );
+    }
+
+    #[test]
+    fn serializes_browser_and_extension_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::BrowserSurfaceBounds).expect("serialize method"),
+            r#""browser.surface.bounds""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ConnectorOauthComplete)
+                .expect("serialize method"),
+            r#""connector.oauth.complete""#
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserAction::CaptureVisualSnapshot)
+                .expect("serialize browser action"),
+            r#""captureVisualSnapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_config_and_data_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ProviderGet).expect("provider method"),
+            r#""provider.get""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::MemorySettingsSave).expect("memory method"),
+            r#""memory.settings.save""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::HookLocalList).expect("hook method"),
+            r#""hook.local.list""#
+        );
+    }
+
+    #[test]
+    fn serializes_native_shell_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenLocalArtifact)
+                .expect("serialize shell method"),
+            r#""shell.local-artifact.open""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellAppUpdateDownload)
+                .expect("serialize update method"),
+            r#""shell.app-update.download""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenCloudConsole)
+                .expect("serialize cloud console method"),
+            r#""shell.cloud-console.open""#
         );
     }
 

@@ -19,8 +19,9 @@ use onpeople_browser_host::{
 };
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
-    DesktopDispatcher, DesktopEvent, DesktopRecoveryRequired, DesktopRequest, DesktopResponse,
-    should_forward_desktop_event,
+    BrowserAction, BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserHostOperation,
+    DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRecoveryRequired, DesktopRequest,
+    DesktopResponse, ShellHostOperation, ShellOpenTaskWindowRequest, should_forward_desktop_event,
 };
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
@@ -1741,76 +1742,52 @@ impl AppState {
                 serde_json::to_value(self.runtime.scheduler_snapshot()).map_err(AppError::internal)
             }
             "create_scheduled_task" => {
-                let task = self.runtime.scheduler().create(
-                    required_string(&payload, "name")?,
-                    required_string(&payload, "prompt")?,
-                    required_string(&payload, "cwd")?,
-                    payload
-                        .get("schedule")
-                        .cloned()
-                        .unwrap_or_else(|| json!({ "kind": "once" })),
-                    payload.get("runtime").cloned().unwrap_or(Value::Null),
-                )?;
+                let task =
+                    self.runtime
+                        .create_scheduled_task(onpeople_types::ScheduledTaskRequest {
+                            name: required_string(&payload, "name")?,
+                            prompt: required_string(&payload, "prompt")?,
+                            cwd: required_string(&payload, "cwd")?,
+                            schedule: payload
+                                .get("schedule")
+                                .cloned()
+                                .unwrap_or_else(|| json!({ "kind": "once" })),
+                            runtime: payload.get("runtime").cloned().unwrap_or(Value::Null),
+                        })?;
                 serde_json::to_value(self.runtime.scheduler_snapshot())
                     .map(|snapshot| json!({ "task": task, "state": snapshot }))
                     .map_err(AppError::internal)
             }
             "create_scheduled_task_from_text" => {
-                let name = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("OnPeople 计划任务")
-                    .to_owned();
-                let prompt = payload
-                    .get("prompt")
-                    .or_else(|| payload.get("text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                let cwd = payload
-                    .get("cwd")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                serde_json::to_value(
-                    self.runtime.scheduler().create(
-                        name,
-                        prompt,
-                        cwd,
-                        payload
-                            .get("schedule")
-                            .cloned()
-                            .unwrap_or_else(|| json!({"kind":"once"})),
-                        payload.get("runtime").cloned().unwrap_or(Value::Null),
-                    )?,
-                )
-                .map_err(AppError::internal)
+                serde_json::to_value(self.runtime.create_scheduled_task_from_text(&payload)?)
+                    .map_err(AppError::internal)
             }
             "update_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                let task = self.runtime.scheduler().update(
-                    &task_id,
-                    payload
-                        .get("patch")
-                        .cloned()
-                        .unwrap_or_else(|| payload.clone()),
+                let task = self.runtime.update_scheduled_task(
+                    onpeople_types::ScheduledTaskMutationRequest {
+                        task_id,
+                        patch: payload
+                            .get("patch")
+                            .cloned()
+                            .unwrap_or_else(|| payload.clone()),
+                    },
                 )?;
                 Ok(json!({ "task": task, "state": self.runtime.scheduler_snapshot() }))
             }
             "delete_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                let deleted = self.runtime.scheduler().delete(&task_id)?;
+                let deleted = self.runtime.delete_scheduled_task(&task_id)?;
                 Ok(json!({ "deleted": deleted, "state": self.runtime.scheduler_snapshot() }))
             }
             "run_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                execute_scheduled_task(Arc::clone(&self.runtime), task_id).await
+                self.runtime.run_scheduled_task(&task_id).await
             }
             "mark_scheduled_notifications_read" => {
                 let run_id = payload.get("runId").and_then(Value::as_str);
-                self.runtime.scheduler().mark_read(run_id)?;
-                Ok(serde_json::to_value(self.runtime.scheduler_snapshot())
-                    .map_err(AppError::internal)?)
+                serde_json::to_value(self.runtime.mark_scheduled_notifications_read(run_id)?)
+                    .map_err(AppError::internal)
             }
             "list_worktrees" => {
                 let root = payload
@@ -1853,27 +1830,13 @@ impl AppState {
             "snapshot_worktree" => {
                 let path = required_string(&payload, "worktreePath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                let output = payload
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(&path).join(".onpeople.snapshot.patch"));
-                let root = onpeople_workspace::canonical_workspace(std::path::Path::new(&path))?;
-                let output = if output.is_absolute() {
-                    output
-                } else {
-                    root.join(output)
-                };
-                let value =
-                    onpeople_workspace::WorktreeService::default().snapshot(&root, &output)?;
-                Ok(json!({ "path": value }))
+                self.runtime
+                    .snapshot_worktree(&path, payload.get("output").and_then(Value::as_str))
             }
             "handoff_worktree" => {
                 let path = required_string(&payload, "worktreePath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                onpeople_workspace::WorktreeService::default()
-                    .handoff(std::path::Path::new(&path))?;
-                Ok(json!({ "handedOff": true, "path": path }))
+                self.runtime.handoff_worktree(&path)
             }
             "remove_worktree" => {
                 let root = required_string(&payload, "root")
@@ -1889,9 +1852,7 @@ impl AppState {
                 })?;
                 Ok(json!({ "removed": true, "path": path }))
             }
-            "get_policy" => Ok(
-                json!({ "policy": self.runtime.agent_status()?.policy, "audit": self.runtime.storage().metadata_prefix("audit.")?.into_iter().map(|(_, value)| value).collect::<Vec<_>>() }),
-            ),
+            "get_policy" => self.runtime.policy_state(),
             "save_policy" => {
                 let policy = payload
                     .get("policy")
@@ -1901,27 +1862,16 @@ impl AppState {
                     .map_err(AppError::internal)
             }
             "get_usage_ledger" => self.runtime.usage_snapshot(),
-            "save_usage_price" => {
-                let key = required_string(&payload, "key")?;
-                let price = payload
+            "save_usage_price" => self.runtime.save_usage_price(
+                &required_string(&payload, "key")?,
+                payload
                     .get("price")
                     .and_then(Value::as_f64)
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?;
-                let mut usage = self.runtime.usage_snapshot()?;
-                usage["prices"][key] = json!(price);
-                self.runtime
-                    .storage()
-                    .put_metadata("usage.snapshot", &usage)?;
-                Ok(usage)
-            }
-            "get_effective_config" => Ok(json!({
-                "source": "onpeople.db",
-                "cwd": payload.get("cwd"),
-                "provider": self.runtime.agent_status()?.provider,
-                "policy": self.runtime.agent_status()?.policy,
-                "preferences": self.runtime.preferences()?,
-            })),
+                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?,
+            ),
+            "get_effective_config" => self
+                .runtime
+                .effective_config(payload.get("cwd").and_then(Value::as_str)),
             "pick_download_directory" => {
                 let directory = payload
                     .get("path")
@@ -1948,52 +1898,42 @@ impl AppState {
                 payload.get("cwd").and_then(Value::as_str),
                 payload.get("threadId").and_then(Value::as_str),
             ),
-            "save_memory" => {
-                let entry = payload.get("entry").unwrap_or(&payload);
-                let saved = self.runtime.save_memory_from_payload(entry)?;
-                Ok(json!({
-                    "entry": saved,
-                    "state": self.runtime.memory_state(
-                        entry.get("cwd").and_then(Value::as_str),
-                        payload.get("threadId").and_then(Value::as_str),
-                    )?,
-                }))
-            }
-            "delete_memory" => self
-                .runtime
-                .delete_document_from_payload("memories", &payload),
+            "save_memory" => self.runtime.save_memory(
+                payload.get("entry").unwrap_or(&payload),
+                payload.get("threadId").and_then(Value::as_str),
+            ),
+            "delete_memory" => self.runtime.delete_memory(
+                payload
+                    .get("memoryId")
+                    .or_else(|| payload.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AppError::invalid("缺少 memoryId"))?,
+            ),
             "save_memory_settings" => self.runtime.save_memory_settings(&payload),
             "list_agent_profiles" => Ok(json!({ "profiles": self.runtime.list_agent_profiles()? })),
             "save_agent_profile" => {
                 let profile = payload.get("profile").unwrap_or(&payload);
-                let saved = self.runtime.save_agent_profile(profile)?;
-                self.runtime.reload_agent_configuration().await?;
-                Ok(json!({ "profile": saved, "profiles": self.runtime.list_agent_profiles()? }))
+                self.runtime.save_agent_profile_and_reload(profile).await
             }
             "delete_agent_profile" => {
-                let deleted = self.runtime.delete_agent_profile(
-                    &required_string(&payload, "profileId")
-                        .or_else(|_| required_string(&payload, "id"))?,
-                )?;
-                self.runtime.reload_agent_configuration().await?;
-                Ok(deleted)
+                self.runtime
+                    .delete_agent_profile_and_reload(
+                        &required_string(&payload, "profileId")
+                            .or_else(|_| required_string(&payload, "id"))?,
+                    )
+                    .await
             }
             "list_secrets" => Ok(json!({ "secrets": self.runtime.list_secrets()? })),
-            "save_secret" => {
-                let secret = payload.get("secret").unwrap_or(&payload);
-                let saved = self.runtime.save_secret_from_payload(secret)?;
-                Ok(json!({ "secret": saved, "secrets": self.runtime.list_secrets()? }))
-            }
-            "delete_secret" => {
-                let id = payload
+            "save_secret" => self
+                .runtime
+                .save_secret(payload.get("secret").unwrap_or(&payload)),
+            "delete_secret" => self.runtime.delete_secret(
+                payload
                     .get("id")
                     .or_else(|| payload.get("secretId"))
                     .and_then(Value::as_str)
-                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?;
-                Ok(
-                    json!({ "deleted": self.runtime.storage().delete_secret(id)?, "secrets": self.runtime.list_secrets()? }),
-                )
-            }
+                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?,
+            ),
             "list_hooks" | "list_local_hooks" => {
                 let cwd = payload
                     .get("cwd")
@@ -2063,14 +2003,7 @@ impl AppState {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned);
-                match cwd {
-                    Some(cwd) => self.runtime.start_thread(&cwd).await,
-                    None => Ok(json!({
-                        "pending": true,
-                        "workspaceMode": "isolated",
-                        "cwd": null,
-                    })),
-                }
+                self.runtime.new_task(cwd.as_deref()).await
             }
             "resume_thread" | "fork_thread" | "archive_thread" | "unarchive_thread"
             | "pin_thread" | "mark_thread_unread" | "rename_thread" => {
@@ -2099,7 +2032,6 @@ impl AppState {
                     .or_else(|_| required_string(&payload, "path"))?;
                 let action = required_string(&payload, "action")?;
                 self.runtime
-                    .storage()
                     .update_project(&path, &action, payload.get("value"))
             }
             "reveal_project" => {
@@ -2111,20 +2043,7 @@ impl AppState {
             "archive_project_tasks" => {
                 let path = required_string(&payload, "projectPath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                let threads = self.runtime.storage().list_threads(&ThreadFilters {
-                    archived: false,
-                    query: String::new(),
-                    project_path: Some(path.clone()),
-                    limit: 1_000,
-                })?;
-                let mut archived = 0_u32;
-                for thread in threads.threads {
-                    self.runtime
-                        .thread_command("archive_thread", &json!({ "threadId": thread.id }))
-                        .await?;
-                    archived = archived.saturating_add(1);
-                }
-                Ok(json!({ "projectPath": path, "archived": archived }))
+                self.runtime.archive_project_tasks(&path).await
             }
             "ready_terminal" => {
                 let process_id = required_string(&payload, "processId")?;
@@ -2148,38 +2067,18 @@ impl AppState {
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| self.runtime.default_cwd().to_string_lossy().into_owned());
-                let route_id = payload.get("routeId").and_then(Value::as_str);
-                let mut suggestions = self
-                    .runtime
-                    .project_actions(&cwd)?
-                    .into_iter()
-                    .map(|action| serde_json::to_value(action).unwrap_or(Value::Null))
-                    .collect::<Vec<_>>();
                 let query = payload
                     .get("query")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim();
-                let files = if query.is_empty() {
-                    self.runtime.files_list(&cwd, "")?
-                } else {
-                    self.runtime.files_search(&cwd, query)?.entries
-                };
-                suggestions.extend(
-                    files
-                        .into_iter()
-                        .filter(|entry| entry.kind == "file")
-                        .take(20)
-                        .map(|entry| {
-                            json!({
-                                "kind": "file",
-                                "routeId": route_id,
-                                "path": entry.path,
-                                "label": entry.name,
-                            })
-                        }),
-                );
-                Ok(Value::Array(suggestions))
+                self.runtime
+                    .quick_launcher_suggestions(
+                        &cwd,
+                        payload.get("routeId").and_then(Value::as_str),
+                        query,
+                    )
+                    .map(Value::Array)
             }
             "list_project_files" => {
                 let cwd = required_string(&payload, "cwd")?;
@@ -2407,11 +2306,8 @@ impl AppState {
             "get_app_update_state" => {
                 serde_json::to_value(self.update_state()).map_err(AppError::internal)
             }
-            "restart_runtime" => {
-                self.runtime.stop().await;
-                self.runtime.start().await?;
-                serde_json::to_value(self.runtime.runtime_diagnostics()).map_err(AppError::internal)
-            }
+            "restart_runtime" => serde_json::to_value(self.runtime.restart_runtime().await?)
+                .map_err(AppError::internal),
             "interrupt" => self.runtime.interrupt(&payload).await,
             "resolve_approval" => {
                 self.runtime
@@ -3252,52 +3148,6 @@ fn required_string(payload: &Value, key: &str) -> Result<String, AppError> {
         .ok_or_else(|| AppError::invalid(format!("缺少参数 {key}")))
 }
 
-async fn execute_scheduled_task(
-    runtime: Arc<CoreRuntime>,
-    task_id: String,
-) -> Result<Value, AppError> {
-    let run = runtime.scheduler().run_now(&task_id)?;
-    let task = runtime
-        .scheduler()
-        .task(&task_id)
-        .ok_or_else(|| AppError::new(onpeople_types::ErrorCode::NotFound, "计划任务不存在"))?;
-    let submission = runtime
-        .send_prompt(SendPromptRequest {
-            thread_id: None,
-            text: task.prompt,
-            cwd: Some(task.cwd),
-            workspace_mode: Some("local".to_owned()),
-            images: Vec::new(),
-            attachments: Vec::new(),
-            capability: None,
-            mode: None,
-            industry_plugin: None,
-            model: None,
-            reasoning_effort: None,
-        })
-        .await;
-    match submission {
-        Ok(submission) => {
-            runtime.scheduler().start_run(
-                &run.id,
-                submission.thread_id.clone(),
-                submission.turn_id.clone(),
-            )?;
-            Ok(json!({
-                "run": run,
-                "submission": submission,
-                "state": runtime.scheduler_snapshot(),
-            }))
-        }
-        Err(error) => {
-            runtime
-                .scheduler()
-                .finish_run(&run.id, "failed", None, Some(error.message.clone()))?;
-            Err(error)
-        }
-    }
-}
-
 fn install_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     let settings = MenuItemBuilder::with_id("menu-settings", "设置…")
         .accelerator("CmdOrCtrl+Comma")
@@ -3681,7 +3531,7 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
             for task in due {
                 let task_runtime = Arc::clone(&scheduled_runtime);
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = execute_scheduled_task(task_runtime, task.id).await {
+                    if let Err(error) = task_runtime.run_scheduled_task(&task.id).await {
                         tracing::warn!(
                             code = ?error.code,
                             message = %error.message,
@@ -3888,6 +3738,218 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     Ok(())
 }
 
+struct TauriDesktopHost<'a, R: Runtime> {
+    app: &'a AppHandle<R>,
+    state: &'a AppState,
+    frontend: &'a FrontendServer,
+}
+
+const fn legacy_browser_action_command(action: BrowserAction) -> &'static str {
+    match action {
+        BrowserAction::Navigate => "browser_navigate",
+        BrowserAction::Back => "browser_back",
+        BrowserAction::Forward => "browser_forward",
+        BrowserAction::Reload => "browser_reload",
+        BrowserAction::CaptureVisualSnapshot => "capture_browser_visual_snapshot",
+        BrowserAction::InspectDeveloperState => "inspect_browser_developer_state",
+        BrowserAction::BeginAnnotation => "begin_browser_annotation",
+        BrowserAction::CancelAnnotation => "cancel_browser_annotation",
+        BrowserAction::SessionStatus => "get_browser_session_status",
+        BrowserAction::OpenSignIn => "open_browser_sign_in",
+        BrowserAction::ClearSession => "clear_browser_session",
+        BrowserAction::ClearAllData => "clear_all_browser_data",
+        BrowserAction::ClearSettingsData => "clear_browser_data_from_settings",
+        BrowserAction::FillSavedCredential => "fill_saved_browser_credential",
+        BrowserAction::ListImportProfiles => "list_browser_import_profiles",
+        BrowserAction::ImportProfile => "import_browser_profile",
+        BrowserAction::Attach => "attach_browser",
+        BrowserAction::ActivateTab => "activate_browser_tab",
+        BrowserAction::DetachTab => "detach_browser_tab",
+    }
+}
+
+impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
+    fn browser<'a>(
+        &'a self,
+        operation: BrowserHostOperation,
+        params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            match operation {
+                BrowserHostOperation::State => {
+                    serde_json::to_value(self.state.current_browser_state())
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Restart => {
+                    self.state.force_restart_browser_host().await?;
+                    serde_json::to_value(self.state.current_browser_state())
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Command => {
+                    let command: BrowserCommand =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    self.state.apply_browser_remote(command).await
+                }
+                BrowserHostOperation::SurfaceBounds => {
+                    let request: BrowserBoundsRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    native_compositor::update_bounds(self.app, request.clone())?;
+                    if request.interactive {
+                        return Ok(json!({ "interactive": true }));
+                    }
+                    self.state
+                        .apply_browser_remote(BrowserCommand::Resize {
+                            route_id: request.route_id,
+                            width: request.width.round().clamp(1.0, 8_192.0) as u32,
+                            height: request.height.round().clamp(1.0, 8_192.0) as u32,
+                            scale_factor: request.scale_factor,
+                            visible: request.visible,
+                        })
+                        .await
+                }
+                BrowserHostOperation::AnnotationList => {
+                    let route_id = route_id(&params)?;
+                    serde_json::to_value(self.state.browser.annotations(&route_id))
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::AnnotationSave => {
+                    let annotation: BrowserAnnotation =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    serde_json::to_value(self.state.browser.save_annotation(annotation)?)
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::AnnotationDelete => {
+                    let request: BrowserAnnotationDeleteRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    serde_json::to_value(self.state.browser.delete_annotation(&request.id))
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Action => {
+                    let request: BrowserActionRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    self.state
+                        .dispatch_command(
+                            self.app,
+                            legacy_browser_action_command(request.action),
+                            Value::Object(request.payload.into_iter().collect()),
+                        )
+                        .await
+                }
+            }
+        })
+    }
+
+    fn shell<'a>(
+        &'a self,
+        operation: ShellHostOperation,
+        params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            match operation {
+                ShellHostOperation::ActivateDeepLinks => {
+                    serde_json::to_value(self.state.activate_deep_links())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::FrontendReady => {
+                    frontend_ready(self.app.clone())?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::OpenTaskWindow => {
+                    let request: ShellOpenTaskWindowRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    open_task_window_impl(self.app, self.frontend, request.thread_id)?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::RequestMicrophoneAccess => request_microphone_access().await,
+                ShellHostOperation::OpenCloudConsole => {
+                    self.state
+                        .dispatch_command(self.app, "open_cloud_console", params)
+                        .await
+                }
+                ShellHostOperation::OpenExternalUrl => {
+                    self.state
+                        .dispatch_command(self.app, "open_external_url", params)
+                        .await
+                }
+                ShellHostOperation::OpenEditor => {
+                    self.state
+                        .dispatch_command(self.app, "open_editor", params)
+                        .await
+                }
+                ShellHostOperation::OpenLocalArtifact => {
+                    self.state
+                        .dispatch_command(self.app, "open_local_artifact", params)
+                        .await
+                }
+                ShellHostOperation::RevealGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::CopyGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "copy_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::PickImages => {
+                    self.state
+                        .dispatch_command(self.app, "pick_images", params)
+                        .await
+                }
+                ShellHostOperation::PickAttachments => {
+                    self.state
+                        .dispatch_command(self.app, "pick_attachments", params)
+                        .await
+                }
+                ShellHostOperation::PasteImage => {
+                    self.state
+                        .dispatch_command(self.app, "paste_image", params)
+                        .await
+                }
+                ShellHostOperation::RevealThread => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_thread", params)
+                        .await
+                }
+                ShellHostOperation::RevealProject => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_project", params)
+                        .await
+                }
+                ShellHostOperation::PickDownloadDirectory => {
+                    self.state
+                        .dispatch_command(self.app, "pick_download_directory", params)
+                        .await
+                }
+                ShellHostOperation::OpenScheduler => {
+                    self.app
+                        .emit("scheduler:open", json!({}))
+                        .map_err(AppError::internal)?;
+                    serde_json::to_value(self.state.runtime.scheduler_snapshot())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateState => {
+                    serde_json::to_value(self.state.update_state()).map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateCheck => self.state.check_app_update(self.app).await,
+                ShellHostOperation::AppUpdateDownload => {
+                    self.state.download_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateInstall => {
+                    self.state.install_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateOpenDownload => {
+                    self.state
+                        .dispatch_command(self.app, "open_app_download", params)
+                        .await
+                }
+            }
+        })
+    }
+}
+
 #[tauri::command]
 fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
     state.runtime.agent_status()
@@ -3895,10 +3957,17 @@ fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
 
 #[tauri::command]
 async fn desktop_request(
+    app: AppHandle,
     state: State<'_, AppState>,
+    frontend: State<'_, FrontendServer>,
     request: DesktopRequest,
 ) -> Result<DesktopResponse, AppError> {
-    Ok(state.desktop_api.dispatch(request).await)
+    let host = TauriDesktopHost {
+        app: &app,
+        state: &state,
+        frontend: &frontend,
+    };
+    Ok(state.desktop_api.dispatch_with_host(request, &host).await)
 }
 
 #[tauri::command]
@@ -3943,7 +4012,7 @@ fn get_thread_timeline(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Vec<Value>, AppError> {
-    state.runtime.storage().timeline_items(&thread_id)
+    state.runtime.thread_timeline(&thread_id)
 }
 
 #[tauri::command]
@@ -4124,13 +4193,7 @@ fn create_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::ScheduledTaskRequest,
 ) -> Result<ScheduledTask, AppError> {
-    state.runtime.scheduler().create(
-        request.name,
-        request.prompt,
-        request.cwd,
-        request.schedule,
-        request.runtime,
-    )
+    state.runtime.create_scheduled_task(request)
 }
 
 #[tauri::command]
@@ -4138,10 +4201,7 @@ fn update_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::ScheduledTaskMutationRequest,
 ) -> Result<ScheduledTask, AppError> {
-    state
-        .runtime
-        .scheduler()
-        .update(&request.task_id, request.patch)
+    state.runtime.update_scheduled_task(request)
 }
 
 #[tauri::command]
@@ -4149,7 +4209,7 @@ fn delete_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::IdRequest,
 ) -> Result<bool, AppError> {
-    state.runtime.scheduler().delete(&request.id)
+    state.runtime.delete_scheduled_task(&request.id)
 }
 
 #[tauri::command]
@@ -4157,7 +4217,7 @@ async fn run_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::IdRequest,
 ) -> Result<Value, AppError> {
-    execute_scheduled_task(Arc::clone(&state.runtime), request.id).await
+    state.runtime.run_scheduled_task(&request.id).await
 }
 
 #[tauri::command]
@@ -4169,8 +4229,7 @@ fn mark_scheduled_notifications_read(
         .get("runId")
         .or_else(|| request.get("id"))
         .and_then(Value::as_str);
-    state.runtime.scheduler().mark_read(run_id)?;
-    Ok(state.runtime.scheduler_snapshot())
+    state.runtime.mark_scheduled_notifications_read(run_id)
 }
 
 #[tauri::command]
@@ -4437,6 +4496,14 @@ fn open_task_window<R: Runtime>(
     frontend: State<'_, FrontendServer>,
     thread_id: Option<String>,
 ) -> Result<(), AppError> {
+    open_task_window_impl(&app, &frontend, thread_id)
+}
+
+fn open_task_window_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    frontend: &FrontendServer,
+    thread_id: Option<String>,
+) -> Result<(), AppError> {
     let suffix = thread_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let label = format!("task-{}", suffix.replace('-', ""));
     if app.get_webview_window(&label).is_some() {
@@ -4444,7 +4511,7 @@ fn open_task_window<R: Runtime>(
     }
     let url = frontend.page_url(Some(&format!("thread={suffix}")));
     let navigation_base = frontend.base_url.to_string();
-    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("OnPeople")
         .inner_size(1280.0, 820.0)
         .min_inner_size(960.0, 640.0)

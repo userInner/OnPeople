@@ -2,4 +2,4 @@
 import type { EventKind } from "./EventKind";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type EventEnvelope = { sequence: bigint, kind: EventKind, emittedAt: string, windowLabel: string | null, threadId: string | null, payload: JsonValue, };
+export type EventEnvelope = { sequence: number, kind: EventKind, emittedAt: string, windowLabel: string | null, threadId: string | null, payload: JsonValue, };

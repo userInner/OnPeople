@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   readText as readClipboardText,
@@ -13,24 +13,16 @@ import type {
   AppUpdateState,
   BrowserAnnotation,
   BrowserBoundsRequest,
+  BrowserFrame,
   BrowserState,
-  CloudAccountState,
   DesktopEvent,
   DesktopRecoveryRequired,
   EventReplay,
   EventEnvelope,
-  FileEntry,
-  FileSearchResult,
-  GitDiff,
-  GitState,
-  Goal,
-  LiveStatus,
+  Policy,
   Preferences,
-  ProjectAction,
   PromptSubmission,
   ProviderKind,
-  ProviderSettings,
-  RuntimeDiagnostics,
   SchedulerSnapshot,
   StreamEnvelope,
   TaskStartRequest,
@@ -41,81 +33,17 @@ import type {
   TaskSteerReceipt,
   QueuedTaskMessage,
   TerminalExit,
-  TerminalSession,
 } from "../types";
+import type { BrowserAction } from "../bindings/BrowserAction";
+import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
+import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import {
   createDesktopApiClient,
   legacyQueuedSteerResult,
   legacySteerResult,
 } from "./desktopApi";
 
-export type BrowserCommand =
-  | {
-      command: "createRoute";
-      payload: { routeId: string; threadId: string; url: string };
-    }
-  | { command: "navigate"; payload: { routeId: string; url: string } }
-  | {
-      command:
-        | "back"
-        | "forward"
-        | "reload"
-        | "domSnapshot"
-        | "visualSnapshot"
-        | "developerInspect"
-        | "closeRoute";
-      payload: { routeId: string };
-    }
-  | {
-      command: "resize";
-      payload: {
-        routeId: string;
-        width: number;
-        height: number;
-        scaleFactor: number;
-        visible: boolean;
-      };
-    }
-  | {
-      command: "click" | "hover";
-      payload: { routeId: string; selector: string };
-    }
-  | {
-      command: "fill";
-      payload: { routeId: string; selector: string; value: string };
-    }
-  | {
-      command: "select";
-      payload: { routeId: string; selector: string; value: string };
-    }
-  | { command: "press"; payload: { routeId: string; key: string } }
-  | { command: "scroll"; payload: { routeId: string; x: number; y: number } }
-  | { command: "evaluate"; payload: { routeId: string; expression: string } }
-  | {
-      command: "pointer";
-      payload: {
-        routeId: string;
-        kind: "move" | "down" | "up" | "wheel" | "leave";
-        x: number;
-        y: number;
-        deltaX: number;
-        deltaY: number;
-        button: number;
-        clickCount: number;
-        modifiers: number;
-      };
-    }
-  | {
-      command: "key";
-      payload: {
-        routeId: string;
-        kind: "down" | "up";
-        keyCode: number;
-        nativeKeyCode: number;
-        character: string;
-        modifiers: number;
-      };
-    };
+export type BrowserCommand = DesktopBrowserCommand;
 
 export interface TerminalOutput {
   processId: string;
@@ -256,6 +184,20 @@ const desktopApi = createDesktopApiClient(
   (handler) => subscribe("desktop:event", handler),
 );
 
+function jsonRecord(value: Record<string, unknown>): Record<string, JsonValue> {
+  return value as Record<string, JsonValue>;
+}
+
+async function browserAction(
+  action: BrowserAction,
+  payload: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  return (await desktopApi.request("browser.action", {
+    action,
+    payload: jsonRecord(payload),
+  })) as Record<string, unknown>;
+}
+
 function legacyEventEnvelope(event: DesktopEvent): EventEnvelope {
   return {
     sequence: event.sequence,
@@ -349,12 +291,12 @@ function replayEvents(
 
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
-  activateDeepLinks: () => call<string[]>("activate_deep_links"),
-  frontendReady: () => call<void>("frontend_ready"),
+  activateDeepLinks: () => desktopApi.request("shell.deep-links.activate", {}),
+  frontendReady: () => desktopApi.request("shell.frontend.ready", {}),
   listAgents: (parentThreadId?: string | null) =>
-    call<{ agents?: Array<Record<string, unknown>> }>("list_agents", {
-      request: { parentThreadId: parentThreadId ?? null },
-    }),
+    desktopApi.request("agent.list", {
+      parentThreadId: parentThreadId ?? null,
+    }) as Promise<{ agents?: Array<Record<string, unknown>> }>,
   agentStatus: () => desktopApi.request("runtime.status", {}),
   getPreferences: () => desktopApi.request("preferences.get", {}),
   savePreferences: (preferences: Preferences) =>
@@ -374,7 +316,9 @@ export const desktopClient = {
       limit: filters.limit ?? 200,
     }),
   threadTimeline: (threadId: string) =>
-    call<Array<Record<string, unknown>>>("get_thread_timeline", { threadId }),
+    desktopApi.request("thread.timeline", { threadId }) as Promise<
+      Array<Record<string, unknown>>
+    >,
   runtimeSnapshot: (threadId?: string | null) =>
     desktopApi.request("runtime.snapshot", { threadId: threadId ?? null }),
   getRuntimeSnapshot: (threadId?: string | null) =>
@@ -402,24 +346,25 @@ export const desktopClient = {
     tokenBudget?: number | null;
     threadId?: string | null;
   }) =>
-    call<Goal>("set_goal", {
-      request: {
-        objective: request.objective,
-        tokenBudget: request.tokenBudget ?? null,
-        threadId: request.threadId ?? null,
-      },
+    desktopApi.request("goal.set", {
+      objective: request.objective,
+      tokenBudget: request.tokenBudget ?? null,
+      threadId: request.threadId ?? null,
     }),
   updateGoal: (request: {
     threadId: string;
     action: string;
     value?: unknown;
   }) =>
-    call<Goal | null>("update_goal", {
-      request: { ...request, value: request.value ?? null },
+    desktopApi.request("goal.update", {
+      threadId: request.threadId,
+      action: request.action,
+      value: (request.value ?? null) as JsonValue,
     }),
   getProvider: (kind: ProviderKind, threadId?: string | null) =>
-    call<ProviderSettings>("get_provider", {
-      request: { kind, threadId: threadId ?? null },
+    desktopApi.request("provider.get", {
+      kind,
+      threadId: threadId ?? null,
     }),
   saveProvider: (request: {
     kind: ProviderKind;
@@ -429,13 +374,13 @@ export const desktopClient = {
     threadId?: string | null;
     extra?: Record<string, unknown>;
   }) =>
-    call<ProviderSettings>("save_provider", {
-      request: {
-        ...request,
-        apiKey: request.apiKey ?? null,
-        threadId: request.threadId ?? null,
-        extra: request.extra ?? {},
-      },
+    desktopApi.request("provider.save", {
+      kind: request.kind,
+      model: request.model,
+      baseUrl: request.baseUrl,
+      apiKey: request.apiKey ?? null,
+      threadId: request.threadId ?? null,
+      extra: jsonRecord(request.extra ?? {}),
     }),
   startTerminal: (request: {
     cwd: string;
@@ -444,48 +389,42 @@ export const desktopClient = {
     shell?: string | null;
     windowLabel?: string | null;
   }) =>
-    call<TerminalSession>("start_terminal", {
-      request: {
-        ...request,
-        shell: request.shell ?? null,
-        windowLabel: request.windowLabel ?? null,
-      },
+    desktopApi.request("terminal.start", {
+      ...request,
+      shell: request.shell ?? null,
+      windowLabel: request.windowLabel ?? null,
     }),
   writeTerminal: (processId: string, data: string) =>
-    call<void>("write_terminal", { request: { processId, data } }),
+    desktopApi.request("terminal.write", { processId, data }),
   resizeTerminal: (processId: string, cols: number, rows: number) =>
-    call<void>("resize_terminal", { request: { processId, cols, rows } }),
+    desktopApi.request("terminal.resize", { processId, cols, rows }),
   terminateTerminal: (processId: string) =>
-    call<void>("terminate_terminal", { request: { processId } }),
-  gitState: (cwd: string) =>
-    call<GitState>("get_git_state", { request: { cwd } }),
-  getGitState: (cwd: string) =>
-    call<GitState>("get_git_state", { request: { cwd } }),
+    desktopApi.request("terminal.terminate", { processId }),
+  gitState: (cwd: string) => desktopApi.request("git.state", { cwd }),
+  getGitState: (cwd: string) => desktopApi.request("git.state", { cwd }),
   gitDiff: (cwd: string, filePath: string) =>
-    call<GitDiff>("get_git_diff", { request: { cwd, filePath } }),
+    desktopApi.request("git.diff", { cwd, filePath }),
   getGitDiff: (cwd: string, filePath: string) =>
-    call<GitDiff>("get_git_diff", { request: { cwd, filePath } }),
+    desktopApi.request("git.diff", { cwd, filePath }),
   mutateGit: (request: {
     cwd: string;
     action: string;
     paths?: string[];
     patch?: string | null;
   }) =>
-    call<GitState>("mutate_git", {
-      request: {
-        ...request,
-        paths: request.paths ?? [],
-        patch: request.patch ?? null,
-      },
+    desktopApi.request("git.mutate", {
+      ...request,
+      paths: request.paths ?? [],
+      patch: request.patch ?? null,
     }),
   commitGit: (cwd: string, message: string) =>
-    call<GitState>("commit_git", { request: { cwd, message } }),
+    desktopApi.request("git.commit", { cwd, message }),
   pushGit: (cwd: string, remote?: string | null) =>
-    call<GitState>("push_git", { request: { cwd, remote: remote ?? null } }),
+    desktopApi.request("git.push", { cwd, remote: remote ?? null }),
   listProjectFiles: (cwd: string, relative = "") =>
-    call<FileEntry[]>("list_project_files", { request: { cwd, relative } }),
+    desktopApi.request("file.list", { cwd, relative }),
   searchProjectFiles: (cwd: string, query: string) =>
-    call<FileSearchResult>("search_project_files", { request: { cwd, query } }),
+    desktopApi.request("file.search", { cwd, query }),
   scheduler: () => desktopApi.request("scheduler.get", {}),
   createScheduledTask: (request: {
     name: string;
@@ -493,25 +432,45 @@ export const desktopClient = {
     cwd: string;
     schedule: unknown;
     runtime: unknown;
-  }) => call("create_scheduled_task", { request }),
+  }) =>
+    desktopApi.request("scheduler.create", {
+      name: request.name,
+      prompt: request.prompt,
+      cwd: request.cwd,
+      schedule: request.schedule as JsonValue,
+      runtime: (request.runtime ?? null) as JsonValue,
+    }),
   runScheduledTask: (id: string) =>
-    call("run_scheduled_task", { request: { id } }),
+    desktopApi.request("scheduler.run", { id }) as Promise<
+      Record<string, unknown>
+    >,
   deleteScheduledTask: (id: string) =>
-    call<boolean>("delete_scheduled_task", { request: { id } }),
-  liveStatus: () => call<LiveStatus>("get_live_status"),
-  getLiveStatus: () => call<LiveStatus>("get_live_status"),
+    desktopApi.request("scheduler.delete", { id }),
+  liveStatus: () => desktopApi.request("live.status", {}),
+  getLiveStatus: () => desktopApi.request("live.status", {}),
   requestMicrophoneAccess: () =>
-    call<{ granted: boolean; status: string }>("request_microphone_access"),
-  cloudAccount: () => call<CloudAccountState>("get_cloud_account"),
-  getCloudAccount: () => call<CloudAccountState>("get_cloud_account"),
-  appUpdateState: () => call<AppUpdateState>("get_app_update_state"),
-  getAppUpdateState: () => call<AppUpdateState>("get_app_update_state"),
+    desktopApi.request("shell.microphone.request", {}),
+  cloudAccount: () => desktopApi.request("cloud.account", {}),
+  getCloudAccount: () => desktopApi.request("cloud.account", {}),
+  appUpdateState: () => desktopApi.request("shell.app-update.state", {}),
+  getAppUpdateState: () => desktopApi.request("shell.app-update.state", {}),
   checkForAppUpdate: () =>
-    call<Record<string, unknown>>("check_for_app_update"),
-  downloadAppUpdate: () => call<Record<string, unknown>>("download_app_update"),
-  installAppUpdate: () => call<Record<string, unknown>>("install_app_update"),
-  openAppDownload: () => call<Record<string, unknown>>("open_app_download"),
-  openScheduler: () => call<SchedulerSnapshot>("open_scheduler"),
+    desktopApi.request("shell.app-update.check", {}) as Promise<
+      Record<string, unknown>
+    >,
+  downloadAppUpdate: () =>
+    desktopApi.request("shell.app-update.download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  installAppUpdate: () =>
+    desktopApi.request("shell.app-update.install", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openAppDownload: () =>
+    desktopApi.request("shell.app-update.open-download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openScheduler: () => desktopApi.request("shell.scheduler.open", {}),
   copyText: (text: string) => writeClipboardText(text),
   readText: () => readClipboardText(),
   pickProject: async () => {
@@ -519,12 +478,16 @@ export const desktopClient = {
     return typeof selected === "string" ? selected : null;
   },
   notify: (title: string, body: string) => sendNotification({ title, body }),
-  browserState: () => call<BrowserState>("get_browser_state"),
-  restartBrowserHost: () => call<BrowserState>("restart_browser_host"),
+  browserState: () => desktopApi.request("browser.state", {}),
+  restartBrowserHost: () => desktopApi.request("browser.restart", {}),
   browserCommand: (command: BrowserCommand) =>
-    call<Record<string, unknown>>("browser_command", { command }),
+    desktopApi.request("browser.command", { command }) as Promise<
+      Record<string, unknown>
+    >,
   browserSurfaceBounds: (request: BrowserBoundsRequest) =>
-    call<Record<string, unknown>>("browser_surface_bounds", { request }),
+    desktopApi.request("browser.surface.bounds", request) as Promise<
+      Record<string, unknown>
+    >,
   pickFiles: async (multiple = true) => {
     const selected = await openDialog({ multiple, directory: false });
     if (!selected) return [];
@@ -534,129 +497,147 @@ export const desktopClient = {
     const selected = await openDialog({ directory: true, multiple: false });
     return typeof selected === "string" ? selected : null;
   },
-  streamTerminal: (
-    processId: string,
-    handler: (event: StreamEnvelope) => void,
-  ) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_terminal", {
-      request: { processId },
-      channel,
-    });
-  },
-  streamAgent: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_agent", { channel });
-  },
-  streamBrowser: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_browser", { channel });
-  },
-  streamLive: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_live", { channel });
+  streamBrowser: async (handler: (event: StreamEnvelope) => void) => {
+    await subscribe<BrowserFrame>("browser:preview-updated", (frame) =>
+      handler({
+        sequence: Number(frame.sequence),
+        kind: "browser-frame",
+        streamId: frame.routeId,
+        payload: frame as unknown as JsonValue,
+        terminal: false,
+      }),
+    );
   },
   listBrowserAnnotations: (routeId: string) =>
-    call<BrowserAnnotation[]>("list_browser_annotations", { routeId }),
+    desktopApi.request("browser.annotation.list", { routeId }),
   saveBrowserAnnotation: (annotation: BrowserAnnotation) =>
-    call<BrowserAnnotation>("save_browser_annotation", { annotation }),
+    desktopApi.request("browser.annotation.save", annotation),
   deleteBrowserAnnotation: (id: string) =>
-    call<boolean>("delete_browser_annotation", { request: { id } }),
+    desktopApi.request("browser.annotation.delete", { id }),
   openTaskWindow: (threadId?: string | null) =>
-    call<void>("open_task_window", { threadId: threadId ?? null }),
+    desktopApi.request("shell.task-window.open", {
+      threadId: threadId ?? null,
+    }),
   pickImages: () =>
-    call<Record<string, unknown>>("pick_images", { request: {} }),
+    desktopApi.request("shell.images.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pickAttachments: () =>
-    call<Record<string, unknown>>("pick_attachments", { request: {} }),
+    desktopApi.request("shell.attachments.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteImage: () =>
-    call<Record<string, unknown>>("paste_image", { request: {} }),
+    desktopApi.request("shell.image.paste", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteFiles: async () => {
-    const result = await call<Record<string, unknown>>("paste_image", {
-      request: {},
-    });
+    const result = await desktopApi.request("shell.image.paste", { paths: [] });
     const selected = result.selected;
     return Array.isArray(selected)
       ? selected.filter((path): path is string => typeof path === "string")
       : [];
   },
   readGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("read_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("file.generated-image.read", {
+      path: imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   revealGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("reveal_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.reveal", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   copyGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("copy_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.copy", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   openLocalArtifact: (path: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("open_local_artifact", {
-      request: { path, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.local-artifact.open", {
+      path,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   previewLocalArtifact: (path: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("open_local_artifact", {
-      request: { path, threadId: threadId ?? null, preview: true },
-    }),
+    desktopApi.request("file.artifact.preview", {
+      path,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   newTask: (cwd?: string) =>
-    call<Record<string, unknown>>("new_task", {
-      request: { cwd: cwd ?? null },
-    }),
+    desktopApi.request("thread.new", { cwd: cwd ?? null }) as Promise<
+      Record<string, unknown>
+    >,
   getProviderSettings: (type: ProviderKind, threadId?: string | null) =>
-    call<ProviderSettings>("get_provider_settings", {
-      request: { type, threadId: threadId ?? null },
+    desktopApi.request("provider.get", {
+      kind: type,
+      threadId: threadId ?? null,
     }),
   setThreadReasoningEffort: (
     threadId: string,
     effort: string,
     model?: string | null,
   ) =>
-    call<Record<string, unknown>>("set_thread_reasoning_effort", {
-      request: { threadId, effort, model: model ?? null },
-    }),
+    desktopApi.request("thread.reasoning", {
+      threadId,
+      effort,
+      model: model ?? null,
+    }) as Promise<Record<string, unknown>>,
   loginCloudAccount: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("login_cloud_account", { request: payload }),
+    desktopApi.request("cloud.login", {
+      email: String(payload.email ?? ""),
+      password: String(payload.password ?? ""),
+    }) as Promise<Record<string, unknown>>,
   sendCloudRegistrationCode: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("send_cloud_registration_code", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.registration-code.send", {
+      email: String(payload.email ?? ""),
+    }) as Promise<Record<string, unknown>>,
   registerCloudAccount: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("register_cloud_account", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.register", {
+      email: String(payload.email ?? ""),
+      password: String(payload.password ?? ""),
+      code: String(payload.code ?? ""),
+    }) as Promise<Record<string, unknown>>,
   logoutCloudAccount: () =>
-    call<Record<string, unknown>>("logout_cloud_account", { request: {} }),
+    desktopApi.request("cloud.logout", {}) as Promise<Record<string, unknown>>,
   redeemCloudCode: (code: string) =>
-    call<Record<string, unknown>>("redeem_cloud_code", { request: { code } }),
+    desktopApi.request("cloud.redeem", { code }) as Promise<
+      Record<string, unknown>
+    >,
   openCloudConsole: () =>
-    call<Record<string, unknown>>("open_cloud_console", { request: {} }),
+    desktopApi.request("shell.cloud-console.open", {}) as Promise<
+      Record<string, unknown>
+    >,
   openExternalUrl: (url: string) =>
-    call<Record<string, unknown>>("open_external_url", { request: { url } }),
+    desktopApi.request("shell.external-url.open", { url }) as Promise<
+      Record<string, unknown>
+    >,
   listCloudGroups: () =>
-    call<Record<string, unknown>>("list_cloud_groups", { request: {} }),
+    desktopApi.request("cloud.groups", {}) as Promise<Record<string, unknown>>,
   selectCloudGroup: (groupId: string) =>
-    call<Record<string, unknown>>("select_cloud_group", {
-      request: { groupId },
-    }),
+    desktopApi.request("cloud.group.select", { groupId }) as Promise<
+      Record<string, unknown>
+    >,
   getCloudUsageProfile: (payload: Record<string, unknown> = {}) =>
-    call<Record<string, unknown>>("get_cloud_usage_profile", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.usage", {
+      payload: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   saveCloudLeaderboardPreference: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_cloud_leaderboard_preference", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.leaderboard.save", {
+      payload: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   createLiveSession: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_live_session", { request: payload }),
+    desktopApi.request("live.create", {
+      sdp: String(payload.sdp ?? ""),
+      voice: typeof payload.voice === "string" ? payload.voice : null,
+      instructions:
+        typeof payload.instructions === "string" ? payload.instructions : null,
+      initialItems: Array.isArray(payload.initialItems)
+        ? (payload.initialItems as JsonValue[])
+        : [],
+    }) as Promise<Record<string, unknown>>,
   closeLiveSession: (callId: string) =>
-    call<Record<string, unknown>>("close_live_session", {
-      request: { callId },
-    }),
+    desktopApi.request("live.close", { callId }) as Promise<
+      Record<string, unknown>
+    >,
   resumeTask: (threadId: string) =>
     desktopApi.request("task.resume", { threadId }),
   resumeThread: async (threadId: string): Promise<Record<string, unknown>> => {
@@ -664,176 +645,235 @@ export const desktopClient = {
     return recovery.resumePayload as Record<string, unknown>;
   },
   forkThread: (threadId: string) =>
-    call<Record<string, unknown>>("fork_thread", { request: { threadId } }),
+    desktopApi.request("thread.fork", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   archiveThread: (threadId: string) =>
-    call<Record<string, unknown>>("archive_thread", { request: { threadId } }),
+    desktopApi.request("thread.archive", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   unarchiveThread: (threadId: string) =>
-    call<Record<string, unknown>>("unarchive_thread", {
-      request: { threadId },
-    }),
+    desktopApi.request("thread.unarchive", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   pinThread: (threadId: string, pinned: boolean) =>
-    call<Record<string, unknown>>("pin_thread", {
-      request: { threadId, pinned },
-    }),
+    desktopApi.request("thread.pin", { threadId, value: pinned }) as Promise<
+      Record<string, unknown>
+    >,
   markThreadUnread: (threadId: string, unread: boolean) =>
-    call<Record<string, unknown>>("mark_thread_unread", {
-      request: { threadId, unread },
-    }),
+    desktopApi.request("thread.unread", { threadId, value: unread }) as Promise<
+      Record<string, unknown>
+    >,
   renameThread: (threadId: string, name: string) =>
-    call<Record<string, unknown>>("rename_thread", {
-      request: { threadId, name },
-    }),
+    desktopApi.request("thread.rename", { threadId, value: name }) as Promise<
+      Record<string, unknown>
+    >,
   autoNameThread: (threadId: string, text: string, model?: string | null) =>
-    call<Record<string, unknown>>("auto_name_thread", {
-      request: { threadId, text, model: model ?? null },
-    }),
+    desktopApi.request("thread.auto-name", {
+      threadId,
+      text,
+      model: model ?? null,
+    }) as Promise<Record<string, unknown>>,
   revealThread: (threadId: string) =>
-    call<Record<string, unknown>>("reveal_thread", { request: { threadId } }),
+    desktopApi.request("shell.thread.reveal", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   showTerminalContextMenu: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("show_terminal_context_menu", {
-      request: payload,
-    }),
+    desktopApi.request("terminal.context-menu", {
+      processId: String(payload.processId ?? ""),
+      hasSelection: Boolean(payload.hasSelection),
+    }) as Promise<Record<string, unknown>>,
   setTerminalFocused: (focused: boolean, processId?: string | null) =>
-    call<Record<string, unknown>>("set_terminal_focused", {
-      request: { focused, processId: processId ?? null },
-    }),
+    desktopApi.request("terminal.focus", {
+      focused,
+      processId: processId ?? null,
+    }) as Promise<Record<string, unknown>>,
   updateProject: (projectPath: string, action: string, value?: unknown) =>
-    call<Record<string, unknown>>("update_project", {
-      request: { projectPath, action, value: value ?? null },
-    }),
+    desktopApi.request("project.update", {
+      projectPath,
+      action,
+      value: (value ?? null) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   revealProject: (projectPath: string) =>
-    call<Record<string, unknown>>("reveal_project", {
-      request: { projectPath },
-    }),
+    desktopApi.request("shell.project.reveal", { projectPath }) as Promise<
+      Record<string, unknown>
+    >,
   archiveProjectTasks: (projectPath: string) =>
-    call<Record<string, unknown>>("archive_project_tasks", {
-      request: { projectPath },
-    }),
+    desktopApi.request("project.archive-tasks", { projectPath }) as Promise<
+      Record<string, unknown>
+    >,
   readyTerminal: (processId: string) =>
-    call<Record<string, unknown>>("ready_terminal", { request: { processId } }),
+    desktopApi.request("terminal.ready", { processId }) as Promise<
+      Record<string, unknown>
+    >,
   initGitRepository: (cwd: string) =>
-    call<GitState>("init_git_repository", { request: { cwd } }),
+    desktopApi.request("git.initialize", { cwd }),
   getGitHunks: (cwd: string, filePath: string) =>
-    call<Record<string, unknown>>("get_git_hunks", {
-      request: { cwd, filePath },
-    }),
+    desktopApi.request("git.hunks", { cwd, filePath }) as Promise<
+      Record<string, unknown>
+    >,
   mutateGitHunk: (payload: Record<string, unknown>) =>
-    call<GitState>("mutate_git_hunk", { request: payload }),
+    desktopApi.request("git.hunk.mutate", {
+      cwd: String(payload.cwd ?? ""),
+      patch: String(payload.patch ?? ""),
+      action: String(payload.action ?? "apply"),
+    }),
   preparePullRequest: (cwd: string, base?: string | null) =>
-    call<Record<string, unknown>>("prepare_pull_request", {
-      request: { cwd, base: base ?? null },
-    }),
+    desktopApi.request("git.pull-request.prepare", {
+      cwd,
+      base: base ?? null,
+    }) as Promise<Record<string, unknown>>,
   startReview: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("start_review", { request: payload }),
+    desktopApi.request("git.review.start", {
+      cwd: String(payload.cwd ?? ""),
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      targetType:
+        typeof payload.targetType === "string" ? payload.targetType : null,
+      value: typeof payload.value === "string" ? payload.value : null,
+      base: typeof payload.base === "string" ? payload.base : null,
+    }) as Promise<Record<string, unknown>>,
   submitReviewComments: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("submit_review_comments", {
-      request: payload,
-    }),
+    desktopApi.request("git.review.submit", {
+      comments: (payload.comments ?? []) as never,
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+      review:
+        payload.review && typeof payload.review === "object"
+          ? (payload.review as never)
+          : null,
+    }) as Promise<Record<string, unknown>>,
   openEditor: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("open_editor", { request: payload }),
-  restartRuntime: () =>
-    call<RuntimeDiagnostics>("restart_runtime", { request: {} }),
+    desktopApi.request("shell.editor.open", {
+      cwd: String(payload.cwd ?? ""),
+      path: String(payload.path ?? payload.filePath ?? ""),
+    }) as Promise<Record<string, unknown>>,
+  restartRuntime: () => desktopApi.request("runtime.restart", {}),
   listExtensions: (cwd?: string | null) =>
-    call<Record<string, unknown>>("list_extensions", {
-      request: { cwd: cwd ?? null },
-    }),
+    desktopApi.request("extensions.list", { cwd: cwd ?? null }) as Promise<
+      Record<string, unknown>
+    >,
   setSkillEnabled: (skillPath: string, enabled: boolean) =>
-    call<Record<string, unknown>>("set_skill_enabled", {
-      request: { skillPath, enabled },
-    }),
+    desktopApi.request("extensions.skill.set-enabled", {
+      skillPath,
+      enabled,
+    }) as Promise<Record<string, unknown>>,
   installPlugin: (plugin: Record<string, unknown>) =>
-    call<Record<string, unknown>>("install_plugin", { request: plugin }),
+    desktopApi.request("plugin.install", {
+      plugin: jsonRecord(plugin),
+    }) as Promise<Record<string, unknown>>,
   uninstallPlugin: (pluginId: string) =>
-    call<Record<string, unknown>>("uninstall_plugin", {
-      request: { pluginId },
-    }),
+    desktopApi.request("plugin.uninstall", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   activateIndustryPlugin: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("activate_industry_plugin", {
-      request: payload,
-    }),
+    desktopApi.request("plugin.industry.activate", {
+      plugin: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   deactivateIndustryPlugin: (pluginId: string) =>
-    call<Record<string, unknown>>("deactivate_industry_plugin", {
-      request: { pluginId },
-    }),
-  reloadMcp: () => call<Record<string, unknown>>("reload_mcp", { request: {} }),
+    desktopApi.request("plugin.industry.deactivate", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
+  reloadMcp: () =>
+    desktopApi.request("plugin.mcp.reload", {}) as Promise<
+      Record<string, unknown>
+    >,
   syncPluginCatalog: (url?: string | null) =>
-    call<Record<string, unknown>>("sync_plugin_catalog", {
-      request: { url: url ?? null },
-    }),
+    desktopApi.request("plugin.catalog.sync", {
+      url: url ?? null,
+    }) as Promise<Record<string, unknown>>,
   startConnectorOauth: (pluginId: string) =>
-    call<Record<string, unknown>>("start_connector_oauth", {
-      request: { pluginId },
-    }),
+    desktopApi.request("connector.oauth.start", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   completeConnectorOauth: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("complete_connector_oauth", {
-      request: payload,
-    }),
+    desktopApi.request("connector.oauth.complete", {
+      state: String(payload.state ?? ""),
+      code: typeof payload.code === "string" ? payload.code : null,
+      error: typeof payload.error === "string" ? payload.error : null,
+    }) as Promise<Record<string, unknown>>,
   disconnectConnector: (pluginId: string) =>
-    call<Record<string, unknown>>("disconnect_connector", {
-      request: { pluginId },
-    }),
+    desktopApi.request("connector.disconnect", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   discoverModels: () =>
-    call<Record<string, unknown>>("discover_models", { request: {} }),
+    desktopApi.request("models.discover", {}) as Promise<
+      Record<string, unknown>
+    >,
   validateModel: (providerType: string, modelId: string) =>
-    call<Record<string, unknown>>("validate_model", {
-      request: { providerType, modelId },
-    }),
+    desktopApi.request("models.validate", {
+      providerType,
+      modelId,
+    }) as Promise<Record<string, unknown>>,
   listAgentProfiles: () =>
-    call<Record<string, unknown>>("list_agent_profiles", { request: {} }),
+    desktopApi.request("agent.profile.list", {}) as Promise<
+      Record<string, unknown>
+    >,
   saveAgentProfile: (profile: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_agent_profile", {
-      request: { profile },
-    }),
+    desktopApi.request("agent.profile.save", {
+      profile: jsonRecord(profile),
+    }) as Promise<Record<string, unknown>>,
   deleteAgentProfile: (profileId: string) =>
-    call<Record<string, unknown>>("delete_agent_profile", {
-      request: { profileId },
-    }),
-  spawnAgent: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("spawn_agent", { request: payload }),
-  createAgentTask: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_agent_task", { request: payload }),
-  dispatchAgentTask: (taskId: string) =>
-    call<Record<string, unknown>>("dispatch_agent_task", {
-      request: { taskId },
-    }),
-  removeAgentTask: (taskId: string) =>
-    call<Record<string, unknown>>("remove_agent_task", { request: { taskId } }),
+    desktopApi.request("agent.profile.delete", { profileId }) as Promise<
+      Record<string, unknown>
+    >,
   messageAgent: (agentId: string, text: string) =>
-    call<Record<string, unknown>>("message_agent", {
-      request: { agentId, text },
-    }),
+    desktopApi.request("agent.message", { agentId, text }) as Promise<
+      Record<string, unknown>
+    >,
   stopAgent: (agentId: string) =>
-    call<Record<string, unknown>>("stop_agent", { request: { agentId } }),
+    desktopApi.request("agent.stop", { agentId }) as Promise<
+      Record<string, unknown>
+    >,
   readAgent: (agentId: string) =>
-    call<Record<string, unknown>>("read_agent", { request: { agentId } }),
+    desktopApi.request("agent.read", { agentId }) as Promise<
+      Record<string, unknown>
+    >,
   listWorktrees: (cwd: string) =>
-    call<Record<string, unknown>>("list_worktrees", { request: { cwd } }),
+    desktopApi.request("git.worktree", {
+      root: cwd,
+      path: null,
+      branch: null,
+      threadId: null,
+      removeBranch: false,
+    }) as Promise<Record<string, unknown>>,
   createWorktree: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_worktree", { request: payload }),
+    desktopApi.request("git.worktree", {
+      root: String(payload.root ?? payload.cwd ?? ""),
+      path: typeof payload.path === "string" ? payload.path : null,
+      branch: typeof payload.branch === "string" ? payload.branch : null,
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      removeBranch: false,
+    }) as Promise<Record<string, unknown>>,
   handoffWorktree: (worktreePath: string) =>
-    call<Record<string, unknown>>("handoff_worktree", {
-      request: { worktreePath },
-    }),
+    desktopApi.request("worktree.handoff", {
+      worktreePath,
+      output: null,
+    }) as Promise<Record<string, unknown>>,
   snapshotWorktree: (worktreePath: string) =>
-    call<Record<string, unknown>>("snapshot_worktree", {
-      request: { worktreePath },
-    }),
+    desktopApi.request("worktree.snapshot", {
+      worktreePath,
+      output: null,
+    }) as Promise<Record<string, unknown>>,
   removeWorktree: (worktreePath: string, root?: string | null) =>
-    call<Record<string, unknown>>("remove_worktree", {
-      request: { worktreePath, root: root ?? null },
-    }),
+    desktopApi.request("git.worktree", {
+      root: root ?? "",
+      path: worktreePath,
+      branch: null,
+      threadId: null,
+      removeBranch: true,
+    }) as Promise<Record<string, unknown>>,
   getContextState: (threadId?: string | null) =>
-    call<Record<string, unknown>>("get_context_state", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.state", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   compactContext: (threadId?: string | null) =>
-    call<Record<string, unknown>>("compact_context", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.compact", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   recalibrateContext: (threadId?: string | null) =>
-    call<Record<string, unknown>>("recalibrate_context", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.recalibrate", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   taskSteer,
   steerTurn: async (
     text: string,
@@ -865,63 +905,83 @@ export const desktopClient = {
     const receipt = await taskQueueSteer(queueId, threadId);
     return legacyQueuedSteerResult(receipt);
   },
-  getPolicy: () => call<Record<string, unknown>>("get_policy", { request: {} }),
-  savePolicy: (threadId: string, policy: unknown) =>
-    call<Record<string, unknown>>("save_policy", {
-      request: { threadId, policy },
-    }),
+  getPolicy: () =>
+    desktopApi.request("policy.get", {}) as Promise<Record<string, unknown>>,
+  savePolicy: (threadId: string, policy: Policy) =>
+    desktopApi.request("policy.save", {
+      threadId,
+      policy,
+    }) as Promise<Record<string, unknown>>,
   pickDownloadDirectory: (path?: string | null) =>
-    call<Preferences>("pick_download_directory", {
-      request: { path: path ?? null },
+    desktopApi.request("shell.download-directory.pick", {
+      path: path ?? null,
     }),
   getEffectiveConfig: (payload: Record<string, unknown> = {}) =>
-    call<Record<string, unknown>>("get_effective_config", { request: payload }),
+    desktopApi.request("config.effective", {
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+    }) as Promise<Record<string, unknown>>,
   listMemories: (cwd?: string | null, threadId?: string | null) =>
-    call<Record<string, unknown>>("list_memories", {
-      request: { cwd: cwd ?? null, threadId: threadId ?? null },
-    }),
+    desktopApi.request("memory.list", {
+      cwd: cwd ?? null,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   saveMemory: (memory: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_memory", {
-      request: { entry: memory },
-    }),
+    desktopApi.request("memory.save", {
+      entry: jsonRecord(memory),
+      threadId: null,
+    }) as Promise<Record<string, unknown>>,
   deleteMemory: (memoryId: string) =>
-    call<Record<string, unknown>>("delete_memory", { request: { memoryId } }),
+    desktopApi.request("memory.delete", { memoryId }) as Promise<
+      Record<string, unknown>
+    >,
   saveMemorySettings: (settings: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_memory_settings", {
-      request: settings,
-    }),
+    desktopApi.request("memory.settings.save", {
+      settings: jsonRecord(settings),
+    }) as Promise<Record<string, unknown>>,
   getUsageLedger: () =>
-    call<Record<string, unknown>>("get_usage_ledger", { request: {} }),
+    desktopApi.request("usage.get", {}) as Promise<Record<string, unknown>>,
   saveUsagePrice: (key: string, price: number) =>
-    call<Record<string, unknown>>("save_usage_price", {
-      request: { key, price },
-    }),
+    desktopApi.request("usage.price.save", { key, price }) as Promise<
+      Record<string, unknown>
+    >,
   listSecrets: () =>
-    call<Record<string, unknown>>("list_secrets", { request: {} }),
+    desktopApi.request("secret.list", {}) as Promise<Record<string, unknown>>,
   saveSecret: (secret: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_secret", { request: { secret } }),
+    desktopApi.request("secret.save", {
+      secret: jsonRecord(secret),
+    }) as Promise<Record<string, unknown>>,
   deleteSecret: (secretId: string) =>
-    call<Record<string, unknown>>("delete_secret", { request: { secretId } }),
-  listHooks: (cwd: string) =>
-    call<Record<string, unknown>>("list_hooks", { request: { cwd } }),
+    desktopApi.request("secret.delete", { secretId }) as Promise<
+      Record<string, unknown>
+    >,
+  listHooks: (cwd: string) => desktopApi.request("hook.list", { cwd }),
   listLocalHooks: (cwd: string) =>
-    call<Record<string, unknown>>("list_local_hooks", { request: { cwd } }),
+    desktopApi.request("hook.local.list", { cwd }),
   createHook: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_hook", { request: payload }),
-  listScheduledTasks: () =>
-    call<SchedulerSnapshot>("list_scheduled_tasks", { request: {} }),
+    desktopApi.request("hook.create", {
+      cwd: String(payload.cwd ?? ""),
+      id: typeof payload.id === "string" ? payload.id : null,
+      event: (payload.event ?? null) as JsonValue,
+      command: (payload.command ?? null) as JsonValue,
+      enabled: typeof payload.enabled === "boolean" ? payload.enabled : null,
+    }) as Promise<Record<string, unknown>>,
+  listScheduledTasks: () => desktopApi.request("scheduler.get", {}),
   createScheduledTaskFromText: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_scheduled_task_from_text", {
-      request: payload,
-    }),
+    desktopApi.request("scheduler.create-from-text", {
+      name: typeof payload.name === "string" ? payload.name : null,
+      prompt: typeof payload.prompt === "string" ? payload.prompt : null,
+      text: typeof payload.text === "string" ? payload.text : null,
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+      schedule: (payload.schedule ?? null) as JsonValue,
+      runtime: (payload.runtime ?? null) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   updateScheduledTask: (taskId: string, patch: Record<string, unknown>) =>
-    call<Record<string, unknown>>("update_scheduled_task", {
-      request: { taskId, patch },
-    }),
+    desktopApi.request("scheduler.update", {
+      taskId,
+      patch: jsonRecord(patch) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   markScheduledNotificationsRead: (runId?: string | null) =>
-    call<SchedulerSnapshot>("mark_scheduled_notifications_read", {
-      request: { runId: runId ?? null },
-    }),
+    desktopApi.request("scheduler.mark-read", { runId: runId ?? null }),
   cancelTask: (threadId: string, taskId?: string | null) =>
     desktopApi.request("task.cancel", {
       threadId,
@@ -961,96 +1021,70 @@ export const desktopClient = {
       unknown
     >,
   navigate: (url: string, routeId: string) =>
-    call<Record<string, unknown>>("browser_navigate", {
-      request: { url, routeId },
-    }),
+    browserAction("navigate", { url, routeId }),
   getQuickLauncherSuggestions: (
     cwd: string,
     routeId?: string | null,
     query = "",
   ) =>
-    call<Array<Record<string, unknown>>>("get_quick_launcher_suggestions", {
-      request: { cwd, routeId: routeId ?? null, query },
-    }),
+    desktopApi.request("project.quick-launcher", {
+      cwd,
+      routeId: routeId ?? null,
+      query,
+    }) as Promise<Array<Record<string, unknown>>>,
   getProjectActions: (cwd: string) =>
-    call<ProjectAction[]>("get_project_actions", { request: { cwd } }),
+    desktopApi.request("file.project-actions", { cwd }),
   authorizeProjectAction: (payload: Record<string, unknown>) =>
-    call<ProjectAction & { authorized?: boolean }>("authorize_project_action", {
-      request: payload,
+    desktopApi.request("file.project-action.authorize", {
+      cwd: String(payload.cwd ?? ""),
+      actionId: String(payload.actionId ?? payload.id ?? ""),
+      fingerprint:
+        typeof payload.fingerprint === "string" ? payload.fingerprint : null,
     }),
   openWorkspaceFile: (cwd: string, filePath: string, routeId?: string | null) =>
-    call<Record<string, unknown>>("open_workspace_file", {
-      request: { cwd, path: filePath, routeId: routeId ?? null },
-    }),
-  back: (routeId: string) =>
-    call<Record<string, unknown>>("browser_back", { request: { routeId } }),
-  forward: (routeId: string) =>
-    call<Record<string, unknown>>("browser_forward", { request: { routeId } }),
-  reload: (routeId: string) =>
-    call<Record<string, unknown>>("browser_reload", { request: { routeId } }),
+    desktopApi.request("file.preview", {
+      cwd,
+      path: filePath,
+      routeId: routeId ?? null,
+    }) as Promise<Record<string, unknown>>,
+  back: (routeId: string) => browserAction("back", { routeId }),
+  forward: (routeId: string) => browserAction("forward", { routeId }),
+  reload: (routeId: string) => browserAction("reload", { routeId }),
   captureBrowserVisualSnapshot: (routeId: string) =>
-    call<Record<string, unknown>>("capture_browser_visual_snapshot", {
-      request: { routeId },
-    }),
+    browserAction("captureVisualSnapshot", { routeId }),
   inspectBrowserDeveloperState: (routeId: string) =>
-    call<Record<string, unknown>>("inspect_browser_developer_state", {
-      request: { routeId },
-    }),
+    browserAction("inspectDeveloperState", { routeId }),
   beginBrowserAnnotation: (routeId: string) =>
-    call<Record<string, unknown>>("begin_browser_annotation", {
-      request: { routeId },
-    }),
+    browserAction("beginAnnotation", { routeId }),
   cancelBrowserAnnotation: (routeId: string) =>
-    call<Record<string, unknown>>("cancel_browser_annotation", {
-      request: { routeId },
-    }),
+    browserAction("cancelAnnotation", { routeId }),
   getBrowserSessionStatus: (routeId: string) =>
-    call<Record<string, unknown>>("get_browser_session_status", {
-      request: { routeId },
-    }),
+    browserAction("sessionStatus", { routeId }),
   openBrowserSignIn: (providerId: string, routeId: string) =>
-    call<Record<string, unknown>>("open_browser_sign_in", {
-      request: { providerId, routeId },
-    }),
+    browserAction("openSignIn", { providerId, routeId }),
   clearBrowserSession: (providerId: string, routeId: string) =>
-    call<Record<string, unknown>>("clear_browser_session", {
-      request: { providerId, routeId },
-    }),
+    browserAction("clearSession", { providerId, routeId }),
   clearAllBrowserData: (routeId: string) =>
-    call<Record<string, unknown>>("clear_all_browser_data", {
-      request: { routeId, all: true },
-    }),
+    browserAction("clearAllData", { routeId, all: true }),
   clearBrowserDataFromSettings: () =>
-    call<Record<string, unknown>>("clear_browser_data_from_settings", {
-      request: { all: true },
-    }),
+    browserAction("clearSettingsData", { all: true }),
   fillSavedBrowserCredential: (routeId: string) =>
-    call<Record<string, unknown>>("fill_saved_browser_credential", {
-      request: { routeId },
-    }),
-  listBrowserImportProfiles: () =>
-    call<Record<string, unknown>>("list_browser_import_profiles", {
-      request: {},
-    }),
+    browserAction("fillSavedCredential", { routeId }),
+  listBrowserImportProfiles: () => browserAction("listImportProfiles"),
   importBrowserProfile: (
     payload: Record<string, unknown>,
     routeId?: string | null,
   ) =>
-    call<Record<string, unknown>>("import_browser_profile", {
-      request: { ...payload, routeId: routeId ?? payload.routeId ?? null },
+    browserAction("importProfile", {
+      ...payload,
+      routeId: routeId ?? payload.routeId ?? null,
     }),
   attachBrowser: (webContentsId: string, routeId: string) =>
-    call<Record<string, unknown>>("attach_browser", {
-      request: { webContentsId, routeId },
-    }),
+    browserAction("attach", { webContentsId, routeId }),
   activateBrowserTab: (threadId: string, routeId: string) =>
-    call<Record<string, unknown>>("activate_browser_tab", {
-      request: { threadId, routeId },
-    }),
+    browserAction("activateTab", { threadId, routeId }),
   detachBrowserTab: (routeId: string) =>
-    call<Record<string, unknown>>("detach_browser_tab", {
-      request: { routeId },
-    }),
+    browserAction("detachTab", { routeId }),
   onDesktopEvent: (handler: (event: DesktopEvent) => void) =>
     desktopApi.subscribe(handler),
   onDesktopEventRecoveryRequired: (

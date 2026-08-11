@@ -1,9 +1,12 @@
 use std::{
-    path::{Path, PathBuf},
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
 use onpeople_types::{AppError, ErrorCode, WorktreeSummary};
+use uuid::Uuid;
 
 use crate::{GitService, canonical_workspace};
 
@@ -44,16 +47,28 @@ impl WorktreeService {
 
     pub fn snapshot(&self, path: &Path, output: &Path) -> Result<PathBuf, AppError> {
         let path = canonical_workspace(path)?;
-        let output = safe_snapshot_path(output)?;
-        if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent).map_err(AppError::storage)?;
-        }
+        let output = safe_snapshot_path(&path, output)?;
         let patch = self
             .git
             .run(&path, &["diff", "--binary", "--no-ext-diff", "HEAD"], None)?;
-        let temporary = output.with_extension("patch.tmp");
-        std::fs::write(&temporary, patch).map_err(AppError::storage)?;
-        std::fs::rename(&temporary, &output).map_err(AppError::storage)?;
+        let temporary = path.join(format!(".onpeople-snapshot-{}.tmp", Uuid::new_v4()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(AppError::storage)?;
+        if let Err(error) = file
+            .write_all(patch.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(AppError::storage(error));
+        }
+        drop(file);
+        if let Err(error) = fs::rename(&temporary, &output) {
+            let _ = fs::remove_file(&temporary);
+            return Err(AppError::storage(error));
+        }
         Ok(output)
     }
 
@@ -162,11 +177,30 @@ fn safe_destination(root: &Path, destination: &Path) -> Result<PathBuf, AppError
     ))
 }
 
-fn safe_snapshot_path(output: &Path) -> Result<PathBuf, AppError> {
+fn safe_snapshot_path(root: &Path, output: &Path) -> Result<PathBuf, AppError> {
+    let mut components = output.components();
+    let (Some(Component::Normal(file_name)), None) = (components.next(), components.next()) else {
+        return Err(AppError::new(
+            ErrorCode::WorkspaceBoundary,
+            "Worktree 快照必须是工作区根目录内的相对文件名",
+        ));
+    };
     if output.extension().and_then(|value| value.to_str()) != Some("patch") {
         return Err(AppError::invalid("Worktree 快照必须使用 .patch 扩展名"));
     }
-    Ok(output.to_path_buf())
+    let output = root.join(file_name);
+    if let Ok(metadata) = fs::symlink_metadata(&output) {
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceBoundary,
+                "Worktree 快照目标不能是符号链接",
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(AppError::invalid("Worktree 快照目标必须是普通文件"));
+        }
+    }
+    Ok(output)
 }
 
 fn validate_branch(value: &str) -> Result<(), AppError> {
@@ -185,7 +219,11 @@ fn validate_branch(value: &str) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_worktree_porcelain;
+    use std::path::Path;
+
+    use onpeople_types::ErrorCode;
+
+    use super::{parse_worktree_porcelain, safe_snapshot_path};
 
     #[test]
     fn parses_worktrees() {
@@ -194,5 +232,45 @@ mod tests {
         );
         assert_eq!(values.len(), 2);
         assert_eq!(values[1].branch.as_deref(), Some("onpeople/task"));
+    }
+
+    #[test]
+    fn accepts_default_snapshot_name_inside_worktree() {
+        let root = tempfile::tempdir().expect("temporary worktree");
+        let resolved = safe_snapshot_path(root.path(), Path::new(".onpeople.snapshot.patch"))
+            .expect("safe default snapshot path");
+        assert_eq!(resolved, root.path().join(".onpeople.snapshot.patch"));
+    }
+
+    #[test]
+    fn rejects_absolute_and_traversal_snapshot_paths() {
+        let root = tempfile::tempdir().expect("temporary worktree");
+        for unsafe_path in [
+            root.path().join("outside.patch"),
+            Path::new("../outside.patch").into(),
+        ] {
+            let error = safe_snapshot_path(root.path(), &unsafe_path).expect_err("unsafe path");
+            assert_eq!(error.code, ErrorCode::WorkspaceBoundary);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_snapshot_parent_and_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("temporary worktree");
+        let outside = tempfile::tempdir().expect("outside directory");
+        symlink(outside.path(), root.path().join("linked")).expect("symlink parent");
+        let parent_error = safe_snapshot_path(root.path(), Path::new("linked/output.patch"))
+            .expect_err("symlink parent must be rejected");
+        assert_eq!(parent_error.code, ErrorCode::WorkspaceBoundary);
+
+        let outside_target = outside.path().join("outside.patch");
+        std::fs::write(&outside_target, "outside").expect("outside target");
+        symlink(&outside_target, root.path().join("linked.patch")).expect("symlink target");
+        let target_error = safe_snapshot_path(root.path(), Path::new("linked.patch"))
+            .expect_err("symlink target must be rejected");
+        assert_eq!(target_error.code, ErrorCode::WorkspaceBoundary);
     }
 }
