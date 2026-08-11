@@ -171,6 +171,28 @@ export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
     return tab;
   }, []);
 
+  useEffect(
+    () =>
+      browserBridge.onAgentCommand((command) => {
+        const url = normalizeBrowserAddress(command.url);
+        setInspector(null);
+        setError(null);
+        if (activeTab.url === "about:blank") {
+          updateTab(activeTab.id, {
+            url,
+            title: url,
+            loading: true,
+            crashed: false,
+            lastActiveAt: Date.now(),
+          });
+          setActiveTabId(activeTab.id);
+          return;
+        }
+        addTab(url);
+      }),
+    [activeTab.id, activeTab.url, addTab, updateTab],
+  );
+
   useEffect(() => persistTabs(tabs), [tabs]);
 
   useEffect(() => {

@@ -25,6 +25,11 @@ declare global {
       onEvent: (
         handler: (payload: import("./browser/types").BrowserHostEvent) => void,
       ) => () => void;
+      onAgentCommand: (
+        handler: (
+          payload: import("./browser/browserBridge").BrowserAgentCommand,
+        ) => void,
+      ) => () => void;
     };
     __ONPEOPLE_DEV__?: {
       setWorkbenchState: typeof useWorkbenchStore.setState;

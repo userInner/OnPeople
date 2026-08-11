@@ -540,11 +540,11 @@ describe("Codex conversation controls", () => {
     const activityHeadline = view.container.querySelector(
       ".activity-summary > summary strong",
     );
-    expect(activityHeadline).toHaveTextContent("已运行 rg --files");
-    expect(screen.getByText("思考过程")).not.toBeVisible();
+    expect(activityHeadline).toHaveTextContent("运行了命令");
+    expect(screen.getByText("分析")).not.toBeVisible();
 
     fireEvent.click(activityHeadline!);
-    expect(screen.getByText("思考过程")).toBeVisible();
+    expect(screen.getByText("分析")).toBeVisible();
     fireEvent.click(
       view.container.querySelector(".tool-card > summary strong")!,
     );

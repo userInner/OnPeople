@@ -40,7 +40,7 @@ describe("Timeline activity status", () => {
 
     expect(
       view.container.querySelector(".activity-summary > summary strong"),
-    ).toHaveTextContent("正在运行 cua-driver status");
+    ).toHaveTextContent("正在操作内嵌浏览器");
     expect(view.container.querySelector(".activity-summary")).toHaveClass(
       "is-pending",
     );
@@ -66,10 +66,8 @@ describe("Timeline activity status", () => {
 
     expect(
       view.container.querySelector(".activity-summary > summary strong"),
-    ).toHaveTextContent("已运行 cua-driver status");
-    expect(
-      screen.queryByText("正在运行 cua-driver status"),
-    ).not.toBeInTheDocument();
+    ).toHaveTextContent("使用了内嵌浏览器");
+    expect(screen.queryByText("正在操作内嵌浏览器")).not.toBeInTheDocument();
     expect(view.container.querySelector(".activity-summary")).not.toHaveClass(
       "is-pending",
     );
@@ -94,13 +92,11 @@ describe("Timeline activity status", () => {
     const activity = view.container.querySelector(
       ".activity-summary > summary",
     );
-    expect(activity).toHaveTextContent(
-      "已运行 pwd && sleep 12 && printf ONPEOPLE_DEV_REAL_OK",
-    );
-    expect(activity).not.toHaveTextContent("已运行 /Users/test/Documents");
-    expect(activity).toHaveTextContent("退出 0");
-    expect(activity).toHaveTextContent("12s");
-    expect(activity).toHaveTextContent("2 行输出");
+    expect(activity).toHaveTextContent("运行了命令");
+    expect(activity).not.toHaveTextContent("pwd && sleep");
+    expect(activity).not.toHaveTextContent("退出 0");
+    expect(activity).not.toHaveTextContent("12s");
+    expect(activity).not.toHaveTextContent("2 行输出");
 
     fireEvent.click(activity!);
     const toolSummary = view.container.querySelector(".tool-card > summary");
@@ -131,7 +127,7 @@ describe("Timeline activity status", () => {
     expect(
       view.container.querySelector(".activity-summary"),
     ).not.toHaveAttribute("open");
-    expect(activity).toHaveTextContent("运行失败 npm run test:unit");
+    expect(activity).toHaveTextContent("命令运行失败");
     expect(activity).toHaveTextContent("退出 1");
 
     fireEvent.click(activity!);
@@ -240,9 +236,10 @@ describe("Timeline activity status", () => {
     const activity = view.container.querySelector(
       ".activity-summary > summary",
     );
-    expect(activity).toHaveTextContent("已运行 /bin/zsh -lc 'printf OK'");
-    expect(activity).toHaveTextContent("退出 0");
-    expect(activity).toHaveTextContent("1 行输出");
+    expect(activity).toHaveTextContent("运行了命令");
+    expect(activity).not.toHaveTextContent("/bin/zsh");
+    expect(activity).not.toHaveTextContent("退出 0");
+    expect(activity).not.toHaveTextContent("1 行输出");
     fireEvent.click(activity!);
     expect(view.container.querySelectorAll(".tool-card")).toHaveLength(1);
   });
@@ -303,8 +300,7 @@ describe("Timeline activity status", () => {
 
     render(<Timeline />);
 
-    expect(screen.getByText("已完成")).toBeInTheDocument();
-    expect(screen.getByText("总耗时 4s")).toBeInTheDocument();
+    expect(screen.getByText("处理了 4s")).toBeInTheDocument();
   });
 
   it("advances every second before the server assigns a turn id", () => {
@@ -335,14 +331,15 @@ describe("Timeline activity status", () => {
     });
 
     const view = render(<Timeline />);
-    expect(screen.getByText("0s")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
     expect(
-      view.container.querySelector(".turn-summary-current"),
+      view.container.querySelector(".activity-summary > summary strong"),
     ).toHaveTextContent("正在分析");
 
     act(() => vi.advanceTimersByTime(3_000));
 
-    expect(screen.getByText("3s")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 3s")).toBeInTheDocument();
   });
 
   it("starts a local timer when restored live activity has no timestamps", () => {
@@ -373,11 +370,11 @@ describe("Timeline activity status", () => {
     });
 
     render(<Timeline />);
-    expect(screen.getByText("0s")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
 
     act(() => vi.advanceTimersByTime(2_000));
 
-    expect(screen.getByText("2s")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 2s")).toBeInTheDocument();
   });
 
   it("keeps timing while the runtime is working after a command completes", () => {
@@ -423,16 +420,14 @@ describe("Timeline activity status", () => {
     });
 
     const view = render(<Timeline />);
-    expect(screen.getByText("正在处理")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
     expect(view.container.querySelector(".turn-summary")).not.toHaveTextContent(
       "已完成",
     );
-    expect(
-      view.container.querySelector(".turn-summary-current"),
-    ).toHaveTextContent("正在生成回复");
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
 
     act(() => vi.advanceTimersByTime(2_000));
-    expect(screen.getByText("2s")).toBeInTheDocument();
+    expect(screen.getByText("正在处理 2s")).toBeInTheDocument();
   });
 
   it("warns after three minutes without a live event and can keep waiting", () => {
@@ -534,8 +529,8 @@ describe("Timeline activity status", () => {
     expect(
       document.querySelectorAll(".turn-summary > span:first-child"),
     ).toHaveLength(1);
-    expect(screen.getByText("总耗时 3m 16s")).toBeInTheDocument();
-    expect(screen.queryByText("总耗时 2m 21s")).not.toBeInTheDocument();
+    expect(screen.getByText("处理了 3m 16s")).toBeInTheDocument();
+    expect(screen.queryByText("处理了 2m 21s")).not.toBeInTheDocument();
   });
 
   it("ignores a previous turn trace appended after a recovered later turn", () => {
@@ -593,8 +588,8 @@ describe("Timeline activity status", () => {
     });
 
     render(<Timeline />);
-    expect(screen.getByText("总耗时 5s")).toBeInTheDocument();
-    expect(screen.getByText("总耗时 11s")).toBeInTheDocument();
+    expect(screen.getByText("处理了 5s")).toBeInTheDocument();
+    expect(screen.getByText("处理了 11s")).toBeInTheDocument();
     expect(screen.queryByText(/1h|2h|120m/)).not.toBeInTheDocument();
   });
 
@@ -809,13 +804,114 @@ describe("Timeline activity status", () => {
     });
 
     expect(screen.getByText("网页已经创建。")).toBeVisible();
-    expect(screen.getByText("总耗时 8s")).toBeVisible();
+    expect(screen.getByText("处理了 8s")).toBeVisible();
     expect(
       view.container
         .querySelector(".activity-summary")!
         .compareDocumentPosition(screen.getByText("网页已经创建。")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("presents a verbose browser weather trace as one quiet Codex-style activity", () => {
+    const longSnapshot = Array.from(
+      { length: 1776 },
+      (_, index) => `browser node ${index + 1}`,
+    ).join("\n");
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-weather",
+      runtime: null,
+      timeline: [
+        {
+          id: "user-weather",
+          turnId: "turn-weather",
+          role: "user",
+          kind: "message",
+          text: "打开内嵌浏览器，帮我搜索今天天气。",
+        },
+        {
+          id: "reasoning-weather",
+          turnId: "turn-weather",
+          role: "assistant",
+          kind: "reasoning",
+          title: "思考过程",
+          text: "我会使用 GUI 浏览器操作技能。",
+          status: "已完成",
+        },
+        {
+          id: "prepare-weather-browser",
+          turnId: "turn-weather",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command:
+            '/bin/zsh -lc "cua-driver browser_prepare \'{\\"approval_token\\":\\"visible-secret-token\\"}\'"',
+          text: "browser ready",
+          exitCode: 0,
+          durationMs: 400,
+          status: "已完成",
+        },
+        {
+          id: "snapshot-weather-browser",
+          turnId: "turn-weather",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command: "cua-driver get_window_state --session weather-search",
+          text: longSnapshot,
+          exitCode: 0,
+          durationMs: 900,
+          status: "已完成",
+        },
+        {
+          id: "assistant-weather",
+          turnId: "turn-weather",
+          role: "assistant",
+          kind: "message",
+          text: "今天多云，气温 26–31°C。",
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: { "turn-weather": 60 },
+    });
+
+    const view = render(<Timeline />);
+    const activity = view.container.querySelector(".activity-summary")!;
+    const summary = view.container.querySelector(".turn-summary")!;
+    const finalReply = screen.getByText("今天多云，气温 26–31°C。");
+
+    expect(activity.querySelector("summary strong")).toHaveTextContent(
+      "使用了内嵌浏览器",
+    );
+    expect(activity).not.toHaveAttribute("open");
+    expect(screen.getByText("处理了 1m")).toBeVisible();
+    expect(screen.queryByText("思考过程")).not.toBeInTheDocument();
+    for (const command of screen.getAllByText(/cua-driver/)) {
+      expect(command).not.toBeVisible();
+    }
+    expect(
+      activity.compareDocumentPosition(summary) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      summary.compareDocumentPosition(finalReply) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(activity.querySelector("summary")!);
+    expect(screen.getByText("分析")).toBeVisible();
+    expect(screen.getByText("我会使用 GUI 浏览器操作技能。")).not.toBeVisible();
+    const toolSummaries = view.container.querySelectorAll(
+      ".tool-card > summary",
+    );
+    expect(toolSummaries).toHaveLength(2);
+    fireEvent.click(toolSummaries[0]!);
+    expect(screen.getByText(/approval_token.*••••••••/)).toBeVisible();
+    expect(screen.queryByText(/visible-secret-token/)).not.toBeInTheDocument();
+    fireEvent.click(toolSummaries[1]!);
+    expect(screen.getByText("输出较长，仅显示前 120 行")).toBeVisible();
+    expect(screen.queryByText("browser node 1776")).not.toBeInTheDocument();
   });
 
   it("stops following streaming output after the user scrolls upward", () => {

@@ -2,7 +2,9 @@ use std::{
     env,
     fs::File,
     io::{self, BufRead, Read as IoRead, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use base64::Engine;
@@ -24,6 +26,7 @@ enum ServerKind {
     Artifacts,
     ImageGeneration,
     ComputerUse,
+    Browser,
     ResearchSources,
 }
 
@@ -33,6 +36,7 @@ impl ServerKind {
             "artifacts" | "workspace_artifacts" => Some(Self::Artifacts),
             "image-generation" | "image_generation" => Some(Self::ImageGeneration),
             "computer-use" | "computer_use" => Some(Self::ComputerUse),
+            "browser" | "internal_browser" => Some(Self::Browser),
             "research-sources" | "research_sources" => Some(Self::ResearchSources),
             _ => None,
         }
@@ -43,6 +47,7 @@ impl ServerKind {
             Self::Artifacts => "workspace_artifacts",
             Self::ImageGeneration => "image_generation",
             Self::ComputerUse => "computer_use",
+            Self::Browser => "internal_browser",
             Self::ResearchSources => "research_sources",
         }
     }
@@ -54,7 +59,7 @@ fn main() {
         .and_then(|value| ServerKind::from_arg(&value));
     let Some(kind) = kind else {
         eprintln!(
-            "usage: onpeople-mcp-host <artifacts|image-generation|computer-use|research-sources>"
+            "usage: onpeople-mcp-host <artifacts|image-generation|computer-use|browser|research-sources>"
         );
         std::process::exit(2);
     };
@@ -292,6 +297,42 @@ fn tool_definitions(kind: ServerKind) -> Vec<Value> {
                 ]),
             ),
         ],
+        ServerKind::Browser => vec![
+            tool(
+                "browser_open",
+                "Open OnPeople's shared built-in browser and return a DOM snapshot. Prefer this for requests that explicitly ask to use the built-in or shared browser.",
+                schema(&[("urlOrQuery", "string", true)]),
+            ),
+            tool(
+                "browser_dom_snapshot",
+                "Read visible and interactive elements from the active built-in browser tab.",
+                schema(&[]),
+            ),
+            tool(
+                "browser_click",
+                "Click an element in the active built-in browser tab by CSS selector.",
+                schema(&[("selector", "string", true)]),
+            ),
+            tool(
+                "browser_type",
+                "Type into an element in the active built-in browser tab and optionally submit its form.",
+                schema(&[
+                    ("selector", "string", true),
+                    ("text", "string", true),
+                    ("submit", "boolean", false),
+                ]),
+            ),
+            tool(
+                "browser_back",
+                "Go back in the active built-in browser tab.",
+                schema(&[]),
+            ),
+            tool(
+                "browser_reload",
+                "Reload the active built-in browser tab.",
+                schema(&[]),
+            ),
+        ],
         ServerKind::ResearchSources => vec![
             tool(
                 "research_search",
@@ -333,6 +374,7 @@ fn call_tool(kind: ServerKind, name: &str, arguments: &Value) -> Result<Vec<Valu
         ServerKind::Artifacts => call_artifact(name, arguments),
         ServerKind::ImageGeneration => call_image_generation(name, arguments),
         ServerKind::ComputerUse => call_computer_use(name, arguments),
+        ServerKind::Browser => call_browser(name, arguments),
         ServerKind::ResearchSources => call_research(name, arguments),
     }
 }
@@ -1121,6 +1163,82 @@ fn call_computer_use(name: &str, args: &Value) -> Result<Vec<Value>, String> {
     )])
 }
 
+fn call_browser(name: &str, args: &Value) -> Result<Vec<Value>, String> {
+    let address = env::var("ONPEOPLE_BROWSER_AGENT_BRIDGE")
+        .map_err(|_| "OnPeople 内嵌浏览器尚未连接桌面应用".to_owned())?;
+    let token = env::var("ONPEOPLE_BROWSER_AGENT_TOKEN")
+        .map_err(|_| "OnPeople 内嵌浏览器认证信息缺失".to_owned())?;
+    let (command, payload) = match name {
+        "browser_open" => (
+            "open",
+            json!({
+                "urlOrQuery": args
+                    .get("urlOrQuery")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "urlOrQuery is required".to_owned())?
+            }),
+        ),
+        "browser_dom_snapshot" => ("dom_snapshot", json!({})),
+        "browser_click" => (
+            "click",
+            json!({
+                "selector": args
+                    .get("selector")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "selector is required".to_owned())?
+            }),
+        ),
+        "browser_type" => (
+            "type",
+            json!({
+                "selector": args
+                    .get("selector")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "selector is required".to_owned())?,
+                "text": args
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "text is required".to_owned())?,
+                "submit": args.get("submit").and_then(Value::as_bool).unwrap_or(false),
+            }),
+        ),
+        "browser_back" => ("back", json!({})),
+        "browser_reload" => ("reload", json!({})),
+        _ => return Err(format!("unknown browser tool: {name}")),
+    };
+    let mut stream = TcpStream::connect(&address)
+        .map_err(|error| format!("无法连接 OnPeople 内嵌浏览器: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(
+        &mut stream,
+        &json!({ "token": token, "command": command, "payload": payload }),
+    )
+    .map_err(|error| error.to_string())?;
+    stream.write_all(b"\n").map_err(|error| error.to_string())?;
+    stream.flush().map_err(|error| error.to_string())?;
+    let mut response = String::new();
+    io::BufReader::new(stream)
+        .read_line(&mut response)
+        .map_err(|error| error.to_string())?;
+    let response: Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("内嵌浏览器操作失败")
+            .to_owned());
+    }
+    let result = response.get("result").cloned().unwrap_or(Value::Null);
+    Ok(vec![text_content(
+        serde_json::to_string(&result).map_err(|error| error.to_string())?,
+    )])
+}
+
 fn call_research(name: &str, args: &Value) -> Result<Vec<Value>, String> {
     match name {
         "research_source_status" => Ok(vec![text_content(
@@ -1413,6 +1531,27 @@ mod tests {
                 "missing {required}"
             );
         }
+    }
+
+    #[test]
+    fn browser_tools_expose_the_shared_onpeople_browser_surface() {
+        let names = tool_definitions(ServerKind::Browser)
+            .into_iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "browser_open",
+                "browser_dom_snapshot",
+                "browser_click",
+                "browser_type",
+                "browser_back",
+                "browser_reload",
+            ]
+        );
+        assert_eq!(ServerKind::from_arg("browser"), Some(ServerKind::Browser));
+        assert_eq!(ServerKind::Browser.server_name(), "internal_browser");
     }
 
     #[test]

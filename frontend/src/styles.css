@@ -4341,18 +4341,18 @@ body.account-auth-open > #root {
 .turn-summary {
   display: flex;
   width: 100%;
-  gap: 6px;
+  gap: 0;
   align-items: center;
   margin: 0 0 var(--conversation-item-gap);
   padding: 0 0 9px;
   border-bottom: 1px solid var(--line);
-  color: var(--conversation-text-secondary);
-  font-size: 14px;
-  font-weight: 500;
+  color: var(--conversation-text-tertiary);
+  font-size: 13px;
+  font-weight: 520;
+  letter-spacing: -0.004em;
 }
 
-.turn-summary time {
-  color: var(--ink-faint);
+.turn-summary span {
   font-variant-numeric: tabular-nums;
 }
 
@@ -4486,6 +4486,12 @@ body.account-auth-open > #root {
   line-height: 23px;
 }
 
+.reasoning-summary-copy {
+  max-height: 156px;
+  overflow: auto;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
 .tool-card {
   margin: 0;
 }
@@ -4572,16 +4578,36 @@ body.account-auth-open > #root {
   list-style: none;
 }
 
+.activity-state {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--conversation-text-tertiary);
+  background: var(--surface);
+}
+
+.activity-summary.is-pending .activity-state {
+  border-color: color-mix(in srgb, var(--ink-faint) 55%, var(--line));
+  color: var(--ink-soft);
+}
+
+.activity-summary.is-failed .activity-state {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  color: var(--danger);
+}
+
 .activity-summary summary::-webkit-details-marker {
   display: none;
 }
 
-.activity-summary summary > svg:first-child {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  color: var(--conversation-text-tertiary);
-  stroke-width: 1.8;
+.activity-state svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2;
 }
 
 .activity-summary summary strong {
@@ -4593,20 +4619,54 @@ body.account-auth-open > #root {
   letter-spacing: -0.006em;
 }
 
+.activity-summary summary::after {
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-right: 1.5px solid var(--conversation-text-tertiary);
+  border-bottom: 1.5px solid var(--conversation-text-tertiary);
+  content: "";
+  opacity: 0;
+  transform: rotate(45deg) translateY(-2px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+
+.activity-summary summary:hover::after,
+.activity-summary summary:focus-visible::after,
+.activity-summary[open] summary::after {
+  opacity: 1;
+}
+
+.activity-summary[open] summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
 .activity-summary summary:hover strong {
   color: var(--ink-soft);
 }
 
-.activity-summary.is-pending summary > svg:first-child {
+.activity-summary.is-pending .activity-state svg {
   animation: spin 0.9s linear infinite;
+}
+
+.activity-facts {
+  display: inline-flex;
+  min-width: 0;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--conversation-text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .activity-summary-body {
   display: flex;
   flex-direction: column;
   gap: var(--conversation-grouped-item-gap);
-  margin: 4px 0 0 22px;
-  padding-left: 12px;
+  margin: 5px 0 1px 8px;
+  padding: 1px 0 2px 21px;
   border-left: 1px solid var(--line);
 }
 
@@ -4630,6 +4690,82 @@ body.account-auth-open > #root {
 
 .activity-summary-body .tool-card-copy strong {
   opacity: 1;
+}
+
+.command-receipt {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.command-receipt-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.command-receipt-facts span {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--conversation-text-tertiary);
+  background: var(--surface-soft);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.command-receipt-section {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.command-receipt-section > span,
+.command-receipt-cwd > span {
+  color: var(--conversation-text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.command-receipt pre,
+.command-receipt-command {
+  max-height: 320px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--conversation-text-secondary);
+  background: color-mix(in srgb, var(--surface-soft) 68%, transparent);
+  font:
+    12px/1.55 "SFMono-Regular",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.command-receipt-cwd {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.command-receipt-cwd code {
+  overflow: hidden;
+  color: var(--conversation-text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-receipt-empty,
+.command-output-truncated {
+  color: var(--conversation-text-tertiary);
+  font-size: 11px;
 }
 
 /* The project navigator is the permanent Codex-style rail. Opening a

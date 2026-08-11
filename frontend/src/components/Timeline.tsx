@@ -261,27 +261,20 @@ export function Timeline() {
     <section className="timeline" aria-label="任务执行流">
       {groupTimelineItems(displayTimeline).map((block, index, blocks) => {
         const item = block.items[0];
-        const previous = blocks[index - 1]?.items.at(-1);
-        const showTurnSummary =
-          item.role !== "user" &&
-          (previous?.role === "user" || (index === 0 && Boolean(item.turnId)));
-        const turnSummary = showTurnSummary
-          ? summarizeConversationTurn(
-              blocks,
-              index,
-              turnStartedAt,
-              turnDurations,
-              now,
-              runtimeWorking,
-            )
-          : null;
+        const turnSummary = conversationTurnSummaryAt(
+          blocks,
+          index,
+          turnStartedAt,
+          turnDurations,
+          now,
+          runtimeWorking,
+        );
         return (
           <div className="timeline-block" key={block.id}>
             {turnSummary ? (
               <TurnSummary
                 elapsedSeconds={turnSummary.elapsedSeconds}
                 running={turnSummary.running}
-                currentStep={turnSummary.currentStep}
                 now={now}
               />
             ) : null}
@@ -678,12 +671,10 @@ function deliveryLabel(item: TimelineItem) {
 function TurnSummary({
   elapsedSeconds,
   running,
-  currentStep,
   now,
 }: {
   elapsedSeconds: number | undefined;
   running: boolean;
-  currentStep?: string | undefined;
   now: number;
 }) {
   const [observedAt] = useState(now);
@@ -697,27 +688,78 @@ function TurnSummary({
         displayedElapsed !== undefined
           ? running
             ? `正在处理 ${formatDuration(displayedElapsed)}`
-            : `已完成，总耗时 ${formatDuration(displayedElapsed)}`
+            : `处理了 ${formatDuration(displayedElapsed)}`
           : running
             ? "正在处理"
-            : "已完成"
+            : "处理完成"
       }
     >
-      <span>{running ? "正在处理" : "已完成"}</span>
-      {displayedElapsed !== undefined ? (
-        <time>
-          {running
-            ? formatDuration(displayedElapsed)
-            : `总耗时 ${formatDuration(displayedElapsed)}`}
-        </time>
-      ) : null}
-      {running && currentStep ? (
-        <span className="turn-summary-current" title={currentStep}>
-          {currentStep}
-        </span>
-      ) : null}
+      <span>
+        {running
+          ? displayedElapsed !== undefined
+            ? `正在处理 ${formatDuration(displayedElapsed)}`
+            : "正在处理"
+          : displayedElapsed !== undefined
+            ? `处理了 ${formatDuration(displayedElapsed)}`
+            : "处理完成"}
+      </span>
     </div>
   );
+}
+
+function conversationTurnSummaryAt(
+  blocks: TimelineBlock[],
+  index: number,
+  turnStartedAt: Record<string, string>,
+  turnDurations: Record<string, number>,
+  now: number,
+  runtimeWorking: boolean,
+) {
+  const item = blocks[index]?.items[0];
+  if (!item || item.role === "user") return null;
+
+  let startIndex = index;
+  while (
+    startIndex > 0 &&
+    blocks[startIndex - 1]?.items.at(-1)?.role !== "user"
+  ) {
+    startIndex -= 1;
+  }
+  const previous = blocks[startIndex - 1]?.items.at(-1);
+  if (
+    previous?.role !== "user" &&
+    startIndex !== 0 &&
+    !blocks[startIndex]?.items[0]?.turnId
+  ) {
+    return null;
+  }
+
+  let endIndex = startIndex;
+  while (
+    endIndex + 1 < blocks.length &&
+    blocks[endIndex + 1]?.items[0]?.role !== "user"
+  ) {
+    endIndex += 1;
+  }
+  const summary = summarizeConversationTurn(
+    blocks,
+    startIndex,
+    turnStartedAt,
+    turnDurations,
+    now,
+    runtimeWorking,
+  );
+  let placement = startIndex;
+  if (!summary.running) {
+    for (let candidate = endIndex; candidate >= startIndex; candidate -= 1) {
+      const row = blocks[candidate]?.items[0];
+      if (row?.role === "assistant" && row.kind === "message") {
+        placement = candidate;
+        break;
+      }
+    }
+  }
+  return index === placement ? summary : null;
 }
 
 function summarizeConversationTurn(
@@ -832,7 +874,7 @@ function ActivitySummary({ items }: { items: TimelineItem[] }) {
   const [open, setOpen] = useState(false);
   const primary = primaryActivityItem(items);
   const headline = activityHeadline(items, pending);
-  const facts = primary ? activityFacts(primary, pending) : [];
+  const facts = primary ? digestFacts(primary, pending) : [];
 
   return (
     <details
@@ -862,7 +904,7 @@ function ActivitySummary({ items }: { items: TimelineItem[] }) {
       <div className="activity-summary-body">
         {items.map((item) =>
           item.kind === "reasoning" ? (
-            <ReasoningCard key={item.id} item={item} compact />
+            <ReasoningCard key={item.id} item={item} />
           ) : (
             <TimelineEntry key={item.id} item={item} />
           ),
@@ -872,10 +914,70 @@ function ActivitySummary({ items }: { items: TimelineItem[] }) {
   );
 }
 
+function digestFacts(item: TimelineItem, pending: boolean): string[] {
+  if (pending || item.kind !== "command" || !hasFailed(item)) return [];
+  return item.exitCode === undefined ? [] : [`退出 ${item.exitCode}`];
+}
+
 function activityHeadline(items: TimelineItem[], pending: boolean): string {
-  const primary = primaryActivityItem(items);
-  if (!primary) return pending ? "正在处理" : "已完成";
-  return activityItemHeadline(primary, pending && isActivelyPending(primary));
+  if (pending) {
+    const active = [...items].reverse().find(isActivelyPending);
+    if (active) return activityItemHeadline(active, true);
+  }
+  return completedActivityHeadline(items);
+}
+
+type ActivityCategory =
+  | "browser"
+  | "web-search"
+  | "file-change"
+  | "command"
+  | "tool"
+  | "reasoning";
+
+function completedActivityHeadline(items: TimelineItem[]): string {
+  if (items.some(hasFailed)) {
+    const failed = [...items].reverse().find(hasFailed);
+    return failed ? activityItemHeadline(failed, false) : "操作失败";
+  }
+  const categories = new Set(items.map(activityCategory));
+  if (categories.size > 1) categories.delete("reasoning");
+  const labels: Record<ActivityCategory, string> = {
+    browser: "使用了内嵌浏览器",
+    "web-search": "搜索了网页",
+    "file-change": "修改了文件",
+    command: "运行了命令",
+    tool: "使用了工具",
+    reasoning: "已分析",
+  };
+  const ordered: ActivityCategory[] = [
+    "browser",
+    "web-search",
+    "file-change",
+    "command",
+    "tool",
+    "reasoning",
+  ];
+  const parts = ordered
+    .filter((category) => categories.has(category))
+    .map((category) => labels[category]);
+  if (parts.length === 0) return "已完成操作";
+  if (parts.length === 1) return parts[0]!;
+  return `${parts.slice(0, -1).join("、")}并${parts.at(-1)}`;
+}
+
+function activityCategory(item: TimelineItem): ActivityCategory {
+  if (item.kind === "reasoning") return "reasoning";
+  if (item.kind === "file-change") return "file-change";
+  if (item.kind === "command") {
+    return browserCommandKind(rawCommandText(item)) ? "browser" : "command";
+  }
+  const identity = `${item.title ?? ""} ${item.meta ?? ""}`.toLowerCase();
+  if (/browser|computer[-_ ]?use|浏览器|电脑操控/.test(identity)) {
+    return "browser";
+  }
+  if (/web.?search|搜索网页|检索网页/.test(identity)) return "web-search";
+  return "tool";
 }
 
 function primaryActivityItem(items: TimelineItem[]): TimelineItem | undefined {
@@ -895,20 +997,96 @@ function primaryActivityItem(items: TimelineItem[]): TimelineItem | undefined {
 function activityItemHeadline(item: TimelineItem, pending: boolean): string {
   const failed = hasFailed(item);
   if (item.kind === "command") {
-    const command = commandText(item);
-    const verb = failed ? "运行失败" : pending ? "正在运行" : "已运行";
-    return command ? `${verb} ${command}` : `${verb}命令`;
+    return commandActivityHeadline(rawCommandText(item), pending, failed);
   }
   if (item.kind === "file-change") {
     const verb = failed ? "修改失败" : pending ? "正在修改" : "已修改";
     const files = item.stats?.files;
     return files ? `${verb} ${files} 个文件` : `${verb}文件`;
   }
-  if (item.kind === "reasoning") return pending ? "正在分析" : "已完成分析";
+  if (item.kind === "reasoning") return pending ? "正在分析" : "已分析";
 
+  const identity = `${item.title ?? ""} ${item.meta ?? ""}`.toLowerCase();
+  if (/browser_open/.test(identity)) {
+    if (failed) return "内嵌浏览器打开失败";
+    return pending ? "正在打开内嵌浏览器" : "已打开内嵌浏览器";
+  }
+  if (/browser_dom_snapshot/.test(identity)) {
+    if (failed) return "浏览器页面读取失败";
+    return pending ? "正在读取浏览器页面" : "已读取浏览器页面";
+  }
+  if (/browser_(?:click|type|back|reload)/.test(identity)) {
+    if (failed) return "内嵌浏览器操作失败";
+    return pending ? "正在操作内嵌浏览器" : "已操作内嵌浏览器";
+  }
+  if (/internal_browser/.test(identity)) {
+    if (failed) return "内嵌浏览器操作失败";
+    return pending ? "正在使用内嵌浏览器" : "已使用内嵌浏览器";
+  }
+  if (/web.?search|搜索网页/.test(identity)) {
+    if (failed) return "网页搜索失败";
+    return pending ? "正在搜索网页" : "已搜索网页";
+  }
   const title = compactActivityText(item.title ?? item.meta ?? "");
   if (title) return normalizeActivityTitle(title, pending, failed);
   return failed ? "工具执行失败" : pending ? "正在使用工具" : "已使用工具";
+}
+
+type BrowserCommandKind = "open" | "inspect" | "interact" | null;
+
+function browserCommandKind(command: string): BrowserCommandKind {
+  const normalized = command.toLowerCase();
+  if (!/(cua-driver|computer[-_ ]?use|browser[_ -])/.test(normalized)) {
+    return null;
+  }
+  if (/browser_prepare|start_session|open_browser|navigate/.test(normalized)) {
+    return "open";
+  }
+  if (
+    /get_window_state|get_accessibility_tree|visual_snapshot|screenshot|inspect/.test(
+      normalized,
+    )
+  ) {
+    return "inspect";
+  }
+  return "interact";
+}
+
+function commandActivityHeadline(
+  command: string,
+  pending: boolean,
+  failed: boolean,
+): string {
+  const browserKind = browserCommandKind(command);
+  if (browserKind) {
+    if (failed) return "内嵌浏览器操作失败";
+    if (browserKind === "open") {
+      return pending ? "正在打开内嵌浏览器" : "已打开内嵌浏览器";
+    }
+    if (browserKind === "inspect") {
+      return pending ? "正在读取浏览器画面" : "已读取浏览器画面";
+    }
+    return pending ? "正在操作内嵌浏览器" : "已操作内嵌浏览器";
+  }
+  const normalized = canonicalCommand(command).toLowerCase();
+  if (failed) return "命令运行失败";
+  if (
+    /\b(?:npm|pnpm|yarn|cargo)\s+(?:test|check|clippy)\b|\bpytest\b/.test(
+      normalized,
+    )
+  ) {
+    return pending ? "正在运行检查" : "已运行检查";
+  }
+  if (/\b(?:npm|pnpm|yarn|cargo)\s+(?:run\s+)?build\b/.test(normalized)) {
+    return pending ? "正在构建项目" : "已构建项目";
+  }
+  if (/\brg\b|\bgrep\b|\bfind\b/.test(normalized)) {
+    return pending ? "正在搜索文件" : "已搜索文件";
+  }
+  if (/\bgit\s+(?:status|diff|log|show)\b/.test(normalized)) {
+    return pending ? "正在检查代码改动" : "已检查代码改动";
+  }
+  return pending ? "正在运行命令" : "已运行命令";
 }
 
 function normalizeActivityTitle(
@@ -936,6 +1114,10 @@ function compactActivityText(value: string, limit = 72): string {
 }
 
 function commandText(item: TimelineItem): string {
+  return sanitizeToolText(canonicalCommand(rawCommandText(item)));
+}
+
+function rawCommandText(item: TimelineItem): string {
   const legacyCommand =
     item.meta && /\s/.test(item.meta.trim()) ? item.meta : undefined;
   return singleLineActivityText(item.command ?? legacyCommand ?? item.text);
@@ -956,7 +1138,36 @@ function commandOutput(item: TimelineItem): string {
   if (!output) return "";
   if (!item.command && !(item.meta && /\s/.test(item.meta.trim()))) return "";
   const command = item.command?.trim();
-  return command && output === command ? "" : output;
+  return command && output === command ? "" : sanitizeToolText(output);
+}
+
+const TOOL_OUTPUT_CHARACTER_LIMIT = 12_000;
+const TOOL_OUTPUT_LINE_LIMIT = 120;
+
+function visibleCommandOutput(output: string): {
+  text: string;
+  truncated: boolean;
+} {
+  const lines = output.split("\n");
+  const clippedLines = lines.slice(0, TOOL_OUTPUT_LINE_LIMIT).join("\n");
+  const characters = Array.from(clippedLines);
+  const text = characters.slice(0, TOOL_OUTPUT_CHARACTER_LIMIT).join("");
+  return {
+    text,
+    truncated:
+      lines.length > TOOL_OUTPUT_LINE_LIMIT ||
+      characters.length > TOOL_OUTPUT_CHARACTER_LIMIT,
+  };
+}
+
+function sanitizeToolText(value: string): string {
+  return value
+    .replace(
+      /((?:approval[_-]?token|api[_-]?key|authorization|password|passwd|secret)(?:\\+)?["']?\s*[=:]\s*(?:\\+)?["']?)[^\s"'\\}]+/giu,
+      "$1••••••••",
+    )
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "sk-••••••••")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer ••••••••");
 }
 
 function outputLineCount(output: string): number {
@@ -995,20 +1206,13 @@ function currentTurnStep(items: TimelineItem[]): string {
   return "正在生成回复";
 }
 
-function ReasoningCard({
-  item,
-  compact = false,
-}: {
-  item: TimelineItem;
-  compact?: boolean;
-}) {
+function ReasoningCard({ item }: { item: TimelineItem }) {
   const pending = isActivelyPending(item);
-  const [open, setOpen] = useState(compact ? false : pending);
-  const effectiveOpen = compact ? open : pending || open;
+  const [open, setOpen] = useState(false);
   return (
     <details
       className="reasoning-row"
-      open={effectiveOpen}
+      open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
@@ -1017,9 +1221,13 @@ function ReasoningCard({
         ) : (
           <Sparkles size={14} />
         )}
-        <span>{displayTimelineTitle(item, pending)}</span>
+        <span>{pending ? "正在分析" : "分析"}</span>
       </summary>
-      {item.text ? <MarkdownMessage text={item.text} /> : null}
+      {item.text ? (
+        <div className="reasoning-summary-copy">
+          <MarkdownMessage text={item.text} />
+        </div>
+      ) : null}
     </details>
   );
 }
@@ -1229,6 +1437,7 @@ function ToolCard({
 function CommandReceipt({ item }: { item: TimelineItem }) {
   const command = commandText(item);
   const output = commandOutput(item);
+  const visibleOutput = visibleCommandOutput(output);
   const pending = isActivelyPending(item);
   const failed = hasFailed(item);
   const facts = activityFacts(item, pending);
@@ -1276,7 +1485,12 @@ function CommandReceipt({ item }: { item: TimelineItem }) {
       {output ? (
         <div className="command-receipt-section">
           <span>输出</span>
-          <pre>{output}</pre>
+          <pre>{visibleOutput.text}</pre>
+          {visibleOutput.truncated ? (
+            <small className="command-output-truncated">
+              输出较长，仅显示前 {TOOL_OUTPUT_LINE_LIMIT} 行
+            </small>
+          ) : null}
         </div>
       ) : !pending ? (
         <div className="command-receipt-empty">无输出</div>
@@ -1462,9 +1676,9 @@ function displayTimelineTitle(item: TimelineItem, pending: boolean): string {
   if (item.kind === "command" || item.kind === "file-change") {
     return activityItemHeadline(item, pending);
   }
-  const title = item.title ?? (item.kind === "reasoning" ? "思考过程" : "工具");
+  const title = item.title ?? (item.kind === "reasoning" ? "分析" : "工具");
   if (pending || !title.startsWith("正在")) return title;
-  if (item.kind === "reasoning") return "思考过程";
+  if (item.kind === "reasoning") return "分析";
   return `已${title.slice(2)}`;
 }
 

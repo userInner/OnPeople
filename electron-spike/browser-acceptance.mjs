@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -66,7 +67,21 @@ try {
   const idleMetrics = await page.evaluate(() =>
     window.onpeopleElectron.metrics(),
   );
-  await page.getByRole("button", { name: "站点", exact: true }).click();
+  const agentBridge = await electronApp.evaluate(
+    () => ({
+      address: process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE,
+      token: process.env.ONPEOPLE_BROWSER_AGENT_TOKEN,
+    }),
+  );
+  assert(agentBridge.address, "browser agent bridge address was not published");
+  assert(agentBridge.token, "browser agent bridge token was not published");
+  const agentSnapshot = await mcpBrowserCall(
+    agentBridge.address,
+    agentBridge.token,
+    "browser_open",
+    { urlOrQuery: fixtureUrl },
+  );
+  assert.equal(agentSnapshot.title, "OnPeople Browser Test");
   try {
     await page.getByLabel("地址和搜索").waitFor({ timeout: 5_000 });
   } catch (error) {
@@ -78,7 +93,6 @@ try {
     });
     throw error;
   }
-  await navigate(page, fixtureUrl);
 
   const initialMetrics = await page.evaluate(() =>
     window.onpeopleElectron.metrics(),
@@ -229,6 +243,57 @@ async function navigate(page, url) {
     );
     throw error;
   }
+}
+
+async function mcpBrowserCall(address, token, name, argumentsValue = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      path.join(repositoryRoot, "target", "debug", "onpeople-mcp-host"),
+      ["browser"],
+      {
+        env: {
+          ...process.env,
+          ONPEOPLE_BROWSER_AGENT_BRIDGE: address,
+          ONPEOPLE_BROWSER_AGENT_TOKEN: token,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("browser MCP call timed out"));
+    }, 15_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      try {
+        assert.equal(code, 0, stderr);
+        const envelope = JSON.parse(stdout.trim());
+        assert.equal(envelope.result?.isError, false, stdout);
+        resolve(JSON.parse(envelope.result.content[0].text));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.stdin.end(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name, arguments: argumentsValue },
+      })}\n`,
+    );
+  });
 }
 
 async function browserInvoke(page, command, payload = {}) {

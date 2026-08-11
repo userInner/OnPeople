@@ -1,5 +1,13 @@
 import type { BrowserHostEvent } from "./types";
 
+export interface BrowserAgentCommand {
+  kind: "open";
+  url: string;
+}
+
+const pendingAgentCommands: BrowserAgentCommand[] = [];
+const agentCommandListeners = new Set<(command: BrowserAgentCommand) => void>();
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 function unavailable(): Error {
@@ -45,6 +53,27 @@ export const browserBridge = {
 
   onEvent(handler: (event: BrowserHostEvent) => void): () => void {
     return window.onpeopleBrowser?.onEvent(handler) ?? (() => undefined);
+  },
+
+  receiveAgentCommands(
+    handler: (command: BrowserAgentCommand) => void,
+  ): () => void {
+    return (
+      window.onpeopleBrowser?.onAgentCommand((payload) => {
+        const command = payload as BrowserAgentCommand;
+        if (command.kind !== "open" || typeof command.url !== "string") return;
+        if (agentCommandListeners.size === 0)
+          pendingAgentCommands.push(command);
+        for (const listener of agentCommandListeners) listener(command);
+        handler(command);
+      }) ?? (() => undefined)
+    );
+  },
+
+  onAgentCommand(handler: (command: BrowserAgentCommand) => void): () => void {
+    agentCommandListeners.add(handler);
+    for (const command of pendingAgentCommands.splice(0)) handler(command);
+    return () => agentCommandListeners.delete(handler);
   },
 };
 

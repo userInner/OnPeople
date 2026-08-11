@@ -6,7 +6,14 @@ import { promisify } from "node:util";
 
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 
-import { ElectronBrowserHost } from "./browser-host.mjs";
+import {
+  ElectronBrowserHost,
+  normalizeBrowserAddress,
+} from "./browser-host.mjs";
+import {
+  BrowserAgentBridge,
+  waitForBrowserPage,
+} from "./browser-agent-bridge.mjs";
 import { RustBridge } from "./rust-bridge.mjs";
 import { ElectronShellAdapter } from "./shell-adapter.mjs";
 
@@ -28,6 +35,8 @@ let rendererReadyMs = null;
 let mainWindow = null;
 let browserHost = null;
 let windowCrashCount = 0;
+let browserAgentRendererReady = false;
+const pendingBrowserAgentCommands = [];
 
 const elapsedMs = () =>
   Number(process.hrtime.bigint() - processStartedAt) / 1_000_000;
@@ -83,6 +92,51 @@ async function bootstrap() {
         : "internal-agent-workbench-dev",
     );
   await mkdir(dataRoot, { recursive: true });
+  const emit = (event, payload) => {
+    if (!mainWindow?.isDestroyed()) {
+      mainWindow.webContents.send(`onpeople:event:${event}`, payload);
+    }
+  };
+  const deliverBrowserAgentCommand = (command) => {
+    if (!browserAgentRendererReady || !mainWindow || mainWindow.isDestroyed()) {
+      pendingBrowserAgentCommands.push(command);
+      if (pendingBrowserAgentCommands.length > 16) {
+        pendingBrowserAgentCommands.shift();
+      }
+      return;
+    }
+    emit("browser:agent-command", command);
+  };
+  const browserAgentBridge = new BrowserAgentBridge({
+    handler: async (request) => {
+      if (!browserHost) throw new Error("内嵌浏览器尚未就绪");
+      const command = String(request?.command ?? "");
+      const payload = request?.payload ?? {};
+      if (command === "open") {
+        const url = normalizeBrowserAddress(payload.urlOrQuery ?? payload.url);
+        deliverBrowserAgentCommand({ kind: "open", url });
+        const page = await waitForBrowserPage(browserHost, url);
+        return browserHost.handle("dom-snapshot", { tabId: page.tabId });
+      }
+      const state = browserHost.state();
+      const tabId = String(payload.tabId ?? state.activeTabId ?? "");
+      if (!tabId) throw new Error("请先打开一个内嵌浏览器页面");
+      const mapped = {
+        state: "state",
+        dom_snapshot: "dom-snapshot",
+        click: "agent-click",
+        type: "agent-type",
+        back: "back",
+        reload: "reload",
+      }[command];
+      if (!mapped) throw new Error(`不支持的 Agent 浏览器操作: ${command}`);
+      return browserHost.handle(mapped, { tabId, ...payload });
+    },
+  });
+  process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE =
+    await browserAgentBridge.start();
+  process.env.ONPEOPLE_BROWSER_AGENT_TOKEN = browserAgentBridge.token;
+
   const rustBridge = new RustBridge({
     binary: hostBinary,
     dataRoot,
@@ -92,12 +146,6 @@ async function bootstrap() {
     socketPath: path.join(app.getPath("userData"), "desktop-api.sock"),
   });
   await rustBridge.start();
-
-  const emit = (event, payload) => {
-    if (!mainWindow?.isDestroyed()) {
-      mainWindow.webContents.send(`onpeople:event:${event}`, payload);
-    }
-  };
   rustBridge.onEvent((event) => emit("desktop:event", event));
 
   let shellAdapter = null;
@@ -138,6 +186,9 @@ async function bootstrap() {
       windowCrashCount += 1;
       if (details.reason !== "clean-exit") window.webContents.reload();
     });
+    window.webContents.on("did-start-loading", () => {
+      if (mainWindow === window) browserAgentRendererReady = false;
+    });
     window.once("ready-to-show", () => window.show());
     if (process.env.ONPEOPLE_VITE_URL) {
       void window.loadURL(process.env.ONPEOPLE_VITE_URL);
@@ -148,6 +199,7 @@ async function bootstrap() {
   };
 
   const attachDesktopWindow = () => {
+    browserAgentRendererReady = false;
     mainWindow = createWindow();
     browserHost?.close();
     browserHost = new ElectronBrowserHost({
@@ -190,6 +242,13 @@ async function bootstrap() {
   };
 
   ipcMain.handle("onpeople:metrics", () => metrics(rustBridge));
+  ipcMain.on("onpeople:browser-agent-ready", (event) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    browserAgentRendererReady = true;
+    for (const command of pendingBrowserAgentCommands.splice(0)) {
+      emit("browser:agent-command", command);
+    }
+  });
   ipcMain.handle("onpeople:browser", async (_event, command, payload = {}) => {
     if (!browserHost) throw new Error("浏览器服务尚未就绪");
     return browserHost.handle(command, payload);
@@ -207,6 +266,7 @@ async function bootstrap() {
   });
   app.on("before-quit", () => {
     browserHost?.close();
+    browserAgentBridge.close();
     rustBridge.stop();
   });
   app.on("window-all-closed", () => {

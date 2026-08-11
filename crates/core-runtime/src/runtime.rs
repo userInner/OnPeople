@@ -68,6 +68,8 @@ const EVENT_HISTORY_METHOD_CHAR_LIMIT: usize = 256;
 const CONNECTOR_OAUTH_REDIRECT_URI: &str = "onpeople://oauth/callback";
 const CONNECTOR_OAUTH_TTL_SECONDS: i64 = 10 * 60;
 const DEFAULT_ONPEOPLE_MODEL_ID: &str = "gpt-5.6-luna";
+const DEFAULT_TASK_DEVELOPER_INSTRUCTIONS: &str = r"When the user explicitly asks to open, use, or operate OnPeople's built-in or shared browser, use the internal_browser tools. Do not substitute native computer-use, cua-driver, or an external browser for that request.
+Keep progress updates concise and user-facing. Describe the action and outcome, not hidden reasoning, raw tool arguments, approval tokens, transport details, or internal command wrappers.";
 const DEFAULT_LIVE_AGENT_INSTRUCTIONS: &str = r"You are OnPeople Live, the realtime voice coordinator for the OnPeople agent workbench.
 Reply naturally and concisely in the user's language.
 For requests that need current information, web access, files, code, computer use, or other tools, create a client delegation before saying that work has started.
@@ -629,8 +631,12 @@ impl CoreRuntime {
 
     pub fn configure_builtin_mcp(&self) -> Result<(), AppError> {
         let host_binary = self.runtime_paths.mcp_host()?.path;
-        self.app_server
-            .configure_builtin_mcp(BuiltinMcpConfig { host_binary });
+        let browser_available = std::env::var_os("ONPEOPLE_BROWSER_AGENT_BRIDGE").is_some()
+            && std::env::var_os("ONPEOPLE_BROWSER_AGENT_TOKEN").is_some();
+        self.app_server.configure_builtin_mcp(BuiltinMcpConfig {
+            host_binary,
+            browser_available,
+        });
         Ok(())
     }
 
@@ -1955,10 +1961,16 @@ impl CoreRuntime {
             updated_at: now,
         };
         self.storage.upsert_thread(&thread)?;
-        let mut developer_instructions = task_capability_instructions(
+        let mut developer_instructions = Some(DEFAULT_TASK_DEVELOPER_INSTRUCTIONS.to_owned());
+        if let Some(capability_instructions) = task_capability_instructions(
             request.capability.as_deref(),
             request.industry_plugin.as_deref(),
-        );
+        ) {
+            developer_instructions = Some(format!(
+                "{}\n\n{capability_instructions}",
+                developer_instructions.as_deref().unwrap_or_default()
+            ));
+        }
         if let Some(plugin_id) = request
             .industry_plugin
             .as_deref()

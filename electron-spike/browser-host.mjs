@@ -238,6 +238,15 @@ export class ElectronBrowserHost {
         return this.#stop(payload.tabId);
       case "dom-snapshot":
         return this.#domSnapshot(payload.tabId);
+      case "agent-click":
+        return this.#agentClick(payload.tabId, payload.selector);
+      case "agent-type":
+        return this.#agentType(
+          payload.tabId,
+          payload.selector,
+          payload.text,
+          payload.submit,
+        );
       case "visual-snapshot":
         return this.#visualSnapshot(payload.tabId);
       case "copy-visual-snapshot":
@@ -481,6 +490,60 @@ export class ElectronBrowserHost {
     } catch {
       return guest.executeJavaScript(DOM_SNAPSHOT_SCRIPT, true);
     }
+  }
+
+  async #agentClick(tabId, selector) {
+    const guest = this.#guest(tabId);
+    const safeSelector = String(selector ?? "").trim();
+    if (!safeSelector || safeSelector.length > 2_000) {
+      throw new Error("浏览器点击缺少有效 selector");
+    }
+    return guest.executeJavaScript(
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(safeSelector)});
+        if (!(element instanceof HTMLElement)) throw new Error("未找到可点击元素");
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.click();
+        return { clicked: true, tag: element.tagName.toLowerCase(), text: (element.innerText || element.getAttribute("aria-label") || "").trim().slice(0, 300) };
+      })()`,
+      true,
+    );
+  }
+
+  async #agentType(tabId, selector, text, submit = false) {
+    const guest = this.#guest(tabId);
+    const safeSelector = String(selector ?? "").trim();
+    const value = String(text ?? "");
+    if (!safeSelector || safeSelector.length > 2_000) {
+      throw new Error("浏览器输入缺少有效 selector");
+    }
+    if (value.length > 100_000) throw new Error("浏览器输入内容过长");
+    return guest.executeJavaScript(
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(safeSelector)});
+        if (!(element instanceof HTMLElement)) throw new Error("未找到可输入元素");
+        element.focus();
+        const value = ${JSON.stringify(value)};
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+          const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+          if (setter) setter.call(element, value); else element.value = value;
+        } else if (element.isContentEditable) {
+          element.textContent = value;
+        } else {
+          throw new Error("目标元素不可输入");
+        }
+        element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        if (${Boolean(submit)}) {
+          const form = element.closest("form");
+          if (form instanceof HTMLFormElement) form.requestSubmit();
+          else element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+        }
+        return { typed: true, submitted: ${Boolean(submit)}, tag: element.tagName.toLowerCase() };
+      })()`,
+      true,
+    );
   }
 
   async #visualSnapshot(tabId) {

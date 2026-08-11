@@ -37,6 +37,7 @@ import { SubagentPanel } from "./components/SubagentPanel";
 import { Timeline } from "./components/Timeline";
 import { TerminalPane } from "./components/tools/TerminalPane";
 import { UtilityPane } from "./components/UtilityPane";
+import { browserBridge } from "./browser/browserBridge";
 import { parseDeepLinkActions } from "./lib/deepLinks";
 import { desktopClient } from "./lib/desktopClient";
 import { runtimeIssuePresentation } from "./lib/runtimeIssue";
@@ -329,6 +330,14 @@ export function App() {
     // when the app was launched from a background workspace.
     void desktopClient.frontendReady().catch(() => undefined);
   }, []);
+
+  useEffect(
+    () =>
+      browserBridge.receiveAgentCommands(() => {
+        setPrimaryView("browser");
+      }),
+    [setPrimaryView],
+  );
 
   useEffect(() => {
     if (!initialized) return;

@@ -26,6 +26,7 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct BuiltinMcpConfig {
     pub host_binary: PathBuf,
+    pub browser_available: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -568,12 +569,16 @@ async fn write_onpeople_profile(
         ));
     }
     if let Some(mcp) = builtin_mcp {
-        for (server_id, argument) in [
+        let mut servers = vec![
             ("workspace_artifacts", "artifacts"),
             ("computer_use", "computer-use"),
             ("image_generation", "image-generation"),
             ("research_sources", "research-sources"),
-        ] {
+        ];
+        if mcp.browser_available {
+            servers.insert(1, ("internal_browser", "browser"));
+        }
+        for (server_id, argument) in servers {
             contents.push_str(&format!(
                 "\n[mcp_servers.{server_id}]\ncommand = {}\nargs = [{}]\nrequired = false\nstartup_timeout_sec = 10\ntool_timeout_sec = 120\ndefault_tools_approval_mode = \"approve\"\n",
                 toml_string(&mcp.host_binary.to_string_lossy()),
@@ -807,6 +812,7 @@ mod profile_tests {
             host_binary:
                 "/Applications/OnPeople.app/Contents/Resources/.embedded-runtime/onpeople-mcp-host"
                     .into(),
+            browser_available: true,
         };
         write_onpeople_profile(
             root.path(),
@@ -823,13 +829,39 @@ mod profile_tests {
         let profile =
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
         assert!(profile.contains("[mcp_servers.workspace_artifacts]"));
-        assert_eq!(profile.matches("[mcp_servers.").count(), 4);
+        assert_eq!(profile.matches("[mcp_servers.").count(), 5);
         assert!(profile.contains("args = [\"artifacts\"]"));
         assert!(profile.contains("[mcp_servers.computer_use]"));
         assert!(profile.contains("args = [\"computer-use\"]"));
+        assert!(profile.contains("[mcp_servers.internal_browser]"));
+        assert!(profile.contains("args = [\"browser\"]"));
         assert!(profile.contains("[mcp_servers.research_sources]"));
         assert!(profile.contains("enabled = false"));
         assert!(profile.contains("max_concurrent_threads_per_session = 6"));
+    }
+
+    #[tokio::test]
+    async fn omits_the_browser_server_when_the_desktop_bridge_is_unavailable() {
+        let root = tempdir().expect("temporary root");
+        write_onpeople_profile(
+            root.path(),
+            root.path(),
+            &ProviderSettings::default(),
+            Some(&BuiltinMcpConfig {
+                host_binary: "/Applications/OnPeople.app/onpeople-mcp-host".into(),
+                browser_available: false,
+            }),
+            &AgentRuntimeConfig {
+                enabled: false,
+                max_concurrent_threads: 6,
+            },
+        )
+        .await
+        .expect("profile");
+        let profile =
+            std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
+        assert_eq!(profile.matches("[mcp_servers.").count(), 4);
+        assert!(!profile.contains("[mcp_servers.internal_browser]"));
     }
 
     #[tokio::test]

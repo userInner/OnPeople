@@ -78,6 +78,7 @@ async fn main() -> ExitCode {
 async fn run(options: Options) -> Result<(), AppError> {
     let storage = Storage::open_empty(options.data_root)?;
     let runtime = Arc::new(CoreRuntime::new(storage, options.runtime_root)?);
+    runtime.configure_builtin_mcp()?;
     let result = match options.transport {
         Transport::Stdio => serve(runtime.clone(), tokio::io::stdin(), tokio::io::stdout()).await,
         Transport::Socket(path) => serve_socket(runtime.clone(), path).await,
