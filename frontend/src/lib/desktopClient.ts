@@ -13,6 +13,7 @@ import type {
   AppUpdateState,
   BrowserAnnotation,
   BrowserBoundsRequest,
+  BrowserFrame,
   BrowserState,
   CloudAccountState,
   DesktopEvent,
@@ -43,6 +44,8 @@ import type {
   TerminalExit,
   TerminalSession,
 } from "../types";
+import type { BrowserAction } from "../bindings/BrowserAction";
+import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import {
   createDesktopApiClient,
   legacyQueuedSteerResult,
@@ -235,6 +238,20 @@ const desktopApi = createDesktopApiClient(
   undefined,
   (handler) => subscribe("desktop:event", handler),
 );
+
+function jsonRecord(value: Record<string, unknown>): Record<string, JsonValue> {
+  return value as Record<string, JsonValue>;
+}
+
+async function browserAction(
+  action: BrowserAction,
+  payload: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  return (await desktopApi.request("browser.action", {
+    action,
+    payload: jsonRecord(payload),
+  })) as Record<string, unknown>;
+}
 
 function legacyEventEnvelope(event: DesktopEvent): EventEnvelope {
   return {
@@ -499,12 +516,16 @@ export const desktopClient = {
     return typeof selected === "string" ? selected : null;
   },
   notify: (title: string, body: string) => sendNotification({ title, body }),
-  browserState: () => call<BrowserState>("get_browser_state"),
-  restartBrowserHost: () => call<BrowserState>("restart_browser_host"),
+  browserState: () => desktopApi.request("browser.state", {}),
+  restartBrowserHost: () => desktopApi.request("browser.restart", {}),
   browserCommand: (command: BrowserCommand) =>
-    call<Record<string, unknown>>("browser_command", { command }),
+    desktopApi.request("browser.command", {
+      command: command as unknown as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   browserSurfaceBounds: (request: BrowserBoundsRequest) =>
-    call<Record<string, unknown>>("browser_surface_bounds", { request }),
+    desktopApi.request("browser.surface.bounds", request) as Promise<
+      Record<string, unknown>
+    >,
   pickFiles: async (multiple = true) => {
     const selected = await openDialog({ multiple, directory: false });
     if (!selected) return [];
@@ -530,10 +551,16 @@ export const desktopClient = {
     const channel = new Channel<StreamEnvelope>(handler);
     return call<void>("stream_agent", { channel });
   },
-  streamBrowser: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_browser", { channel });
+  streamBrowser: async (handler: (event: StreamEnvelope) => void) => {
+    await subscribe<BrowserFrame>("browser:preview-updated", (frame) =>
+      handler({
+        sequence: Number(frame.sequence),
+        kind: "browser-frame",
+        streamId: frame.routeId,
+        payload: frame as unknown as JsonValue,
+        terminal: false,
+      }),
+    );
   },
   streamLive: (handler: (event: StreamEnvelope) => void) => {
     if (!isTauriRuntime()) return Promise.resolve();
@@ -541,11 +568,11 @@ export const desktopClient = {
     return call<void>("stream_live", { channel });
   },
   listBrowserAnnotations: (routeId: string) =>
-    call<BrowserAnnotation[]>("list_browser_annotations", { routeId }),
+    desktopApi.request("browser.annotation.list", { routeId }),
   saveBrowserAnnotation: (annotation: BrowserAnnotation) =>
-    call<BrowserAnnotation>("save_browser_annotation", { annotation }),
+    desktopApi.request("browser.annotation.save", annotation),
   deleteBrowserAnnotation: (id: string) =>
-    call<boolean>("delete_browser_annotation", { request: { id } }),
+    desktopApi.request("browser.annotation.delete", { id }),
   openTaskWindow: (threadId?: string | null) =>
     call<void>("open_task_window", { threadId: threadId ?? null }),
   pickImages: () =>
@@ -722,36 +749,43 @@ export const desktopClient = {
       request: { skillPath, enabled },
     }),
   installPlugin: (plugin: Record<string, unknown>) =>
-    call<Record<string, unknown>>("install_plugin", { request: plugin }),
+    desktopApi.request("plugin.install", {
+      plugin: jsonRecord(plugin),
+    }) as Promise<Record<string, unknown>>,
   uninstallPlugin: (pluginId: string) =>
-    call<Record<string, unknown>>("uninstall_plugin", {
-      request: { pluginId },
-    }),
+    desktopApi.request("plugin.uninstall", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   activateIndustryPlugin: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("activate_industry_plugin", {
-      request: payload,
-    }),
+    desktopApi.request("plugin.industry.activate", {
+      plugin: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   deactivateIndustryPlugin: (pluginId: string) =>
-    call<Record<string, unknown>>("deactivate_industry_plugin", {
-      request: { pluginId },
-    }),
-  reloadMcp: () => call<Record<string, unknown>>("reload_mcp", { request: {} }),
+    desktopApi.request("plugin.industry.deactivate", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
+  reloadMcp: () =>
+    desktopApi.request("plugin.mcp.reload", {}) as Promise<
+      Record<string, unknown>
+    >,
   syncPluginCatalog: (url?: string | null) =>
-    call<Record<string, unknown>>("sync_plugin_catalog", {
-      request: { url: url ?? null },
-    }),
+    desktopApi.request("plugin.catalog.sync", {
+      url: url ?? null,
+    }) as Promise<Record<string, unknown>>,
   startConnectorOauth: (pluginId: string) =>
-    call<Record<string, unknown>>("start_connector_oauth", {
-      request: { pluginId },
-    }),
+    desktopApi.request("connector.oauth.start", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   completeConnectorOauth: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("complete_connector_oauth", {
-      request: payload,
-    }),
+    desktopApi.request("connector.oauth.complete", {
+      state: String(payload.state ?? ""),
+      code: typeof payload.code === "string" ? payload.code : null,
+      error: typeof payload.error === "string" ? payload.error : null,
+    }) as Promise<Record<string, unknown>>,
   disconnectConnector: (pluginId: string) =>
-    call<Record<string, unknown>>("disconnect_connector", {
-      request: { pluginId },
-    }),
+    desktopApi.request("connector.disconnect", { pluginId }) as Promise<
+      Record<string, unknown>
+    >,
   discoverModels: () =>
     call<Record<string, unknown>>("discover_models", { request: {} }),
   validateModel: (providerType: string, modelId: string) =>
@@ -941,9 +975,7 @@ export const desktopClient = {
       unknown
     >,
   navigate: (url: string, routeId: string) =>
-    call<Record<string, unknown>>("browser_navigate", {
-      request: { url, routeId },
-    }),
+    browserAction("navigate", { url, routeId }),
   getQuickLauncherSuggestions: (
     cwd: string,
     routeId?: string | null,
@@ -962,75 +994,44 @@ export const desktopClient = {
     call<Record<string, unknown>>("open_workspace_file", {
       request: { cwd, path: filePath, routeId: routeId ?? null },
     }),
-  back: (routeId: string) =>
-    call<Record<string, unknown>>("browser_back", { request: { routeId } }),
-  forward: (routeId: string) =>
-    call<Record<string, unknown>>("browser_forward", { request: { routeId } }),
-  reload: (routeId: string) =>
-    call<Record<string, unknown>>("browser_reload", { request: { routeId } }),
+  back: (routeId: string) => browserAction("back", { routeId }),
+  forward: (routeId: string) => browserAction("forward", { routeId }),
+  reload: (routeId: string) => browserAction("reload", { routeId }),
   captureBrowserVisualSnapshot: (routeId: string) =>
-    call<Record<string, unknown>>("capture_browser_visual_snapshot", {
-      request: { routeId },
-    }),
+    browserAction("captureVisualSnapshot", { routeId }),
   inspectBrowserDeveloperState: (routeId: string) =>
-    call<Record<string, unknown>>("inspect_browser_developer_state", {
-      request: { routeId },
-    }),
+    browserAction("inspectDeveloperState", { routeId }),
   beginBrowserAnnotation: (routeId: string) =>
-    call<Record<string, unknown>>("begin_browser_annotation", {
-      request: { routeId },
-    }),
+    browserAction("beginAnnotation", { routeId }),
   cancelBrowserAnnotation: (routeId: string) =>
-    call<Record<string, unknown>>("cancel_browser_annotation", {
-      request: { routeId },
-    }),
+    browserAction("cancelAnnotation", { routeId }),
   getBrowserSessionStatus: (routeId: string) =>
-    call<Record<string, unknown>>("get_browser_session_status", {
-      request: { routeId },
-    }),
+    browserAction("sessionStatus", { routeId }),
   openBrowserSignIn: (providerId: string, routeId: string) =>
-    call<Record<string, unknown>>("open_browser_sign_in", {
-      request: { providerId, routeId },
-    }),
+    browserAction("openSignIn", { providerId, routeId }),
   clearBrowserSession: (providerId: string, routeId: string) =>
-    call<Record<string, unknown>>("clear_browser_session", {
-      request: { providerId, routeId },
-    }),
+    browserAction("clearSession", { providerId, routeId }),
   clearAllBrowserData: (routeId: string) =>
-    call<Record<string, unknown>>("clear_all_browser_data", {
-      request: { routeId, all: true },
-    }),
+    browserAction("clearAllData", { routeId, all: true }),
   clearBrowserDataFromSettings: () =>
-    call<Record<string, unknown>>("clear_browser_data_from_settings", {
-      request: { all: true },
-    }),
+    browserAction("clearSettingsData", { all: true }),
   fillSavedBrowserCredential: (routeId: string) =>
-    call<Record<string, unknown>>("fill_saved_browser_credential", {
-      request: { routeId },
-    }),
-  listBrowserImportProfiles: () =>
-    call<Record<string, unknown>>("list_browser_import_profiles", {
-      request: {},
-    }),
+    browserAction("fillSavedCredential", { routeId }),
+  listBrowserImportProfiles: () => browserAction("listImportProfiles"),
   importBrowserProfile: (
     payload: Record<string, unknown>,
     routeId?: string | null,
   ) =>
-    call<Record<string, unknown>>("import_browser_profile", {
-      request: { ...payload, routeId: routeId ?? payload.routeId ?? null },
+    browserAction("importProfile", {
+      ...payload,
+      routeId: routeId ?? payload.routeId ?? null,
     }),
   attachBrowser: (webContentsId: string, routeId: string) =>
-    call<Record<string, unknown>>("attach_browser", {
-      request: { webContentsId, routeId },
-    }),
+    browserAction("attach", { webContentsId, routeId }),
   activateBrowserTab: (threadId: string, routeId: string) =>
-    call<Record<string, unknown>>("activate_browser_tab", {
-      request: { threadId, routeId },
-    }),
+    browserAction("activateTab", { threadId, routeId }),
   detachBrowserTab: (routeId: string) =>
-    call<Record<string, unknown>>("detach_browser_tab", {
-      request: { routeId },
-    }),
+    browserAction("detachTab", { routeId }),
   onDesktopEvent: (handler: (event: DesktopEvent) => void) =>
     desktopApi.subscribe(handler),
   onDesktopEventRecoveryRequired: (

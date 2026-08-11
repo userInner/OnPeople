@@ -1,4 +1,11 @@
 import type { AgentStatus } from "../bindings/AgentStatus";
+import type { BrowserActionRequest } from "../bindings/BrowserActionRequest";
+import type { BrowserAnnotation } from "../bindings/BrowserAnnotation";
+import type { BrowserAnnotationDeleteRequest } from "../bindings/BrowserAnnotationDeleteRequest";
+import type { BrowserBoundsRequest } from "../bindings/BrowserBoundsRequest";
+import type { BrowserRouteRequest } from "../bindings/BrowserRouteRequest";
+import type { BrowserState } from "../bindings/BrowserState";
+import type { ConnectorOauthCompleteRequest } from "../bindings/ConnectorOauthCompleteRequest";
 import type { QueuedTaskMessage } from "../bindings/QueuedTaskMessage";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
 import type { DesktopEvent } from "../bindings/DesktopEvent";
@@ -8,6 +15,9 @@ import type { DesktopResponse } from "../bindings/DesktopResponse";
 import type { EventReplay } from "../bindings/EventReplay";
 import type { EventReplayRequest } from "../bindings/EventReplayRequest";
 import type { Preferences } from "../bindings/Preferences";
+import type { PluginCatalogSyncRequest } from "../bindings/PluginCatalogSyncRequest";
+import type { PluginIdRequest } from "../bindings/PluginIdRequest";
+import type { PluginPayloadRequest } from "../bindings/PluginPayloadRequest";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
 import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
@@ -119,6 +129,74 @@ export interface DesktopMethodMap {
   "task.input.resolve": {
     params: TaskInputResolveRequest;
     result: TaskInputResolution;
+  };
+  "browser.state": {
+    params: Record<string, never>;
+    result: BrowserState;
+  };
+  "browser.restart": {
+    params: Record<string, never>;
+    result: BrowserState;
+  };
+  "browser.command": {
+    params: { command: JsonValue };
+    result: JsonValue;
+  };
+  "browser.surface.bounds": {
+    params: BrowserBoundsRequest;
+    result: JsonValue;
+  };
+  "browser.annotation.list": {
+    params: BrowserRouteRequest;
+    result: BrowserAnnotation[];
+  };
+  "browser.annotation.save": {
+    params: BrowserAnnotation;
+    result: BrowserAnnotation;
+  };
+  "browser.annotation.delete": {
+    params: BrowserAnnotationDeleteRequest;
+    result: boolean;
+  };
+  "browser.action": {
+    params: BrowserActionRequest;
+    result: JsonValue;
+  };
+  "plugin.install": {
+    params: PluginPayloadRequest;
+    result: JsonValue;
+  };
+  "plugin.uninstall": {
+    params: PluginIdRequest;
+    result: JsonValue;
+  };
+  "plugin.industry.activate": {
+    params: PluginPayloadRequest;
+    result: JsonValue;
+  };
+  "plugin.industry.deactivate": {
+    params: PluginIdRequest;
+    result: JsonValue;
+  };
+  "plugin.mcp.reload": {
+    params: Record<string, never>;
+    result: JsonValue;
+  };
+  "plugin.catalog.sync": {
+    params: PluginCatalogSyncRequest;
+    result: JsonValue;
+  };
+  "connector.oauth.start": {
+    params: PluginIdRequest;
+    result: JsonValue;
+  };
+  "connector.oauth.complete": {
+    params: ConnectorOauthCompleteRequest;
+    result: JsonValue;
+  };
+  "connector.disconnect": {
+    params: PluginIdRequest;
+    result: JsonValue;
   };
 }
 

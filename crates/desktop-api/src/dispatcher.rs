@@ -6,8 +6,11 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopMethod, DesktopRequest,
-    DesktopResponse, EventReplay, EventReplayRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
+    BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserCommandRequest,
+    BrowserHostOperation, BrowserRouteRequest, ConnectorOauthCompleteRequest,
+    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopHost, DesktopMethod,
+    DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest, PluginCatalogSyncRequest,
+    PluginIdRequest, PluginPayloadRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
     TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
     TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
     TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
@@ -27,6 +30,24 @@ impl DesktopDispatcher {
     }
 
     pub async fn dispatch(&self, request: DesktopRequest) -> DesktopResponse {
+        self.dispatch_inner(request, None).await
+    }
+
+    /// Dispatches a request with access to shell-owned capabilities.
+    /// Headless callers keep using [`Self::dispatch`].
+    pub async fn dispatch_with_host(
+        &self,
+        request: DesktopRequest,
+        host: &dyn DesktopHost,
+    ) -> DesktopResponse {
+        self.dispatch_inner(request, Some(host)).await
+    }
+
+    async fn dispatch_inner(
+        &self,
+        request: DesktopRequest,
+        host: Option<&dyn DesktopHost>,
+    ) -> DesktopResponse {
         let request_id = request.request_id.clone();
         if request.protocol_version != DESKTOP_PROTOCOL_VERSION {
             return DesktopResponse::failure(
@@ -43,7 +64,10 @@ impl DesktopDispatcher {
             );
         }
 
-        match self.dispatch_method(request.method, request.params).await {
+        match self
+            .dispatch_method(request.method, request.params, host)
+            .await
+        {
             Ok(result) => DesktopResponse::success(request_id, result),
             Err(error) => DesktopResponse::failure(request_id, error),
         }
@@ -53,9 +77,18 @@ impl DesktopDispatcher {
         &self,
         method: DesktopMethod,
         params: Value,
+        host: Option<&dyn DesktopHost>,
     ) -> Result<Value, AppError> {
         match method {
-            DesktopMethod::SystemCapabilities => to_value(DesktopCapabilities::default()),
+            DesktopMethod::SystemCapabilities => {
+                let mut capabilities = DesktopCapabilities::default();
+                if host.is_none() {
+                    capabilities
+                        .methods
+                        .retain(|method| !method.requires_host());
+                }
+                to_value(capabilities)
+            }
             DesktopMethod::RuntimeStatus => to_value(self.runtime.agent_status()?),
             DesktopMethod::RuntimeStart => {
                 self.runtime.start().await?;
@@ -267,8 +300,116 @@ impl DesktopDispatcher {
                     answered: true,
                 })
             }
+            DesktopMethod::BrowserState => {
+                parse_empty(params)?;
+                call_host(host, BrowserHostOperation::State, json!({})).await
+            }
+            DesktopMethod::BrowserRestart => {
+                parse_empty(params)?;
+                call_host(host, BrowserHostOperation::Restart, json!({})).await
+            }
+            DesktopMethod::BrowserCommand => {
+                let request: BrowserCommandRequest = parse_params(params)?;
+                call_host(host, BrowserHostOperation::Command, request.command).await
+            }
+            DesktopMethod::BrowserSurfaceBounds => {
+                let request: onpeople_types::BrowserBoundsRequest = parse_params(params)?;
+                call_host(
+                    host,
+                    BrowserHostOperation::SurfaceBounds,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationList => {
+                let request: BrowserRouteRequest = parse_params(params)?;
+                call_host(
+                    host,
+                    BrowserHostOperation::AnnotationList,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationSave => {
+                let annotation: onpeople_types::BrowserAnnotation = parse_params(params)?;
+                call_host(
+                    host,
+                    BrowserHostOperation::AnnotationSave,
+                    to_value(annotation)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationDelete => {
+                let request: BrowserAnnotationDeleteRequest = parse_params(params)?;
+                call_host(
+                    host,
+                    BrowserHostOperation::AnnotationDelete,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAction => {
+                let request: BrowserActionRequest = parse_params(params)?;
+                call_host(host, BrowserHostOperation::Action, to_value(request)?).await
+            }
+            DesktopMethod::PluginInstall => {
+                let request: PluginPayloadRequest = parse_params(params)?;
+                self.runtime.install_plugin(&to_value(request.plugin)?)
+            }
+            DesktopMethod::PluginUninstall => {
+                let request: PluginIdRequest = parse_params(params)?;
+                self.runtime
+                    .uninstall_plugin(&json!({ "pluginId": request.plugin_id }))
+            }
+            DesktopMethod::PluginIndustryActivate => {
+                let request: PluginPayloadRequest = parse_params(params)?;
+                self.runtime
+                    .activate_industry_plugin(&to_value(request.plugin)?)
+            }
+            DesktopMethod::PluginIndustryDeactivate => {
+                let request: PluginIdRequest = parse_params(params)?;
+                self.runtime
+                    .deactivate_industry_plugin(&json!({ "pluginId": request.plugin_id }))
+            }
+            DesktopMethod::PluginMcpReload => {
+                parse_empty(params)?;
+                self.runtime.reload_mcp()
+            }
+            DesktopMethod::PluginCatalogSync => {
+                let request: PluginCatalogSyncRequest = parse_params(params)?;
+                self.runtime
+                    .sync_plugin_catalog(&json!({ "url": request.url }))
+                    .await
+            }
+            DesktopMethod::ConnectorOauthStart => {
+                let request: PluginIdRequest = parse_params(params)?;
+                self.runtime
+                    .start_connector_oauth(&json!({ "pluginId": request.plugin_id }))
+            }
+            DesktopMethod::ConnectorOauthComplete => {
+                let request: ConnectorOauthCompleteRequest = parse_params(params)?;
+                self.runtime
+                    .complete_connector_oauth(&to_value(request)?)
+                    .await
+            }
+            DesktopMethod::ConnectorDisconnect => {
+                let request: PluginIdRequest = parse_params(params)?;
+                self.runtime
+                    .disconnect_connector(&json!({ "pluginId": request.plugin_id }))
+            }
         }
     }
+}
+
+async fn call_host(
+    host: Option<&dyn DesktopHost>,
+    operation: BrowserHostOperation,
+    params: Value,
+) -> Result<Value, AppError> {
+    let host = host.ok_or_else(|| {
+        AppError::new(ErrorCode::Unsupported, "当前桌面适配器不支持浏览器宿主能力")
+    })?;
+    host.browser(operation, params).await
 }
 
 fn resolve_interaction_thread(
@@ -341,6 +482,15 @@ fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, AppError> {
         .map_err(|error| AppError::invalid("桌面 API 参数无效").context("cause", error))
 }
 
+fn parse_empty(params: Value) -> Result<(), AppError> {
+    let fields: std::collections::BTreeMap<String, Value> = parse_params(params)?;
+    if fields.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::invalid("桌面 API 参数无效"))
+    }
+}
+
 fn parse_result<T: DeserializeOwned>(result: Value) -> Result<T, AppError> {
     serde_json::from_value(result)
         .map_err(|error| AppError::internal("CoreRuntime 返回了无效结果").context("cause", error))
@@ -355,6 +505,31 @@ mod tests {
     use super::*;
     use onpeople_storage::Storage;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct FakeDesktopHost {
+        calls: Mutex<Vec<(BrowserHostOperation, Value)>>,
+    }
+
+    impl DesktopHost for FakeDesktopHost {
+        fn browser<'a>(
+            &'a self,
+            operation: BrowserHostOperation,
+            params: Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .expect("fake host calls")
+                    .push((operation, params));
+                Ok(
+                    json!({ "hostReady": true, "hostStatus": "ready", "activeRouteId": null, "tabs": [], "profilePath": "/tmp/profile" }),
+                )
+            })
+        }
+    }
 
     #[test]
     fn rejects_invalid_params_without_exposing_payload() {
@@ -394,6 +569,41 @@ mod tests {
                 .and_then(Value::as_str),
             Some("system")
         );
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn browser_methods_require_and_use_a_shell_host_port() {
+        let temporary = tempfile::tempdir().expect("temporary data root");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+        let request = || DesktopRequest {
+            protocol_version: DESKTOP_PROTOCOL_VERSION,
+            request_id: "browser-state-1".to_owned(),
+            method: DesktopMethod::BrowserState,
+            params: json!({}),
+        };
+
+        let unsupported = dispatcher.dispatch(request()).await;
+        assert!(!unsupported.ok);
+        assert_eq!(
+            unsupported.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::Unsupported)
+        );
+
+        let host = FakeDesktopHost::default();
+        let response = dispatcher.dispatch_with_host(request(), &host).await;
+        assert!(response.ok, "unexpected response: {response:?}");
+        {
+            let calls = host.calls.lock().expect("fake host calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, BrowserHostOperation::State);
+        }
         runtime.stop().await;
     }
 

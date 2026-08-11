@@ -53,10 +53,44 @@ pub enum DesktopMethod {
     TaskApprovalResolve,
     #[serde(rename = "task.input.resolve")]
     TaskInputResolve,
+    #[serde(rename = "browser.state")]
+    BrowserState,
+    #[serde(rename = "browser.restart")]
+    BrowserRestart,
+    #[serde(rename = "browser.command")]
+    BrowserCommand,
+    #[serde(rename = "browser.surface.bounds")]
+    BrowserSurfaceBounds,
+    #[serde(rename = "browser.annotation.list")]
+    BrowserAnnotationList,
+    #[serde(rename = "browser.annotation.save")]
+    BrowserAnnotationSave,
+    #[serde(rename = "browser.annotation.delete")]
+    BrowserAnnotationDelete,
+    #[serde(rename = "browser.action")]
+    BrowserAction,
+    #[serde(rename = "plugin.install")]
+    PluginInstall,
+    #[serde(rename = "plugin.uninstall")]
+    PluginUninstall,
+    #[serde(rename = "plugin.industry.activate")]
+    PluginIndustryActivate,
+    #[serde(rename = "plugin.industry.deactivate")]
+    PluginIndustryDeactivate,
+    #[serde(rename = "plugin.mcp.reload")]
+    PluginMcpReload,
+    #[serde(rename = "plugin.catalog.sync")]
+    PluginCatalogSync,
+    #[serde(rename = "connector.oauth.start")]
+    ConnectorOauthStart,
+    #[serde(rename = "connector.oauth.complete")]
+    ConnectorOauthComplete,
+    #[serde(rename = "connector.disconnect")]
+    ConnectorDisconnect,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 38] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -78,7 +112,139 @@ impl DesktopMethod {
         Self::TaskQueueSteer,
         Self::TaskApprovalResolve,
         Self::TaskInputResolve,
+        Self::BrowserState,
+        Self::BrowserRestart,
+        Self::BrowserCommand,
+        Self::BrowserSurfaceBounds,
+        Self::BrowserAnnotationList,
+        Self::BrowserAnnotationSave,
+        Self::BrowserAnnotationDelete,
+        Self::BrowserAction,
+        Self::PluginInstall,
+        Self::PluginUninstall,
+        Self::PluginIndustryActivate,
+        Self::PluginIndustryDeactivate,
+        Self::PluginMcpReload,
+        Self::PluginCatalogSync,
+        Self::ConnectorOauthStart,
+        Self::ConnectorOauthComplete,
+        Self::ConnectorDisconnect,
     ];
+
+    #[must_use]
+    pub const fn requires_host(self) -> bool {
+        matches!(
+            self,
+            Self::BrowserState
+                | Self::BrowserRestart
+                | Self::BrowserCommand
+                | Self::BrowserSurfaceBounds
+                | Self::BrowserAnnotationList
+                | Self::BrowserAnnotationSave
+                | Self::BrowserAnnotationDelete
+                | Self::BrowserAction
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserHostOperation {
+    State,
+    Restart,
+    Command,
+    SurfaceBounds,
+    AnnotationList,
+    AnnotationSave,
+    AnnotationDelete,
+    Action,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserCommandRequest {
+    pub command: Value,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserRouteRequest {
+    pub route_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserAnnotationDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum BrowserAction {
+    Navigate,
+    Back,
+    Forward,
+    Reload,
+    CaptureVisualSnapshot,
+    InspectDeveloperState,
+    BeginAnnotation,
+    CancelAnnotation,
+    SessionStatus,
+    OpenSignIn,
+    ClearSession,
+    ClearAllData,
+    ClearSettingsData,
+    FillSavedCredential,
+    ListImportProfiles,
+    ImportProfile,
+    Attach,
+    ActivateTab,
+    DetachTab,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserActionRequest {
+    pub action: BrowserAction,
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginPayloadRequest {
+    pub plugin: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginIdRequest {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PluginCatalogSyncRequest {
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ConnectorOauthCompleteRequest {
+    pub state: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -556,6 +722,15 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         TaskApprovalResolution,
         TaskInputResolveRequest,
         TaskInputResolution,
+        BrowserCommandRequest,
+        BrowserRouteRequest,
+        BrowserAnnotationDeleteRequest,
+        BrowserAction,
+        BrowserActionRequest,
+        PluginPayloadRequest,
+        PluginIdRequest,
+        PluginCatalogSyncRequest,
+        ConnectorOauthCompleteRequest,
     );
     Ok(())
 }
@@ -581,6 +756,24 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ApprovalDecision::AcceptForSession).expect("serialize decision"),
             r#""acceptForSession""#
+        );
+    }
+
+    #[test]
+    fn serializes_browser_and_extension_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::BrowserSurfaceBounds).expect("serialize method"),
+            r#""browser.surface.bounds""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ConnectorOauthComplete)
+                .expect("serialize method"),
+            r#""connector.oauth.complete""#
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserAction::CaptureVisualSnapshot)
+                .expect("serialize browser action"),
+            r#""captureVisualSnapshot""#
         );
     }
 
