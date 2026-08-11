@@ -14,10 +14,6 @@ const cacheDir = path.resolve(
 );
 const codexVersion = process.env.CODEX_VERSION || "0.146.0-alpha.3.1";
 const cuaVersion = process.env.CUA_DRIVER_VERSION || "0.12.4";
-const cefArchiveName =
-  "cef_binary_151.3.14+g5d67476+chromium-151.0.7922.72_windows64_minimal.tar.bz2";
-const cefArchiveSha1 = "96abc7e46d7dfe31756be682e1c0d423807b498e";
-const cefArchiveUrl = `https://cef-builds.spotifycdn.com/${encodeURIComponent(cefArchiveName)}`;
 const signScript = path.join(root, "scripts", "sign-windows-cross.mjs");
 const hasCertificate = Boolean(process.env.ONPEOPLE_WINDOWS_CERTIFICATE);
 
@@ -91,10 +87,10 @@ function validateMsix(makeMsix, packagePath) {
       "AppxManifest.xml",
       "OnPeople.exe",
       ".embedded-runtime/manifest.json",
-      ".embedded-runtime/bin/onpeople-browser-host.exe",
       ".embedded-runtime/bin/onpeople-mcp-host.exe",
       ".embedded-runtime/bin/onpeople.exe",
-      ".embedded-runtime/bin/libcef.dll",
+      ".embedded-runtime/bin/codex.exe",
+      ".embedded-runtime/bin/cua-driver.exe",
     ]) {
       const expected = path.join(verifyDir, relative);
       if (!fs.statSync(expected, { throwIfNoEntry: false })?.isFile()) {
@@ -116,19 +112,6 @@ function findFile(directory, name) {
       const nested = findFile(candidate, name);
       if (nested) return nested;
     }
-  }
-  return null;
-}
-
-function findDirectory(directory, name) {
-  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory())
-    return null;
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const candidate = path.join(directory, entry.name);
-    if (entry.name === name) return candidate;
-    const nested = findDirectory(candidate, name);
-    if (nested) return nested;
   }
   return null;
 }
@@ -235,129 +218,6 @@ function prepareCuaDriver() {
   return binary;
 }
 
-function writeCefArchiveMetadata(cefDir) {
-  fs.writeFileSync(
-    path.join(cefDir, "archive.json"),
-    `${JSON.stringify(
-      {
-        type: "minimal",
-        name: cefArchiveName,
-        sha1: cefArchiveSha1,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-}
-
-function patchCefForCargoXwin(cefDir) {
-  const variables = path.join(cefDir, "cmake", "cef_variables.cmake");
-  if (!fs.statSync(variables, { throwIfNoEntry: false })?.isFile()) {
-    throw new Error(`CEF CMake configuration is missing: ${variables}`);
-  }
-  const source = fs.readFileSync(variables, "utf8");
-  let patched = source.replace(
-    /^\s*\/MP\s+# Multiprocess compilation\r?\n/m,
-    "",
-  );
-  patched = patched.replace(
-    /\s*# When using the Ninja generator clear the CMake defaults to avoid excessive\r?\n\s*# console warnings \(see issue #2120\)\.\r?\n\s*set\(CMAKE_CXX_FLAGS ""\)\r?\n\s*set\(CMAKE_CXX_FLAGS_DEBUG ""\)\r?\n\s*set\(CMAKE_CXX_FLAGS_RELEASE ""\)\r?\n/,
-    "\n    # Preserve cargo-xwin's Windows SDK and C++ standard library flags.\n",
-  );
-  if (source === patched && source.includes("/MP")) {
-    throw new Error("Unable to remove CEF /MP flag for clang-cl");
-  }
-  if (patched.includes('set(CMAKE_CXX_FLAGS "")')) {
-    throw new Error("Unable to preserve cargo-xwin CMake C++ flags");
-  }
-  if (source !== patched) fs.writeFileSync(variables, patched);
-}
-
-function prepareCef() {
-  if (process.env.ONPEOPLE_CEF_RUNTIME_SOURCE) {
-    const configured = path.resolve(process.env.ONPEOPLE_CEF_RUNTIME_SOURCE);
-    patchCefForCargoXwin(configured);
-    return configured;
-  }
-
-  const cefRoot = path.join(cacheDir, "cef-151.3.14-windows-x86_64");
-  const cefDir = path.join(cefRoot, "cef_windows_x86_64");
-  if (
-    !fs
-      .statSync(path.join(cefDir, "archive.json"), {
-        throwIfNoEntry: false,
-      })
-      ?.isFile()
-  ) {
-    fs.rmSync(cefRoot, { recursive: true, force: true });
-    fs.mkdirSync(cefRoot, { recursive: true });
-
-    // Reuse a verified Cargo build cache when present. A clean machine falls
-    // back to the exact official CEF binary archive below.
-    const cargoCached = findDirectory(
-      path.join(releaseDir, "build"),
-      "cef_windows_x86_64",
-    );
-    if (
-      cargoCached &&
-      fs
-        .statSync(path.join(cargoCached, "archive.json"), {
-          throwIfNoEntry: false,
-        })
-        ?.isFile()
-    ) {
-      fs.cpSync(cargoCached, cefDir, { recursive: true });
-    } else {
-      const archive = path.join(cefRoot, cefArchiveName);
-      run("curl", [
-        "--fail",
-        "--location",
-        "--retry",
-        "3",
-        cefArchiveUrl,
-        "--output",
-        archive,
-      ]);
-      const actualSha1 = digest(archive, "sha1");
-      if (actualSha1 !== cefArchiveSha1) {
-        throw new Error(`CEF SHA-1 mismatch for ${cefArchiveName}`);
-      }
-      run("tar", ["-xjf", archive, "-C", cefRoot]);
-      const extracted = path.join(cefRoot, cefArchiveName.slice(0, -8));
-      fs.renameSync(path.join(extracted, "Release"), cefDir);
-      for (const entry of fs.readdirSync(path.join(extracted, "Resources"))) {
-        fs.renameSync(
-          path.join(extracted, "Resources", entry),
-          path.join(cefDir, entry),
-        );
-      }
-      for (const entry of [
-        "CMakeLists.txt",
-        "cmake",
-        "include",
-        "libcef_dll",
-        "CREDITS.html",
-      ]) {
-        fs.renameSync(path.join(extracted, entry), path.join(cefDir, entry));
-      }
-      fs.rmSync(extracted, { recursive: true, force: true });
-      fs.rmSync(archive, { force: true });
-      writeCefArchiveMetadata(cefDir);
-    }
-  }
-  if (
-    !fs
-      .statSync(path.join(cefDir, "libcef.dll"), {
-        throwIfNoEntry: false,
-      })
-      ?.isFile()
-  ) {
-    throw new Error(`CEF Windows runtime is incomplete: ${cefDir}`);
-  }
-  patchCefForCargoXwin(cefDir);
-  return cefDir;
-}
-
 fs.mkdirSync(cacheDir, { recursive: true });
 requireCommand("cargo-xwin", "cargo install --locked cargo-xwin");
 requireCommand("llvm-rc", "brew install llvm");
@@ -391,17 +251,12 @@ if (hasCertificate) requireCommand("osslsigncode", "brew install osslsigncode");
 
 const codexBinary = prepareCodex();
 const cuaBinary = prepareCuaDriver();
-const cefDirectory = prepareCef();
-const browserHost = path.join(releaseDir, "onpeople-browser-host.exe");
 const mcpHost = path.join(releaseDir, "onpeople-mcp-host.exe");
 const onpeopleCli = path.join(releaseDir, "onpeople.exe");
 const buildEnv = {
   ...env,
-  CEF_PATH: cefDirectory,
   CODEX_BUNDLE_SOURCE: codexBinary,
   CUA_DRIVER_BINARY_SOURCE: cuaBinary,
-  ONPEOPLE_CEF_RUNTIME_SOURCE: cefDirectory,
-  ONPEOPLE_BROWSER_HOST_SOURCE: browserHost,
   ONPEOPLE_MCP_HOST_SOURCE: mcpHost,
   ONPEOPLE_CLI_SOURCE: onpeopleCli,
 };
@@ -415,8 +270,6 @@ run(
     "--target",
     triple,
     "-p",
-    "onpeople-browser-host",
-    "-p",
     "onpeople-mcp-host",
     "-p",
     "onpeople-cli",
@@ -424,7 +277,7 @@ run(
   { env: buildEnv },
 );
 
-for (const binary of [browserHost, mcpHost, onpeopleCli]) {
+for (const binary of [mcpHost, onpeopleCli]) {
   if (!fs.statSync(binary, { throwIfNoEntry: false })?.isFile()) {
     throw new Error(`Cross-compiled Windows sidecar is missing: ${binary}`);
   }
@@ -527,7 +380,6 @@ if (!msix) throw new Error("MSIX package was not produced");
 
 for (const binary of [
   path.join(releaseDir, "onpeople-tauri.exe"),
-  browserHost,
   mcpHost,
   onpeopleCli,
 ]) {

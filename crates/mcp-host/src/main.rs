@@ -16,13 +16,11 @@ use printpdf::{
 };
 use rust_xlsxwriter::Workbook;
 use serde_json::{Map, Value, json};
-use uuid::Uuid;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServerKind {
-    Browser,
     Artifacts,
     ImageGeneration,
     ComputerUse,
@@ -32,7 +30,6 @@ enum ServerKind {
 impl ServerKind {
     fn from_arg(value: &str) -> Option<Self> {
         match value {
-            "browser" | "internal_browser" => Some(Self::Browser),
             "artifacts" | "workspace_artifacts" => Some(Self::Artifacts),
             "image-generation" | "image_generation" => Some(Self::ImageGeneration),
             "computer-use" | "computer_use" => Some(Self::ComputerUse),
@@ -43,7 +40,6 @@ impl ServerKind {
 
     fn server_name(self) -> &'static str {
         match self {
-            Self::Browser => "internal_browser",
             Self::Artifacts => "workspace_artifacts",
             Self::ImageGeneration => "image_generation",
             Self::ComputerUse => "computer_use",
@@ -58,7 +54,7 @@ fn main() {
         .and_then(|value| ServerKind::from_arg(&value));
     let Some(kind) = kind else {
         eprintln!(
-            "usage: onpeople-mcp-host <browser|artifacts|image-generation|computer-use|research-sources>"
+            "usage: onpeople-mcp-host <artifacts|image-generation|computer-use|research-sources>"
         );
         std::process::exit(2);
     };
@@ -143,113 +139,6 @@ fn handle_request(kind: ServerKind, request: &Value) -> Value {
 
 fn tool_definitions(kind: ServerKind) -> Vec<Value> {
     match kind {
-        ServerKind::Browser => vec![
-            tool(
-                "browser_state",
-                "List OnPeople's embedded browser tabs and active route. Call this before interacting with an existing page.",
-                schema(&[]),
-            ),
-            tool(
-                "browser_navigate",
-                "Open a URL in the active embedded browser tab, or create a tab when none exists.",
-                schema(&[("url", "string", true), ("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_back",
-                "Go back in the active embedded browser tab.",
-                schema(&[("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_forward",
-                "Go forward in the active embedded browser tab.",
-                schema(&[("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_reload",
-                "Reload the active embedded browser tab.",
-                schema(&[("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_snapshot",
-                "Read the current URL and semantic page text for the active embedded browser tab.",
-                schema(&[("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_visual_snapshot",
-                "Capture the active embedded browser viewport as a PNG for visual verification.",
-                schema(&[("routeId", "string", false)]),
-            ),
-            tool(
-                "browser_click",
-                "Click a selector in a browser route.",
-                schema(&[("routeId", "string", false), ("selector", "string", true)]),
-            ),
-            tool(
-                "browser_fill",
-                "Fill a selector in a browser route.",
-                schema(&[
-                    ("routeId", "string", false),
-                    ("selector", "string", true),
-                    ("value", "string", true),
-                ]),
-            ),
-            tool(
-                "browser_select",
-                "Select an option value in a browser route.",
-                schema(&[
-                    ("routeId", "string", false),
-                    ("selector", "string", true),
-                    ("value", "string", true),
-                ]),
-            ),
-            tool(
-                "browser_hover",
-                "Hover a selector in a browser route.",
-                schema(&[("routeId", "string", false), ("selector", "string", true)]),
-            ),
-            tool(
-                "browser_wait",
-                "Evaluate a readiness expression in a browser route.",
-                schema(&[
-                    ("routeId", "string", false),
-                    ("expression", "string", true),
-                    ("timeoutMs", "integer", false),
-                ]),
-            ),
-            tool(
-                "browser_upload",
-                "Attach workspace files to a file input in a browser route.",
-                schema(&[
-                    ("routeId", "string", false),
-                    ("selector", "string", true),
-                    ("paths", "array", true),
-                ]),
-            ),
-            tool(
-                "browser_press",
-                "Press a key in a browser route.",
-                schema(&[("routeId", "string", false), ("key", "string", true)]),
-            ),
-            tool(
-                "browser_scroll",
-                "Scroll a browser route.",
-                schema(&[
-                    ("routeId", "string", false),
-                    ("x", "number", false),
-                    ("y", "number", false),
-                ]),
-            ),
-            tool(
-                "browser_evaluate",
-                "Evaluate a restricted browser expression.",
-                schema(&[("routeId", "string", false), ("expression", "string", true)]),
-            ),
-            tool(
-                "browser_developer_inspect",
-                "Inspect sanitized console, network, DOM, and navigation state for the active browser tab.",
-                schema(&[("routeId", "string", false)]),
-            ),
-        ],
         ServerKind::Artifacts => vec![
             tool(
                 "artifact_create_document",
@@ -441,180 +330,11 @@ fn schema(fields: &[(&str, &str, bool)]) -> Value {
 
 fn call_tool(kind: ServerKind, name: &str, arguments: &Value) -> Result<Vec<Value>, String> {
     match kind {
-        ServerKind::Browser => call_browser(name, arguments),
         ServerKind::Artifacts => call_artifact(name, arguments),
         ServerKind::ImageGeneration => call_image_generation(name, arguments),
         ServerKind::ComputerUse => call_computer_use(name, arguments),
         ServerKind::ResearchSources => call_research(name, arguments),
     }
-}
-
-fn call_browser(name: &str, arguments: &Value) -> Result<Vec<Value>, String> {
-    let socket = env::var_os("ONPEOPLE_BROWSER_SOCKET")
-        .map(PathBuf::from)
-        .ok_or_else(|| "browser host socket is not configured".to_owned())?;
-    let token = env::var("ONPEOPLE_BROWSER_TOKEN")
-        .map_err(|_| "browser host token is not configured".to_owned())?;
-    let state = browser_command(&socket, &token, json!({ "command": "stateSnapshot" }))?;
-    if name == "browser_state" {
-        return Ok(vec![text_content(
-            serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?,
-        )]);
-    }
-
-    let requested_route = arguments.get("routeId").and_then(Value::as_str);
-    let active_route = state.get("activeRouteId").and_then(Value::as_str);
-    let route_id = requested_route.or(active_route).unwrap_or("mcp-main");
-    let route_exists = state
-        .get("tabs")
-        .and_then(Value::as_array)
-        .is_some_and(|tabs| {
-            tabs.iter()
-                .any(|tab| tab.get("routeId").and_then(Value::as_str) == Some(route_id))
-        });
-
-    if !route_exists && name != "browser_navigate" {
-        return Err(
-            "there is no active embedded browser tab; call browser_navigate first".to_owned(),
-        );
-    }
-    let command = match name {
-        "browser_navigate" => {
-            let url = arguments
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("about:blank");
-            if route_exists {
-                json!({ "command": "navigate", "payload": { "routeId": route_id, "url": url } })
-            } else {
-                json!({ "command": "createRoute", "payload": { "routeId": route_id, "threadId": "mcp", "url": url } })
-            }
-        }
-        "browser_back" => {
-            json!({ "command": "back", "payload": { "routeId": route_id } })
-        }
-        "browser_forward" => {
-            json!({ "command": "forward", "payload": { "routeId": route_id } })
-        }
-        "browser_reload" => {
-            json!({ "command": "reload", "payload": { "routeId": route_id } })
-        }
-        "browser_click" => {
-            json!({ "command": "click", "payload": { "routeId": route_id, "selector": arguments.get("selector").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_fill" => {
-            json!({ "command": "fill", "payload": { "routeId": route_id, "selector": arguments.get("selector").and_then(Value::as_str).unwrap_or_default(), "value": arguments.get("value").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_select" => {
-            json!({ "command": "select", "payload": { "routeId": route_id, "selector": arguments.get("selector").and_then(Value::as_str).unwrap_or_default(), "value": arguments.get("value").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_press" => {
-            json!({ "command": "press", "payload": { "routeId": route_id, "key": arguments.get("key").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_hover" => {
-            json!({ "command": "hover", "payload": { "routeId": route_id, "selector": arguments.get("selector").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_wait" => {
-            json!({ "command": "wait", "payload": { "routeId": route_id, "expression": arguments.get("expression").and_then(Value::as_str).unwrap_or_default(), "timeoutMs": arguments.get("timeoutMs").and_then(Value::as_u64).unwrap_or(10_000) } })
-        }
-        "browser_upload" => {
-            json!({ "command": "upload", "payload": { "routeId": route_id, "selector": arguments.get("selector").and_then(Value::as_str).unwrap_or_default(), "paths": arguments.get("paths").cloned().unwrap_or_else(|| json!([])) } })
-        }
-        "browser_scroll" => {
-            json!({ "command": "scroll", "payload": { "routeId": route_id, "x": arguments.get("x").and_then(Value::as_f64).unwrap_or(0.0), "y": arguments.get("y").and_then(Value::as_f64).unwrap_or(0.0) } })
-        }
-        "browser_evaluate" => {
-            json!({ "command": "evaluate", "payload": { "routeId": route_id, "expression": arguments.get("expression").and_then(Value::as_str).unwrap_or_default() } })
-        }
-        "browser_snapshot" => {
-            json!({ "command": "domSnapshot", "payload": { "routeId": route_id } })
-        }
-        "browser_visual_snapshot" => {
-            json!({ "command": "visualSnapshot", "payload": { "routeId": route_id } })
-        }
-        "browser_developer_inspect" => {
-            json!({ "command": "developerInspect", "payload": { "routeId": route_id } })
-        }
-        _ => return Err(format!("unknown browser tool: {name}")),
-    };
-    let response = browser_command(&socket, &token, command)?;
-    if name == "browser_visual_snapshot"
-        && let Some(data) = response.get("imageBase64").and_then(Value::as_str)
-    {
-        let mime_type = response
-            .get("mimeType")
-            .and_then(Value::as_str)
-            .unwrap_or("image/png");
-        let mut metadata = response.clone();
-        if let Some(object) = metadata.as_object_mut() {
-            object.remove("imageBase64");
-        }
-        return Ok(vec![
-            text_content(
-                serde_json::to_string_pretty(&metadata).map_err(|error| error.to_string())?,
-            ),
-            json!({ "type": "image", "data": data, "mimeType": mime_type }),
-        ]);
-    }
-    Ok(vec![text_content(
-        serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?,
-    )])
-}
-
-fn browser_command(socket: &Path, token: &str, command: Value) -> Result<Value, String> {
-    let socket = socket.to_owned();
-    let token = token.to_owned();
-    let response = std::thread::spawn(move || send_browser_request(&socket, &token, command))
-        .join()
-        .map_err(|_| "browser IPC thread failed".to_owned())??;
-    if response.get("ok").and_then(Value::as_bool) == Some(false) {
-        return Err(response
-            .get("result")
-            .and_then(|result| result.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("embedded browser request failed")
-            .to_owned());
-    }
-    Ok(response.get("result").cloned().unwrap_or(Value::Null))
-}
-
-#[cfg(unix)]
-fn send_browser_request(socket: &Path, token: &str, command: Value) -> Result<Value, String> {
-    use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(socket).map_err(|error| error.to_string())?;
-    send_browser_request_on_stream(&mut stream, token, command)
-}
-
-#[cfg(windows)]
-fn send_browser_request(socket: &Path, token: &str, command: Value) -> Result<Value, String> {
-    use std::fs::OpenOptions;
-    let mut stream = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(socket)
-        .map_err(|error| error.to_string())?;
-    send_browser_request_on_stream(&mut stream, token, command)
-}
-
-fn send_browser_request_on_stream<S>(
-    stream: &mut S,
-    token: &str,
-    command: Value,
-) -> Result<Value, String>
-where
-    S: Write + io::Read,
-{
-    let request = json!({ "protocol_version": 1, "token": token, "id": Uuid::now_v7().to_string(), "command": command });
-    let mut bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
-    bytes.push(b'\n');
-    stream
-        .write_all(&bytes)
-        .map_err(|error| error.to_string())?;
-    let mut line = String::new();
-    io::BufReader::new(stream)
-        .read_line(&mut line)
-        .map_err(|error| error.to_string())?;
-    serde_json::from_str(&line).map_err(|error| error.to_string())
 }
 
 fn call_artifact(name: &str, args: &Value) -> Result<Vec<Value>, String> {
@@ -1670,33 +1390,6 @@ mod tests {
         create_template, create_visualization, inspect_artifact, tool_definitions,
     };
     use serde_json::Value;
-
-    #[test]
-    fn browser_tools_expose_route_discovery_and_navigation_controls() {
-        let tools = tool_definitions(ServerKind::Browser);
-        let names = tools
-            .iter()
-            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
-            .collect::<Vec<_>>();
-        for required in [
-            "browser_state",
-            "browser_navigate",
-            "browser_back",
-            "browser_forward",
-            "browser_reload",
-            "browser_snapshot",
-            "browser_visual_snapshot",
-            "browser_click",
-            "browser_fill",
-        ] {
-            assert!(names.contains(&required), "missing browser tool {required}");
-        }
-        let snapshot = tools
-            .iter()
-            .find(|tool| tool.get("name").and_then(Value::as_str) == Some("browser_snapshot"))
-            .expect("browser snapshot tool");
-        assert_eq!(snapshot["inputSchema"]["required"], serde_json::json!([]));
-    }
 
     #[test]
     fn artifact_tools_expose_all_bundled_productivity_capabilities() {

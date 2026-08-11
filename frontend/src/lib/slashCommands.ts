@@ -1,7 +1,6 @@
 export type SlashCommandId =
   | "agent"
   | "archive"
-  | "browser"
   | "compact"
   | "diff"
   | "fast"
@@ -134,12 +133,6 @@ export const slashCommands: readonly SlashCommand[] = [
     label: "任务状态",
     description: "查看当前任务、运行时和上下文状态",
     keywords: "status diagnostics runtime 状态 诊断",
-  },
-  {
-    id: "browser",
-    label: "打开浏览器",
-    description: "打开 OnPeople 内嵌浏览器",
-    keywords: "browser web cef 浏览器 网页",
   },
   {
     id: "terminal",

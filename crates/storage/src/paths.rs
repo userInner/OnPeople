@@ -9,8 +9,6 @@ pub struct DataPaths {
     pub database: PathBuf,
     pub journal: PathBuf,
     pub migration_backup: PathBuf,
-    pub browser_partition: PathBuf,
-    pub cef_profile: PathBuf,
     pub codex_home: PathBuf,
     pub secrets_namespace: String,
 }
@@ -31,8 +29,6 @@ impl DataPaths {
             database: root.join("onpeople.db"),
             journal: root.join("onpeople-migration.json"),
             migration_backup: root.join("migration-backups"),
-            browser_partition: root.join("Partitions").join("internal-agent-browser"),
-            cef_profile: root.join("cef-profile"),
             codex_home: root.join("codex-home"),
             secrets_namespace: secrets_namespace(&root),
             root,

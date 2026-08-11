@@ -2,8 +2,7 @@ use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Child, Command, ExitCode},
-    time::{Duration, Instant},
+    process::{Command, ExitCode},
 };
 
 fn main() -> ExitCode {
@@ -71,7 +70,7 @@ fn main() -> ExitCode {
         },
         Some("sign-macos-runtime") => match sign_macos_runtime() {
             Ok(()) => {
-                println!("signed macOS Browser Host runtime");
+                println!("signed macOS runtime sidecars");
                 ExitCode::SUCCESS
             }
             Err(error) => {
@@ -99,24 +98,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("smoke-browser-runtime") => {
-            let runtime_root = option_value(&mut args, "--runtime-root")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| workspace_root().join(".embedded-runtime"));
-            match smoke_browser_runtime(&runtime_root) {
-                Ok(()) => {
-                    println!(
-                        "OnPeople Browser Host smoke passed: {}",
-                        runtime_root.display()
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("xtask smoke-browser-runtime: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         Some("smoke-agent-runtime") => {
             let runtime_root = option_value(&mut args, "--runtime-root")
                 .map(PathBuf::from)
@@ -176,7 +157,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run -p xtask -- bindings [--check] | audit | stage-runtime [--platform P --arch A] | package-contents | sign-macos-runtime | package-msix | package-macos-zip | smoke-browser-runtime [--runtime-root DIR] | smoke-agent-runtime [--runtime-root DIR] | smoke-headless-runtime [--runtime-root DIR] | release-gate [--platform P --arch A --bundle-dir DIR] | clean-release"
+                "usage: cargo run -p xtask -- bindings [--check] | audit | stage-runtime [--platform P --arch A] | package-contents | sign-macos-runtime | package-msix | package-macos-zip | smoke-agent-runtime [--runtime-root DIR] | smoke-headless-runtime [--runtime-root DIR] | release-gate [--platform P --arch A --bundle-dir DIR] | clean-release"
             );
             ExitCode::from(2)
         }
@@ -240,7 +221,7 @@ fn stage_runtime(platform: &str, arch: &str) -> Result<PathBuf, String> {
     let bin = stage.join("bin");
     fs::create_dir_all(&bin).map_err(|error| error.to_string())?;
     let executable_suffix = if platform == "win32" { ".exe" } else { "" };
-    let components: [(&str, String, &[&str]); 5] = [
+    let components: [(&str, String, &[&str]); 4] = [
         (
             "codex",
             format!("codex{executable_suffix}"),
@@ -250,11 +231,6 @@ fn stage_runtime(platform: &str, arch: &str) -> Result<PathBuf, String> {
             "cua-driver",
             format!("cua-driver{executable_suffix}"),
             &["CUA_DRIVER_BINARY_SOURCE", "CUA_DRIVER_PATH"],
-        ),
-        (
-            "browser-host",
-            format!("onpeople-browser-host{executable_suffix}"),
-            &["ONPEOPLE_BROWSER_HOST_SOURCE"],
         ),
         (
             "mcp-host",
@@ -312,28 +288,12 @@ fn stage_runtime(platform: &str, arch: &str) -> Result<PathBuf, String> {
             fs::set_permissions(&target, permissions).map_err(|error| error.to_string())?;
         }
         verify_target_binary(&target, platform, arch, name)?;
-        let staged_target = if name == "browser-host" && platform == "darwin" {
-            let bundle_executable = stage_macos_browser_host_bundle(&root, &stage, &target, arch)?;
-            // macOS launches the complete nested Host.app. Do not ship a
-            // second standalone browser-host binary alongside it; that path
-            // bypasses the framework/helpers and is the source of the second
-            // Dock process seen in preview builds.
-            fs::remove_file(&target)
-                .map_err(|error| format!("remove duplicate macOS browser-host binary: {error}"))?;
-            bundle_executable
-        } else {
-            target.clone()
-        };
-        let mut entry = serde_json::json!({
+        let entry = serde_json::json!({
             "name": name,
             "source": source,
-            "target": staged_target.strip_prefix(&stage).map_err(|error| error.to_string())?,
-            "sha256": sha256(&staged_target)?,
+            "target": target.strip_prefix(&stage).map_err(|error| error.to_string())?,
+            "sha256": sha256(&target)?,
         });
-        if name == "browser-host" && platform == "win32" {
-            entry["runtime"] =
-                serde_json::Value::Array(stage_windows_cef_runtime(&root, &stage, arch)?);
-        }
         entries.push(entry);
     }
     let plugins = stage_bundled_plugins(&root, &stage)?;
@@ -417,287 +377,6 @@ fn stage_bundled_plugins(root: &Path, stage: &Path) -> Result<Vec<serde_json::Va
             .cmp(&right.get("target").and_then(serde_json::Value::as_str))
     });
     Ok(files)
-}
-
-fn stage_windows_cef_runtime(
-    root: &Path,
-    stage: &Path,
-    arch: &str,
-) -> Result<Vec<serde_json::Value>, String> {
-    let source = find_windows_cef_runtime(root, arch)?;
-    let target = stage.join("bin");
-    let mut copied = Vec::new();
-    copy_directory_files(&source, &target, stage, &mut copied)?;
-    let locales = source.join("locales");
-    if !locales.is_dir() {
-        return Err(format!(
-            "Windows CEF locales directory is missing: {}",
-            locales.display()
-        ));
-    }
-    copy_directory_files(&locales, &target.join("locales"), stage, &mut copied)?;
-    copied.sort_by(|left, right| {
-        left.get("target")
-            .and_then(serde_json::Value::as_str)
-            .cmp(&right.get("target").and_then(serde_json::Value::as_str))
-    });
-    validate_windows_cef_runtime(stage)?;
-    Ok(copied)
-}
-
-fn find_windows_cef_runtime(root: &Path, arch: &str) -> Result<PathBuf, String> {
-    if arch != "x64" {
-        return Err(format!("unsupported Windows CEF architecture: {arch}"));
-    }
-    if let Some(path) = env::var_os("ONPEOPLE_CEF_RUNTIME_SOURCE").map(PathBuf::from) {
-        if path.join("libcef.dll").is_file() {
-            return Ok(path);
-        }
-        return Err(format!(
-            "ONPEOPLE_CEF_RUNTIME_SOURCE is not a Windows CEF runtime: {}",
-            path.display()
-        ));
-    }
-    let build_root = release_dir(root).join("build");
-    walkdir::WalkDir::new(&build_root)
-        .max_depth(6)
-        .into_iter()
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry.file_type().is_dir()
-                && entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("cef_windows_")
-                && entry.path().join("libcef.dll").is_file()
-        })
-        .map(walkdir::DirEntry::into_path)
-        .ok_or_else(|| {
-            "missing Windows CEF runtime; build onpeople-browser-host on Windows or set ONPEOPLE_CEF_RUNTIME_SOURCE"
-                .to_owned()
-        })
-}
-
-fn copy_directory_files(
-    source: &Path,
-    target: &Path,
-    stage: &Path,
-    copied: &mut Vec<serde_json::Value>,
-) -> Result<(), String> {
-    fs::create_dir_all(target).map_err(|error| error.to_string())?;
-    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_file()
-        {
-            continue;
-        }
-        let destination = target.join(entry.file_name());
-        fs::copy(entry.path(), &destination).map_err(|error| {
-            format!(
-                "copy Windows CEF runtime {} to {}: {error}",
-                entry.path().display(),
-                destination.display()
-            )
-        })?;
-        copied.push(serde_json::json!({
-            "target": destination.strip_prefix(stage).map_err(|error| error.to_string())?,
-            "sha256": sha256(&destination)?,
-        }));
-    }
-    Ok(())
-}
-
-fn validate_windows_cef_runtime(stage: &Path) -> Result<(), String> {
-    let bin = stage.join("bin");
-    for name in [
-        "libcef.dll",
-        "chrome_elf.dll",
-        "icudtl.dat",
-        "resources.pak",
-        "chrome_100_percent.pak",
-        "chrome_200_percent.pak",
-        "v8_context_snapshot.bin",
-    ] {
-        if !bin.join(name).is_file() {
-            return Err(format!("Windows CEF runtime is missing bin/{name}"));
-        }
-    }
-    let locales = bin.join("locales");
-    let has_locale = locales
-        .read_dir()
-        .map_err(|error| format!("read Windows CEF locales: {error}"))?
-        .filter_map(Result::ok)
-        .any(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("pak"));
-    if !has_locale {
-        return Err("Windows CEF runtime contains no locale .pak files".to_owned());
-    }
-    Ok(())
-}
-
-fn stage_macos_browser_host_bundle(
-    root: &Path,
-    stage: &Path,
-    browser_host: &Path,
-    arch: &str,
-) -> Result<PathBuf, String> {
-    let app_name = "OnPeople Browser Host";
-    let app = stage.join(format!("{app_name}.app"));
-    let contents = app.join("Contents");
-    let executable = contents.join("MacOS").join(app_name);
-    fs::create_dir_all(contents.join("MacOS")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(contents.join("Frameworks")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(contents.join("Resources")).map_err(|error| error.to_string())?;
-    fs::copy(browser_host, &executable).map_err(|error| error.to_string())?;
-    set_executable(&executable)?;
-    write_macos_info_plist(
-        &contents,
-        app_name,
-        "com.userinner.onpeople.browser-host",
-        false,
-    )?;
-
-    let framework_source = find_macos_cef_framework(root, arch)?;
-    copy_dir_recursive(
-        &framework_source,
-        &contents
-            .join("Frameworks")
-            .join("Chromium Embedded Framework.framework"),
-    )?;
-    // CEF resolves the browser process resources from the main macOS app
-    // bundle. The framework package keeps the .pak/icudtl/locales files under
-    // its own Resources directory, so copy them into the nested host bundle
-    // as well. Without this, CEF can reach cef_initialize and trap in the
-    // resource loader before the browser IPC socket is available.
-    copy_dir_recursive(
-        &framework_source.join("Resources"),
-        &contents.join("Resources"),
-    )?;
-
-    for suffix in [
-        "Helper",
-        "Helper (GPU)",
-        "Helper (Renderer)",
-        "Helper (Plugin)",
-        "Helper (Alerts)",
-    ] {
-        let helper_name = format!("{app_name} {suffix}");
-        let helper_contents = contents
-            .join("Frameworks")
-            .join(format!("{helper_name}.app"))
-            .join("Contents");
-        fs::create_dir_all(helper_contents.join("MacOS")).map_err(|error| error.to_string())?;
-        fs::create_dir_all(helper_contents.join("Resources")).map_err(|error| error.to_string())?;
-        let helper_executable = helper_contents.join("MacOS").join(&helper_name);
-        fs::copy(browser_host, &helper_executable).map_err(|error| error.to_string())?;
-        set_executable(&helper_executable)?;
-        write_macos_info_plist(
-            &helper_contents,
-            &helper_name,
-            macos_helper_bundle_identifier(suffix),
-            true,
-        )?;
-    }
-    verify_target_binary(&executable, "darwin", arch, "browser-host bundle")?;
-    Ok(executable)
-}
-
-fn macos_helper_bundle_identifier(suffix: &str) -> &'static str {
-    // Chromium intentionally gives the generic and GPU helper variants the
-    // same stable application identity. Renderer, legacy plugin and alert
-    // service variants extend that identity. Changing these identifiers can
-    // make Chromium's same-signature child-process validation reject an
-    // otherwise correctly signed helper at runtime.
-    match suffix {
-        "Helper" | "Helper (GPU)" => "com.userinner.onpeople.browser-host.helper",
-        "Helper (Renderer)" => "com.userinner.onpeople.browser-host.helper.renderer",
-        "Helper (Plugin)" => "com.userinner.onpeople.browser-host.helper.plugin",
-        "Helper (Alerts)" => "com.userinner.onpeople.browser-host.helper.AlertNotificationService",
-        _ => panic!("unsupported CEF helper suffix: {suffix}"),
-    }
-}
-
-fn find_macos_cef_framework(root: &Path, arch: &str) -> Result<PathBuf, String> {
-    if let Some(path) = env::var_os("ONPEOPLE_CEF_FRAMEWORK_SOURCE").map(PathBuf::from) {
-        if path.join("Chromium Embedded Framework").is_file() {
-            return Ok(path);
-        }
-        return Err(format!(
-            "ONPEOPLE_CEF_FRAMEWORK_SOURCE is not a CEF framework: {}",
-            path.display()
-        ));
-    }
-    let architecture_directory = if arch == "arm64" {
-        "cef_macos_aarch64"
-    } else {
-        "cef_macos_x86_64"
-    };
-    let build_root = release_dir(root).join("build");
-    walkdir::WalkDir::new(&build_root)
-        .max_depth(5)
-        .into_iter()
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry.file_type().is_dir()
-                && entry.file_name() == "Chromium Embedded Framework.framework"
-                && entry.path().components().any(|component| {
-                    component.as_os_str() == std::ffi::OsStr::new(architecture_directory)
-                })
-        })
-        .map(|entry| entry.into_path())
-        .ok_or_else(|| {
-            format!("missing CEF framework for darwin-{arch}; set ONPEOPLE_CEF_FRAMEWORK_SOURCE")
-        })
-}
-
-fn write_macos_info_plist(
-    contents: &Path,
-    executable: &str,
-    identifier: &str,
-    helper: bool,
-) -> Result<(), String> {
-    // The CEF browser host is a background rendering sidecar.  Mark both the
-    // host and its Chromium helpers as agent applications so macOS does not
-    // expose a second Dock icon alongside the Tauri shell.
-    let agent_entry = "  <key>LSUIElement</key>\n  <true/>\n";
-    let bundle_name = if helper { executable } else { "OnPeople" };
-    let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-<plist version=\"1.0\">\n<dict>\n\
-  <key>CFBundleDevelopmentRegion</key>\n  <string>English</string>\n\
-  <key>CFBundleDisplayName</key>\n  <string>{executable}</string>\n\
-  <key>CFBundleExecutable</key>\n  <string>{executable}</string>\n\
-  <key>CFBundleIdentifier</key>\n  <string>{identifier}</string>\n\
-  <key>CFBundleInfoDictionaryVersion</key>\n  <string>6.0</string>\n\
-  <key>CFBundleName</key>\n  <string>{bundle_name}</string>\n\
-  <key>CrProductDirName</key>\n  <string>OnPeople</string>\n\
-  <key>CFBundlePackageType</key>\n  <string>APPL</string>\n\
-  <key>CFBundleShortVersionString</key>\n  <string>{}</string>\n\
-  <key>CFBundleVersion</key>\n  <string>{}</string>\n\
-  <key>LSMinimumSystemVersion</key>\n  <string>11.0</string>\n\
-{agent_entry}  <key>NSHighResolutionCapable</key>\n  <true/>\n\
-  <key>NSSupportsAutomaticGraphicsSwitching</key>\n  <true/>\n\
-</dict>\n</plist>\n",
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_VERSION"),
-    );
-    fs::write(contents.join("Info.plist"), plist).map_err(|error| error.to_string())
-}
-
-fn set_executable(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(path)
-            .map_err(|error| error.to_string())?
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
-    }
-    Ok(())
 }
 
 fn sha256(path: &Path) -> Result<String, String> {
@@ -815,13 +494,7 @@ fn package_contents() -> Result<(), String> {
         .get("components")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "runtime manifest has no components".to_owned())?;
-    for name in [
-        "codex",
-        "cua-driver",
-        "browser-host",
-        "mcp-host",
-        "headless",
-    ] {
+    for name in ["codex", "cua-driver", "mcp-host", "headless"] {
         let component = components
             .iter()
             .find(|component| {
@@ -851,58 +524,15 @@ fn package_contents() -> Result<(), String> {
         if sha256(&path)? != expected {
             return Err(format!("staged runtime checksum mismatch: {name}"));
         }
-        if name == "browser-host" && expected_platform == "darwin" {
-            validate_macos_browser_host_bundle(&path)?;
-        }
-        if name == "browser-host" && expected_platform == "win32" {
-            let runtime = component
-                .get("runtime")
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| "Windows browser-host manifest has no CEF runtime".to_owned())?;
-            if runtime.is_empty() {
-                return Err("Windows browser-host CEF runtime is empty".to_owned());
-            }
-            for file in runtime {
-                let target = file
-                    .get("target")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| "Windows CEF manifest target is missing".to_owned())?;
-                let path = stage.join(target);
-                let canonical_path = path
-                    .canonicalize()
-                    .map_err(|error| format!("resolve Windows CEF runtime {target}: {error}"))?;
-                if !canonical_path.is_file() || !canonical_path.starts_with(&canonical_stage) {
-                    return Err(format!("untrusted Windows CEF runtime target: {target}"));
-                }
-                let expected = file
-                    .get("sha256")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| format!("Windows CEF runtime checksum is missing: {target}"))?;
-                if sha256(&canonical_path)? != expected {
-                    return Err(format!("Windows CEF runtime checksum mismatch: {target}"));
-                }
-            }
-            validate_windows_cef_runtime(&stage)?;
-        }
-    }
-    if expected_platform == "darwin" && stage.join("bin/onpeople-browser-host").exists() {
-        return Err("macOS runtime contains duplicate standalone onpeople-browser-host".to_owned());
     }
     let names = components
         .iter()
         .filter_map(|component| component.get("name").and_then(serde_json::Value::as_str))
         .collect::<Vec<_>>();
-    if names.len() != 5
-        || names.iter().any(|name| {
-            ![
-                "codex",
-                "cua-driver",
-                "browser-host",
-                "mcp-host",
-                "headless",
-            ]
-            .contains(name)
-        })
+    if names.len() != 4
+        || names
+            .iter()
+            .any(|name| !["codex", "cua-driver", "mcp-host", "headless"].contains(name))
     {
         return Err("runtime manifest contains an unexpected component set".to_owned());
     }
@@ -948,127 +578,6 @@ fn package_contents() -> Result<(), String> {
             return Err(format!("bundled plugin checksum mismatch: {target}"));
         }
     }
-    Ok(())
-}
-
-struct SmokeChild(Option<Child>);
-
-impl SmokeChild {
-    fn child_mut(&mut self) -> Result<&mut Child, String> {
-        self.0
-            .as_mut()
-            .ok_or_else(|| "Browser Host smoke process is unavailable".to_owned())
-    }
-
-    fn stop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-impl Drop for SmokeChild {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-fn smoke_browser_runtime(runtime_root: &Path) -> Result<(), String> {
-    use onpeople_browser_host::{BrowserCommand, BrowserIpcClient, IpcConfig};
-
-    let executable = if cfg!(target_os = "macos") {
-        runtime_root.join("OnPeople Browser Host.app/Contents/MacOS/OnPeople Browser Host")
-    } else if cfg!(windows) {
-        runtime_root.join("bin/onpeople-browser-host.exe")
-    } else {
-        return Err("Browser Host release smoke supports macOS and Windows only".to_owned());
-    };
-    if !executable.is_file() {
-        return Err(format!(
-            "Browser Host smoke executable is missing: {}",
-            executable.display()
-        ));
-    }
-    let profile = tempfile::tempdir().map_err(|error| error.to_string())?;
-    let profile_path = profile.path().join("cef-profile");
-    fs::create_dir_all(&profile_path).map_err(|error| error.to_string())?;
-    let config = IpcConfig::for_profile(&profile_path);
-    let mut command = Command::new(&executable);
-    command
-        .env("ONPEOPLE_CEF_PROFILE", &profile_path)
-        .env("ONPEOPLE_BROWSER_IPC_TOKEN", &config.token)
-        .env(
-            "ONPEOPLE_BROWSER_IPC_PROTOCOL",
-            config.protocol_version.to_string(),
-        )
-        .env("ONPEOPLE_BROWSER_IPC_SOCKET", &config.address.unix_socket)
-        .env("ONPEOPLE_BROWSER_IPC_PIPE", &config.address.windows_pipe);
-    let child = command
-        .spawn()
-        .map_err(|error| format!("start Browser Host smoke process: {error}"))?;
-    let mut child = SmokeChild(Some(child));
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|error| format!("create Browser Host smoke runtime: {error}"))?;
-    let client = BrowserIpcClient::with_timeout(config, Duration::from_secs(2));
-    runtime.block_on(async {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            if let Some(status) = child
-                .child_mut()?
-                .try_wait()
-                .map_err(|error| format!("read Browser Host smoke status: {error}"))?
-            {
-                return Err(format!(
-                    "Browser Host exited before CEF readiness with {status}"
-                ));
-            }
-            if client
-                .request(BrowserCommand::Ping)
-                .await
-                .ok()
-                .and_then(|value| value.get("ready").and_then(serde_json::Value::as_bool))
-                == Some(true)
-            {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err("Browser Host did not report CEF readiness within 60s".to_owned());
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-
-        let route_id = format!("smoke-{}", uuid::Uuid::now_v7());
-        client
-            .request(BrowserCommand::CreateRoute {
-                route_id: route_id.clone(),
-                thread_id: "release-smoke".to_owned(),
-                url: "about:blank".to_owned(),
-            })
-            .await
-            .map_err(|error| format!("create Browser Host smoke route: {error}"))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if client
-                .request(BrowserCommand::DomSnapshot {
-                    route_id: route_id.clone(),
-                })
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err("CEF route did not produce a DOM snapshot within 30s".to_owned());
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        let _ = client
-            .request(BrowserCommand::CloseRoute { route_id })
-            .await;
-        Ok(())
-    })?;
-    child.stop();
     Ok(())
 }
 
@@ -1210,6 +719,7 @@ fn sign_macos_runtime() -> Result<(), String> {
     if identity.trim().is_empty() {
         return Err("macOS signing identity is empty".to_owned());
     }
+
     const TEAM_ID: &str = "6K4S66PVRQ";
     let root = workspace_root();
     let runtime = root.join(".embedded-runtime");
@@ -1220,6 +730,7 @@ fn sign_macos_runtime() -> Result<(), String> {
                 .to_owned(),
         );
     }
+
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let staged_runtime = temporary.path().join(".embedded-runtime");
     run_checked(
@@ -1232,31 +743,7 @@ fn sign_macos_runtime() -> Result<(), String> {
             .arg(&staged_runtime),
         "clear signing staging xattrs",
     )?;
-    let app = staged_runtime.join("OnPeople Browser Host.app");
-    let contents = app.join("Contents");
-    let framework = contents.join("Frameworks/Chromium Embedded Framework.framework");
-    if !framework.is_dir() {
-        return Err(format!("CEF Framework is missing: {}", framework.display()));
-    }
-    let helper_entitlements = root.join("packaging/macos/cef-helper.entitlements");
-    let sign = |path: &Path, label: &str, entitlements: Option<&Path>| -> Result<(), String> {
-        let mut command = Command::new("codesign");
-        command
-            .args(["--force", "--options", "runtime", "--timestamp", "--sign"])
-            .arg(&identity);
-        if let Some(entitlements) = entitlements {
-            command.args(["--entitlements"]).arg(entitlements);
-        }
-        command.arg(path);
-        run_checked(&mut command, label)
-    };
 
-    // These binaries are shipped as standalone runtime tools. Cua Driver's
-    // upstream signature is valid inside CuaDriver.app, but extracting only
-    // its executable leaves a signature that still references the missing
-    // app Info.plist. Re-sign the standalone copy together with our own MCP
-    // host and headless CLI so each has a valid Developer ID identity, hardened runtime, and
-    // secure timestamp in the final OnPeople bundle.
     let signed_sidecars = [
         (staged_runtime.join("bin/cua-driver"), "Cua Driver sidecar"),
         (
@@ -1272,107 +759,34 @@ fn sign_macos_runtime() -> Result<(), String> {
         if !path.is_file() {
             return Err(format!("{label} is missing: {}", path.display()));
         }
-        sign(path, &format!("codesign {label}"), None)?;
-    }
-
-    // Sign from the inside out. The outer Host.app must only be signed after
-    // the framework and every Chromium helper has a valid sealed signature.
-    for library in [
-        "libEGL.dylib",
-        "libvulkan.dylib",
-        "libcef_sandbox.dylib",
-        "libvk_swiftshader.dylib",
-        "libGLESv2.dylib",
-    ] {
-        let path = framework.join("Libraries").join(library);
-        if path.is_file() {
-            sign(&path, &format!("codesign CEF {library}"), None)?;
-        }
-    }
-    sign(&framework, "codesign CEF Framework", None)?;
-    let helper_suffixes = [
-        "Helper",
-        "Helper (GPU)",
-        "Helper (Renderer)",
-        "Helper (Plugin)",
-        "Helper (Alerts)",
-    ];
-    for suffix in helper_suffixes {
-        let helper_name = format!("OnPeople Browser Host {suffix}");
-        let executable = contents.join(format!(
-            "Frameworks/{helper_name}.app/Contents/MacOS/{helper_name}"
-        ));
-        sign(
-            &executable,
-            &format!("codesign {helper_name} executable"),
-            Some(&helper_entitlements),
+        run_checked(
+            Command::new("codesign")
+                .args([
+                    "--force",
+                    "--options",
+                    "runtime",
+                    "--timestamp",
+                    "--sign",
+                    &identity,
+                ])
+                .arg(path),
+            &format!("codesign {label}"),
         )?;
-    }
-    for suffix in helper_suffixes {
-        let helper_name = format!("OnPeople Browser Host {suffix}");
-        let helper = contents.join(format!("Frameworks/{helper_name}.app"));
-        sign(
-            &helper,
-            &format!("codesign {helper_name}"),
-            Some(&helper_entitlements),
+        let output = run_capture(
+            Command::new("codesign")
+                .args(["-d", "--verbose=4"])
+                .arg(path),
+            &format!("codesign details {label}"),
         )?;
-    }
-    sign(
-        &contents.join("MacOS/OnPeople Browser Host"),
-        "codesign OnPeople Browser Host executable",
-        None,
-    )?;
-    sign(&app, "codesign OnPeople Browser Host.app", None)?;
-    let mut verify = Command::new("codesign");
-    verify.args(["--verify", "--deep", "--strict", "--verbose=2"]);
-    verify.arg(&app);
-    run_checked(&mut verify, "verify signed Browser Host.app")?;
-
-    let signed_components = signed_sidecars
-        .iter()
-        .map(|(path, label)| (path.clone(), (*label).to_owned()))
-        .chain(std::iter::once((
-            framework.clone(),
-            "CEF Framework".to_owned(),
-        )))
-        .chain(helper_suffixes.into_iter().flat_map(|suffix| {
-            let name = format!("OnPeople Browser Host {suffix}");
-            let helper = contents.join(format!("Frameworks/{name}.app"));
-            [
-                (
-                    helper.join(format!("Contents/MacOS/{name}")),
-                    format!("{name} executable"),
-                ),
-                (helper, name),
-            ]
-        }))
-        .chain(std::iter::once((
-            contents.join("MacOS/OnPeople Browser Host"),
-            "Browser Host executable".to_owned(),
-        )))
-        .chain(std::iter::once((
-            app.clone(),
-            "Browser Host.app".to_owned(),
-        )));
-    for (path, label) in signed_components {
-        let mut details = Command::new("codesign");
-        details.args(["-d", "--verbose=4"]).arg(&path);
-        let output = run_capture(&mut details, &format!("codesign details {label}"))?;
-        let standalone_sidecar = label.ends_with("sidecar");
         if !output.contains(&format!("TeamIdentifier={TEAM_ID}"))
             || output.contains("Signature=adhoc")
-            || (!standalone_sidecar && output.contains("Info.plist=not bound"))
         {
             return Err(format!(
-                "{label} is not signed by required Developer ID Team {TEAM_ID}:\n{}",
-                output.trim()
+                "{label} is not signed by required Developer ID Team {TEAM_ID}"
             ));
         }
     }
 
-    // Signing mutates the Mach-O bytes, so the checksum written by
-    // `stage-runtime` is no longer valid. Refresh it before Tauri embeds the
-    // runtime; otherwise the packaged app rejects its correctly signed host.
     let manifest_path = staged_runtime.join("manifest.json");
     let mut manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(&manifest_path).map_err(|error| format!("read runtime manifest: {error}"))?,
@@ -1383,7 +797,6 @@ fn sign_macos_runtime() -> Result<(), String> {
         .and_then(serde_json::Value::as_array_mut)
         .ok_or_else(|| "runtime manifest has no components array".to_owned())?;
     for (name, path) in [
-        ("browser-host", contents.join("MacOS/OnPeople Browser Host")),
         ("cua-driver", staged_runtime.join("bin/cua-driver")),
         ("mcp-host", staged_runtime.join("bin/onpeople-mcp-host")),
         ("headless", staged_runtime.join("bin/onpeople")),
@@ -1403,9 +816,6 @@ fn sign_macos_runtime() -> Result<(), String> {
     )
     .map_err(|error| format!("write runtime manifest: {error}"))?;
 
-    // Copy the completed, immutable signed tree only after every check and
-    // the post-signing manifest update succeeded. A Documents/File Provider
-    // checkout must point this at an external release staging directory.
     let signed_runtime = signed_runtime_override.unwrap_or_else(|| runtime.clone());
     if !signed_runtime.is_absolute()
         || signed_runtime.file_name().and_then(|name| name.to_str()) != Some(".embedded-runtime")
@@ -1428,6 +838,7 @@ fn sign_macos_runtime() -> Result<(), String> {
         Command::new("ditto").arg(&staged_runtime).arg(&signed_copy),
         "copy completed signed runtime",
     )?;
+
     let previous_backup =
         output_parent.join(format!(".embedded-runtime.previous-{}", std::process::id()));
     let had_previous = signed_runtime.exists();
@@ -1443,25 +854,25 @@ fn sign_macos_runtime() -> Result<(), String> {
     if had_previous {
         fs::remove_dir_all(&previous_backup).map_err(|error| error.to_string())?;
     }
-    // Documents/File Provider may attach Finder metadata while the already
-    // signed tree is copied back. Extended attributes are not part of the
-    // runtime payload or manifest hash, but codesign correctly rejects this
-    // detritus. Clear it at the destination and verify the committed tree,
-    // so a valid temporary staging result cannot mask an invalid artifact.
     run_checked(
         Command::new("xattr")
             .args(["-c", "-r"])
             .arg(&signed_runtime),
         "clear committed runtime xattrs",
     )?;
-    let mut committed_verify = Command::new("codesign");
-    committed_verify
-        .args(["--verify", "--deep", "--strict", "--verbose=2"])
-        .arg(signed_runtime.join("OnPeople Browser Host.app"));
-    run_checked(
-        &mut committed_verify,
-        "verify committed signed Browser Host.app",
-    )?;
+    for (_, label) in &signed_sidecars {
+        let file_name = match *label {
+            "Cua Driver sidecar" => "cua-driver",
+            "OnPeople MCP Host sidecar" => "onpeople-mcp-host",
+            _ => "onpeople",
+        };
+        run_checked(
+            Command::new("codesign")
+                .args(["--verify", "--strict", "--verbose=2"])
+                .arg(signed_runtime.join("bin").join(file_name)),
+            &format!("verify committed {label}"),
+        )?;
+    }
     println!("signed runtime output: {}", signed_runtime.display());
     Ok(())
 }
@@ -1471,57 +882,6 @@ fn path_is_file_provider_workspace(path: &Path) -> bool {
     text.contains("/Documents/")
         || text.contains("/Library/Mobile Documents/")
         || text.contains("/Library/CloudStorage/")
-}
-
-fn validate_macos_browser_host_bundle(executable: &Path) -> Result<(), String> {
-    let contents = executable
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| "browser-host bundle executable has an invalid path".to_owned())?;
-    validate_macos_bundle_identifier(contents, "com.userinner.onpeople.browser-host")?;
-    let framework = contents
-        .join("Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework");
-    if !framework.is_file() {
-        return Err(format!(
-            "staged browser-host is missing CEF Framework: {}",
-            framework.display()
-        ));
-    }
-    for suffix in [
-        "Helper",
-        "Helper (GPU)",
-        "Helper (Renderer)",
-        "Helper (Plugin)",
-        "Helper (Alerts)",
-    ] {
-        let helper_name = format!("OnPeople Browser Host {suffix}");
-        let helper_contents = contents
-            .join("Frameworks")
-            .join(format!("{helper_name}.app/Contents"));
-        validate_macos_bundle_identifier(&helper_contents, macos_helper_bundle_identifier(suffix))?;
-        let helper = helper_contents.join("MacOS").join(&helper_name);
-        if !helper.is_file() {
-            return Err(format!(
-                "staged browser-host is missing CEF helper: {}",
-                helper.display()
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_macos_bundle_identifier(contents: &Path, expected: &str) -> Result<(), String> {
-    let plist_path = contents.join("Info.plist");
-    let plist = fs::read_to_string(&plist_path)
-        .map_err(|error| format!("read {}: {error}", plist_path.display()))?;
-    let marker = format!("<key>CFBundleIdentifier</key>\n  <string>{expected}</string>");
-    if !plist.contains(&marker) {
-        return Err(format!(
-            "unstable macOS bundle identifier in {}; expected {expected}",
-            plist_path.display()
-        ));
-    }
-    Ok(())
 }
 
 fn package_msix() -> Result<PathBuf, String> {
@@ -1577,17 +937,19 @@ fn package_msix() -> Result<PathBuf, String> {
     fs::write(package_dir.join("AppxManifest.xml"), manifest)
         .map_err(|error| format!("write MSIX manifest: {error}"))?;
     if !package_dir
-        .join(".embedded-runtime/bin/onpeople-browser-host.exe")
+        .join(".embedded-runtime/bin/onpeople.exe")
         .is_file()
         || !package_dir
-            .join(".embedded-runtime/bin/onpeople.exe")
+            .join(".embedded-runtime/bin/onpeople-mcp-host.exe")
             .is_file()
         || !package_dir
-            .join(".embedded-runtime/bin/libcef.dll")
+            .join(".embedded-runtime/bin/codex.exe")
             .is_file()
-        || !package_dir.join(".embedded-runtime/bin/locales").is_dir()
+        || !package_dir
+            .join(".embedded-runtime/bin/cua-driver.exe")
+            .is_file()
     {
-        return Err("MSIX staging is missing the embedded Windows CEF runtime".to_owned());
+        return Err("MSIX staging is missing required embedded runtime tools".to_owned());
     }
 
     let output = bundle_dir.join(format!("OnPeople_{version}_x64.msix"));
@@ -1858,7 +1220,6 @@ fn verify_windows_release_bundle(root: &Path, artifacts: &[PathBuf]) -> Result<(
         let sign_tool = env::var("SIGNTOOL").unwrap_or_else(|_| "signtool.exe".to_owned());
         let owned_binaries = [
             release_dir(root).join("onpeople-tauri.exe"),
-            root.join(".embedded-runtime/bin/onpeople-browser-host.exe"),
             root.join(".embedded-runtime/bin/onpeople-mcp-host.exe"),
             root.join(".embedded-runtime/bin/onpeople.exe"),
         ];
@@ -1907,75 +1268,37 @@ fn verify_macos_release_bundle(bundle_dir: &Path) -> Result<(), String> {
     if !app_info.contains("<key>NSMicrophoneUsageDescription</key>") {
         return Err("OnPeople.app Info.plist has no microphone usage description".to_owned());
     }
+
     let runtime_root = app.join("Contents/Resources/.embedded-runtime");
-    let host_app = runtime_root.join("OnPeople Browser Host.app");
-    if !host_app.is_dir() {
-        return Err(format!(
-            "final app is missing Browser Host.app: {}",
-            host_app.display()
-        ));
+    for name in ["codex", "cua-driver", "mcp-host", "headless"] {
+        verify_runtime_manifest_component(&runtime_root, name)?;
     }
-    if runtime_root.join("bin/onpeople-browser-host").exists() {
-        return Err("final macOS app contains duplicate standalone browser-host".to_owned());
-    }
-    verify_runtime_manifest_component(&runtime_root, "browser-host")?;
-    verify_runtime_manifest_component(&runtime_root, "headless")?;
-    let info_plist = host_app.join("Contents/Info.plist");
-    if !info_plist.is_file() {
-        return Err("Browser Host.app has no Info.plist".to_owned());
-    }
-    let contents = host_app.join("Contents");
-    validate_macos_browser_host_bundle(&contents.join("MacOS/OnPeople Browser Host"))?;
-    let framework = contents.join("Frameworks/Chromium Embedded Framework.framework");
-    let mut signed_components = vec![
-        (app.clone(), "OnPeople.app".to_owned()),
-        (host_app.clone(), "Browser Host.app".to_owned()),
-        (framework, "CEF Framework".to_owned()),
-        (
-            contents.join("MacOS/OnPeople Browser Host"),
-            "Browser Host executable".to_owned(),
-        ),
+    let signed_components = [
+        (app.clone(), "OnPeople.app"),
         (
             runtime_root.join("bin/onpeople"),
-            "OnPeople headless sidecar".to_owned(),
+            "OnPeople headless sidecar",
         ),
         (
             runtime_root.join("bin/onpeople-mcp-host"),
-            "OnPeople MCP Host sidecar".to_owned(),
+            "OnPeople MCP Host sidecar",
         ),
-        (
-            runtime_root.join("bin/cua-driver"),
-            "Cua Driver sidecar".to_owned(),
-        ),
+        (runtime_root.join("bin/cua-driver"), "Cua Driver sidecar"),
     ];
-    for suffix in [
-        "Helper",
-        "Helper (GPU)",
-        "Helper (Renderer)",
-        "Helper (Plugin)",
-        "Helper (Alerts)",
-    ] {
-        let name = format!("OnPeople Browser Host {suffix}");
-        let helper = contents.join(format!("Frameworks/{name}.app"));
-        signed_components.push((helper.clone(), format!("{name}.app")));
-        signed_components.push((
-            helper.join(format!("Contents/MacOS/{name}")),
-            format!("{name} executable"),
-        ));
-    }
     for (path, label) in &signed_components {
-        let mut verify = Command::new("codesign");
-        verify.args(["--verify", "--deep", "--strict", "--verbose=2"]);
-        verify.arg(path);
-        run_checked(&mut verify, &format!("codesign verify {label}"))?;
-
-        let mut details = Command::new("codesign");
-        details.args(["-d", "--verbose=4"]);
-        details.arg(path);
-        let output = run_capture(&mut details, &format!("codesign details {label}"))?;
-        let standalone_sidecar = label.ends_with("sidecar");
+        run_checked(
+            Command::new("codesign")
+                .args(["--verify", "--deep", "--strict", "--verbose=2"])
+                .arg(path),
+            &format!("codesign verify {label}"),
+        )?;
+        let output = run_capture(
+            Command::new("codesign")
+                .args(["-d", "--verbose=4"])
+                .arg(path),
+            &format!("codesign details {label}"),
+        )?;
         if output.contains("Signature=adhoc")
-            || (!standalone_sidecar && output.contains("Info.plist=not bound"))
             || output.contains("flags=0x2(adhoc)")
             || !output.contains(&format!("TeamIdentifier={TEAM_ID}"))
         {
@@ -1984,42 +1307,27 @@ fn verify_macos_release_bundle(bundle_dir: &Path) -> Result<(), String> {
             ));
         }
     }
-    let mut app_entitlements = Command::new("codesign");
-    app_entitlements
-        .args(["-d", "--entitlements", ":-"])
-        .arg(&app);
-    let output = run_capture(&mut app_entitlements, "read OnPeople.app entitlements")?;
+
+    let output = run_capture(
+        Command::new("codesign")
+            .args(["-d", "--entitlements", ":-"])
+            .arg(&app),
+        "read OnPeople.app entitlements",
+    )?;
     if !output.contains("<key>com.apple.security.device.audio-input</key>") {
         return Err("OnPeople.app is missing the signed audio-input entitlement".to_owned());
     }
-    for suffix in [
-        "Helper",
-        "Helper (GPU)",
-        "Helper (Renderer)",
-        "Helper (Plugin)",
-        "Helper (Alerts)",
-    ] {
-        let name = format!("OnPeople Browser Host {suffix}");
-        let helper = contents.join(format!("Frameworks/{name}.app"));
-        let mut entitlements = Command::new("codesign");
-        entitlements
-            .args(["-d", "--entitlements", ":-"])
-            .arg(helper);
-        let output = run_capture(&mut entitlements, &format!("read {name} entitlements"))?;
-        if output.contains("keychain-access-groups") {
-            return Err(format!("{name} must not carry Keychain entitlements"));
-        }
-    }
-    let mut spctl = Command::new("spctl");
-    spctl.args(["--assess", "--type", "execute", "--verbose=4"]);
-    spctl.arg(&app);
-    run_checked(&mut spctl, "spctl assess OnPeople.app")?;
-    let mut stapler = Command::new("stapler");
-    stapler.args(["validate"]);
-    stapler.arg(&app);
-    run_checked(&mut stapler, "stapler validate OnPeople.app")
+    run_checked(
+        Command::new("spctl")
+            .args(["--assess", "--type", "execute", "--verbose=4"])
+            .arg(&app),
+        "spctl assess OnPeople.app",
+    )?;
+    run_checked(
+        Command::new("stapler").args(["validate"]).arg(&app),
+        "stapler validate OnPeople.app",
+    )
 }
-
 fn verify_runtime_manifest_component(runtime_root: &Path, name: &str) -> Result<(), String> {
     let canonical_root = runtime_root
         .canonicalize()
@@ -2147,19 +1455,18 @@ fn compare_dirs(expected: &Path, actual: &Path) -> Result<(), String> {
 
 fn audit() -> Result<(), String> {
     let root = workspace_root();
-    // The five legacy Pet commands were intentionally removed from the final
-    // product. Keep this count synchronized with the frozen typed production
-    // contract so an accidental command addition or removal fails the audit.
-    if onpeople_types::COMMAND_SPECS.len() != 162 {
+    // Keep this count synchronized with the frozen typed production contract
+    // after removing the embedded-browser command surface.
+    if onpeople_types::COMMAND_SPECS.len() != 140 {
         return Err(format!(
-            "command contract count is {}, expected 162",
+            "command contract count is {}, expected 140",
             onpeople_types::COMMAND_SPECS.len()
         ));
     }
     // The legacy Pet event was removed together with the Pet UI/runtime.
-    if onpeople_types::EVENT_SPECS.len() != 17 {
+    if onpeople_types::EVENT_SPECS.len() != 13 {
         return Err(format!(
-            "event contract count is {}, expected 17",
+            "event contract count is {}, expected 13",
             onpeople_types::EVENT_SPECS.len()
         ));
     }
@@ -2192,7 +1499,6 @@ fn audit() -> Result<(), String> {
     }
     for required in [
         "electron-spike/main.mjs",
-        "electron-spike/browser-controller.mjs",
         "electron-spike/shell-adapter.mjs",
         "crates/desktop-host/src/main.rs",
     ] {
@@ -2274,18 +1580,6 @@ fn audit() -> Result<(), String> {
 
     let shell =
         fs::read_to_string(root.join("src-tauri/src/lib.rs")).map_err(|error| error.to_string())?;
-    let browser_host = fs::read_to_string(root.join("crates/browser-host/src/cef_runtime.rs"))
-        .map_err(|error| error.to_string())?;
-    for forbidden in [
-        ["use", "mock", "keychain"].join("-"),
-        ["ONPEOPLE", "CEF", "USE", "MOCK", "KEYCHAIN"].join("_"),
-    ] {
-        if shell.contains(&forbidden) || browser_host.contains(&forbidden) {
-            return Err(format!(
-                "production browser source contains forbidden Keychain fallback: {forbidden}"
-            ));
-        }
-    }
     for spec in onpeople_types::COMMAND_SPECS {
         let command_literal = format!("\"{}\"", spec.command);
         let native_function = format!("fn {}", spec.command);
@@ -2334,11 +1628,7 @@ fn audit() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        copy_directory_files, macos_helper_bundle_identifier, path_is_file_provider_workspace,
-        validate_macos_bundle_identifier, validate_windows_cef_runtime, workspace_root,
-        write_macos_info_plist,
-    };
+    use super::{path_is_file_provider_workspace, workspace_root};
 
     #[test]
     fn macos_bundle_declares_signed_microphone_access() {
@@ -2354,76 +1644,6 @@ mod tests {
         let config = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json"))
             .expect("read Tauri config");
         assert!(config.contains("Developer ID Application: Happy Metaverse Internet Technology"));
-    }
-
-    #[test]
-    fn generated_browser_bundle_identifiers_are_stable() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let host = temporary.path().join("host/Contents");
-        let renderer = temporary.path().join("renderer/Contents");
-        std::fs::create_dir_all(&host).expect("host contents");
-        std::fs::create_dir_all(&renderer).expect("renderer contents");
-
-        write_macos_info_plist(
-            &host,
-            "OnPeople Browser Host",
-            "com.userinner.onpeople.browser-host",
-            false,
-        )
-        .expect("write host plist");
-        write_macos_info_plist(
-            &renderer,
-            "OnPeople Browser Host Helper (Renderer)",
-            macos_helper_bundle_identifier("Helper (Renderer)"),
-            true,
-        )
-        .expect("write helper plist");
-
-        validate_macos_bundle_identifier(&host, "com.userinner.onpeople.browser-host")
-            .expect("stable host identifier");
-        validate_macos_bundle_identifier(
-            &renderer,
-            macos_helper_bundle_identifier("Helper (Renderer)"),
-        )
-        .expect("stable helper identifier");
-        assert_eq!(
-            macos_helper_bundle_identifier("Helper"),
-            macos_helper_bundle_identifier("Helper (GPU)")
-        );
-        assert!(validate_macos_bundle_identifier(&host, "onpeople_browser_host-random").is_err());
-    }
-
-    #[test]
-    fn stages_complete_windows_cef_runtime() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let source = temporary.path().join("source");
-        let stage = temporary.path().join("stage");
-        std::fs::create_dir_all(source.join("locales")).expect("CEF source");
-        for name in [
-            "libcef.dll",
-            "chrome_elf.dll",
-            "icudtl.dat",
-            "resources.pak",
-            "chrome_100_percent.pak",
-            "chrome_200_percent.pak",
-            "v8_context_snapshot.bin",
-        ] {
-            std::fs::write(source.join(name), name).expect("CEF file");
-        }
-        std::fs::write(source.join("locales/en-US.pak"), b"locale").expect("CEF locale");
-        let mut copied = Vec::new();
-        copy_directory_files(&source, &stage.join("bin"), &stage, &mut copied)
-            .expect("copy CEF files");
-        copy_directory_files(
-            &source.join("locales"),
-            &stage.join("bin/locales"),
-            &stage,
-            &mut copied,
-        )
-        .expect("copy CEF locales");
-
-        validate_windows_cef_runtime(&stage).expect("complete Windows CEF runtime");
-        assert_eq!(copied.len(), 8);
     }
 
     #[test]

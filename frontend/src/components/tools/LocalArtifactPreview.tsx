@@ -17,7 +17,7 @@ import type { LocalArtifactPreview } from "../../types";
 import { IconButton } from "../IconButton";
 import { MarkdownMessage } from "../MarkdownMessage";
 
-export function LocalArtifactBrowserPreview() {
+export function LocalArtifactPreview() {
   const request = useWorkbenchStore((state) => state.localArtifactPreview);
   const close = useWorkbenchStore((state) => state.closeLocalArtifact);
   const [preview, setPreview] = useState<LocalArtifactPreview | null>(null);
@@ -56,9 +56,9 @@ export function LocalArtifactBrowserPreview() {
   };
 
   return (
-    <div className="browser-local-preview" aria-label={`预览文件 ${name}`}>
-      <div className="browser-file-tab-strip">
-        <div className="browser-file-tab" role="tab" aria-selected="true">
+    <div className="local-artifact-preview" aria-label={`预览文件 ${name}`}>
+      <div className="local-artifact-tab-strip">
+        <div className="local-artifact-tab" role="tab" aria-selected="true">
           {previewIcon(preview)}
           <span>{name}</span>
           <small>{formatFileSize(preview?.size)}</small>
@@ -67,8 +67,8 @@ export function LocalArtifactBrowserPreview() {
           </button>
         </div>
       </div>
-      <div className="browser-toolbar browser-file-toolbar">
-        <div className="browser-address browser-file-address" title={path}>
+      <div className="local-artifact-toolbar">
+        <div className="local-artifact-address" title={path}>
           {previewIcon(preview)}
           <strong>{path}</strong>
           <span>{extension}</span>
@@ -84,14 +84,14 @@ export function LocalArtifactBrowserPreview() {
           onClick={openWithSystem}
         />
       </div>
-      <div className="browser-file-surface">
+      <div className="local-artifact-surface">
         {loading ? (
-          <div className="browser-file-status" role="status">
+          <div className="local-artifact-status" role="status">
             <LoaderCircle className="spin" size={18} />
             <span>正在读取 {name}</span>
           </div>
         ) : error ? (
-          <div className="browser-file-status is-error" role="alert">
+          <div className="local-artifact-status is-error" role="alert">
             <File size={24} />
             <strong>无法在 OnPeople 中预览</strong>
             <span>{error}</span>
@@ -124,7 +124,7 @@ function LocalArtifactPreviewBody({
   if (!preview) return null;
   if (preview.kind === "image" && preview.dataUrl) {
     return (
-      <div className="browser-file-image">
+      <div className="local-artifact-image">
         <img src={preview.dataUrl} alt={text(preview.name, "图片预览")} />
       </div>
     );
@@ -132,7 +132,7 @@ function LocalArtifactPreviewBody({
   if (preview.kind === "pdf" && preview.dataUrl) {
     return (
       <iframe
-        className="browser-file-pdf"
+        className="local-artifact-pdf"
         src={preview.dataUrl}
         title={text(preview.name, "PDF 预览")}
       />
@@ -140,7 +140,7 @@ function LocalArtifactPreviewBody({
   }
   if (preview.kind === "audio" && preview.dataUrl) {
     return (
-      <div className="browser-file-media">
+      <div className="local-artifact-media">
         <FileText size={30} />
         <strong>{text(preview.name, "音频文件")}</strong>
         <audio controls src={preview.dataUrl} />
@@ -149,7 +149,7 @@ function LocalArtifactPreviewBody({
   }
   if (preview.kind === "video" && preview.dataUrl) {
     return (
-      <div className="browser-file-video">
+      <div className="local-artifact-video">
         <video controls src={preview.dataUrl} />
       </div>
     );
@@ -164,16 +164,16 @@ function LocalArtifactPreviewBody({
   }
   if (preview.kind === "text" && preview.mimeType === "text/markdown") {
     return (
-      <article className="browser-file-markdown">
+      <article className="local-artifact-markdown">
         <MarkdownMessage text={preview.content ?? ""} />
       </article>
     );
   }
   if (preview.kind === "text") {
-    return <pre className="browser-file-code">{content}</pre>;
+    return <pre className="local-artifact-code">{content}</pre>;
   }
   return (
-    <div className="browser-file-status">
+    <div className="local-artifact-status">
       <File size={26} />
       <strong>这种格式暂不支持内置预览</strong>
       <span>
@@ -218,7 +218,7 @@ function SandboxedHtmlPreview({
 
   return (
     <div
-      className="browser-file-html"
+      className="local-artifact-html"
       ref={hostRef}
       role="document"
       aria-label={title}

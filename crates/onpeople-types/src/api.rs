@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use crate::{BrowserAnnotation, Preferences, ProviderKind};
+use crate::{Preferences, ProviderKind};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -241,60 +241,6 @@ pub struct WorktreeRequest {
     pub thread_id: Option<String>,
     #[serde(default)]
     pub remove_branch: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
-pub struct BrowserRouteRequest {
-    pub route_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
-pub struct BrowserNavigateRequest {
-    pub route_id: String,
-    pub url: String,
-    #[serde(default)]
-    pub thread_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
-pub struct BrowserBoundsRequest {
-    pub route_id: String,
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    pub scale_factor: f64,
-    pub visible: bool,
-    #[serde(default)]
-    pub interactive: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
-pub struct BrowserAnnotationRequest {
-    pub route_id: String,
-    #[serde(default)]
-    pub annotation: Option<BrowserAnnotation>,
-    #[serde(default)]
-    pub annotation_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
-pub struct BrowserProfileImportRequest {
-    pub profile_id: String,
-    #[serde(default)]
-    pub route_id: Option<String>,
-    #[serde(default)]
-    pub include_passwords: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1139,12 +1085,6 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         streaming: false,
     },
     CommandSpec {
-        legacy_method: "navigate",
-        command: "browser_navigate",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
         legacy_method: "getQuickLauncherSuggestions",
         command: "get_quick_launcher_suggestions",
         domain: "workspace",
@@ -1177,133 +1117,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     CommandSpec {
         legacy_method: "openWorkspaceFile",
         command: "open_workspace_file",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "back",
-        command: "browser_back",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "forward",
-        command: "browser_forward",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "reload",
-        command: "browser_reload",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "captureBrowserVisualSnapshot",
-        command: "capture_browser_visual_snapshot",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "inspectBrowserDeveloperState",
-        command: "inspect_browser_developer_state",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "beginBrowserAnnotation",
-        command: "begin_browser_annotation",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "cancelBrowserAnnotation",
-        command: "cancel_browser_annotation",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "listBrowserAnnotations",
-        command: "list_browser_annotations",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "saveBrowserAnnotation",
-        command: "save_browser_annotation",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "deleteBrowserAnnotation",
-        command: "delete_browser_annotation",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "getBrowserSessionStatus",
-        command: "get_browser_session_status",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "openBrowserSignIn",
-        command: "open_browser_sign_in",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "clearBrowserSession",
-        command: "clear_browser_session",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "clearAllBrowserData",
-        command: "clear_all_browser_data",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "clearBrowserDataFromSettings",
-        command: "clear_browser_data_from_settings",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "fillSavedBrowserCredential",
-        command: "fill_saved_browser_credential",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "listBrowserImportProfiles",
-        command: "list_browser_import_profiles",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "importBrowserProfile",
-        command: "import_browser_profile",
-        domain: "browser",
-        streaming: true,
-    },
-    CommandSpec {
-        legacy_method: "attachBrowser",
-        command: "attach_browser",
-        domain: "browser",
-        streaming: true,
-    },
-    CommandSpec {
-        legacy_method: "activateBrowserTab",
-        command: "activate_browser_tab",
-        domain: "browser",
-        streaming: false,
-    },
-    CommandSpec {
-        legacy_method: "detachBrowserTab",
-        command: "detach_browser_tab",
-        domain: "browser",
+        domain: "workspace",
         streaming: false,
     },
 ];

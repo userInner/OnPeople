@@ -9,10 +9,6 @@ use ts_rs::TS;
 pub enum EventKind {
     Agent,
     Runtime,
-    BrowserState,
-    BrowserNavigation,
-    BrowserPreview,
-    BrowserNewTab,
     Scheduler,
     SchedulerOpen,
     CloudAccount,
@@ -44,7 +40,6 @@ pub struct EventEnvelope {
 pub enum StreamKind {
     Terminal,
     AgentDelta,
-    BrowserFrame,
     Live,
 }
 
@@ -76,26 +71,6 @@ pub const EVENT_SPECS: &[EventSpec] = &[
     EventSpec {
         legacy_subscription: "onTurnEvent",
         event: "runtime:event",
-        streaming: true,
-    },
-    EventSpec {
-        legacy_subscription: "onBrowserState",
-        event: "browser:state",
-        streaming: false,
-    },
-    EventSpec {
-        legacy_subscription: "onAgentBrowserNavigation",
-        event: "browser:agent-navigation",
-        streaming: true,
-    },
-    EventSpec {
-        legacy_subscription: "onBrowserPreviewUpdated",
-        event: "browser:preview-updated",
-        streaming: true,
-    },
-    EventSpec {
-        legacy_subscription: "onBrowserNewTabRequested",
-        event: "browser:new-tab-requested",
         streaming: true,
     },
     EventSpec {

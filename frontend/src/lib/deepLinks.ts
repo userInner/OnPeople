@@ -15,7 +15,6 @@ export type DeepLinkAction =
 const settingsRoutes = new Set<SettingsRoute>([
   "general",
   "models",
-  "import",
   "profile",
   "appearance",
   "voice",
@@ -26,7 +25,6 @@ const settingsRoutes = new Set<SettingsRoute>([
   "account",
   "snapshots",
   "plugins",
-  "browser",
   "computer",
   "hooks",
   "connections",

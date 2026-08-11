@@ -49,7 +49,7 @@ describe("MarkdownMessage local screenshots", () => {
     });
   });
 
-  it("previews the screenshot and routes its link to the internal browser", async () => {
+  it("previews the screenshot in the file pane", async () => {
     useWorkbenchStore.setState({ selectedThreadId: "thread-local-image" });
     vi.spyOn(desktopClient, "readGeneratedImage").mockResolvedValue({
       name: "mac-screenshot.png",
@@ -68,10 +68,10 @@ describe("MarkdownMessage local screenshots", () => {
       path: "/tmp/mac-screenshot.png",
       threadId: "thread-local-image",
     });
-    expect(useWorkbenchStore.getState().toolView).toBe("browser");
+    expect(useWorkbenchStore.getState().toolView).toBe("files");
   });
 
-  it("renders PDFs as file cards and routes them to the internal browser", () => {
+  it("renders PDFs as file cards and routes them to the file pane", () => {
     useWorkbenchStore.setState({ selectedThreadId: "thread-local-pdf" });
 
     render(

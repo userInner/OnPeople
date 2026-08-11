@@ -76,14 +76,6 @@ in-process through the `desktop_request` command.
 - `git.initialize`, `git.hunks`, `git.hunk.mutate`
 - `git.pull-request.prepare`, `git.review.start`, `git.review.submit`
 - `git.worktree`
-- `browser.state`
-- `browser.restart`
-- `browser.command`
-- `browser.surface.bounds`
-- `browser.annotation.list`
-- `browser.annotation.save`
-- `browser.annotation.delete`
-- `browser.action`
 - `plugin.install`
 - `plugin.uninstall`
 - `plugin.industry.activate`
@@ -103,7 +95,7 @@ in-process through the `desktop_request` command.
 - `hook.list`, `hook.local.list`, `hook.create`
 
 Legacy Tauri commands remain registered so the `tauri-production` branch can be
-used as a rollback without changing stored data or the existing browser host.
+used as a rollback without changing stored data.
 
 ## Ordered events
 
@@ -235,22 +227,7 @@ transport and are not forced through request/response. The unused legacy
 `streamLive` React wrapper was removed; Tauri retains its handler for rollback
 until event-transport cleanup is complete.
 
-## Browser and extension host boundaries
-
-Browser lifecycle, native surface bounds, browser commands, profile import,
-sign-in state, and annotations are shell-owned capabilities. `DesktopDispatcher`
-calls them through the async `DesktopHost` port; it has no Tauri types or global
-shell state. Electron supplies the WebContentsView adapter, while Tauri supplies
-the CEF adapter through `dispatch_with_host`. Headless dispatch rejects browser
-methods with `UNSUPPORTED` instead of silently pretending a host exists.
-
-`browser.action` uses a generated `BrowserAction` discriminator so transport
-names such as `browser_navigate` never leak into React. The payload remains a
-JSON object because profile, authentication-provider, and attachment
-fields differ by action. The high-frequency browser preview stream no longer
-opens the legacy `stream_browser` command; the compatibility helper consumes
-the shell's browser preview event until host events receive their own ordered
-Desktop API stream.
+## Extension host boundaries
 
 Plugins, industry plugins, MCP reload, remote catalog sync, and connector OAuth
 do not require a shell. Their stable methods dispatch directly to

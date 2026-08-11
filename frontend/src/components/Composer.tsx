@@ -473,11 +473,7 @@ export function Composer() {
         setToolsLoading(true);
         setToolsError(null);
         void Promise.all([
-          desktopClient.getQuickLauncherSuggestions(
-            activeCwd,
-            null,
-            toolsQuery,
-          ),
+          desktopClient.getQuickLauncherSuggestions(activeCwd, toolsQuery),
           desktopClient.getProjectActions(activeCwd),
           desktopClient.listExtensions(activeCwd),
         ])
@@ -600,7 +596,7 @@ export function Composer() {
         }
       })
       .catch(() => {
-        // Browser development mode has no native drag-drop bridge.
+        // The web renderer has no native drag-drop bridge.
       });
     return () => {
       disposed = true;
@@ -915,9 +911,6 @@ export function Composer() {
         case "ps":
         case "status":
           setToolView("manage");
-          break;
-        case "browser":
-          setToolView("browser");
           break;
         case "terminal":
           window.dispatchEvent(new Event("onpeople:open-terminal"));
@@ -1411,21 +1404,6 @@ export function Composer() {
                       ))}
                     </div>
                   ) : null}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setSettingsOpen(true, "browser");
-                      setToolsOpen(false);
-                    }}
-                  >
-                    <Globe2 size={14} aria-hidden="true" />
-                    <span>
-                      <strong>浏览器与登录数据</strong>
-                      <small>配置浏览器 Profile 和会话</small>
-                    </span>
-                  </button>
-
                   <div className="tools-search">
                     <Search size={13} aria-hidden="true" />
                     <input
@@ -1929,8 +1907,6 @@ function SlashCommandGlyph({ id }: { id: SlashCommandId }) {
     case "diff":
     case "fork":
       return <CornerDownRight size={15} aria-hidden="true" />;
-    case "browser":
-      return <Globe2 size={15} aria-hidden="true" />;
     case "terminal":
     case "ps":
     case "status":

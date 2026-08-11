@@ -14,9 +14,9 @@ describe("layout resize constraints", () => {
   });
 
   it("reserves room for the active utility pane", () => {
-    expect(maximumSidebarWidth(1_400, false, "browser", 560)).toBe(480);
+    expect(maximumSidebarWidth(1_400, false, "files", 560)).toBe(480);
     expect(maximumSidebarWidth(1_000, true, "activity", 560)).toBe(220);
-    expect(maximumSidebarWidth(1_500, true, "browser", 620)).toBe(380);
+    expect(maximumSidebarWidth(1_500, true, "files", 620)).toBe(380);
   });
 
   it("uses the current sidebar width when sizing the utility pane", () => {

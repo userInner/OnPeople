@@ -17,8 +17,7 @@ vi.mock("../../lib/desktopClient", () => ({
     preparePullRequest: vi.fn(),
     startReview: vi.fn(),
     submitReviewComments: vi.fn(),
-    browserCommand: vi.fn(),
-    navigate: vi.fn(),
+    openExternalUrl: vi.fn(),
     initGitRepository: vi.fn(),
     commitGit: vi.fn(),
   },
@@ -48,7 +47,6 @@ describe("GitPane", () => {
       selectedThreadId: "thread-main",
       threadList: { threads: [], projects: [] },
       draftCwd: "/workspace",
-      browser: null,
       selectThread: vi.fn().mockResolvedValue(undefined),
       refreshThreads: vi.fn().mockResolvedValue(undefined),
       setToolView: vi.fn(),
@@ -99,8 +97,9 @@ describe("GitPane", () => {
       ],
     });
     vi.mocked(desktopClient.mutateGitHunk).mockResolvedValue(gitState);
-    vi.mocked(desktopClient.browserCommand).mockResolvedValue({});
-    vi.mocked(desktopClient.navigate).mockResolvedValue({});
+    vi.mocked(desktopClient.openExternalUrl).mockResolvedValue({
+      opened: true,
+    });
   });
 
   it("stages an individual diff hunk", async () => {
@@ -152,33 +151,12 @@ describe("GitPane", () => {
     );
   });
 
-  it("opens the generated GitHub compare URL in the task browser", async () => {
+  it("opens the generated GitHub compare URL in the system browser", async () => {
     vi.mocked(desktopClient.preparePullRequest).mockResolvedValue({
       url: "https://github.com/openai/codex/compare/main...feature?expand=1",
       title: "Review work",
       branch: "feature",
       base: "origin/main",
-    });
-    useWorkbenchStore.setState({
-      browser: {
-        hostReady: true,
-        hostStatus: "ready",
-        activeRouteId: "route-main",
-        profilePath: "/tmp/browser-profile",
-        tabs: [
-          {
-            routeId: "route-main",
-            threadId: "thread-main",
-            url: "about:blank",
-            title: "",
-            faviconUrl: null,
-            loading: false,
-            canGoBack: false,
-            canGoForward: false,
-            crashed: false,
-          },
-        ],
-      },
     });
     render(<GitPane />);
 
@@ -186,9 +164,8 @@ describe("GitPane", () => {
     fireEvent.click(screen.getByRole("button", { name: "准备拉取请求" }));
 
     await waitFor(() =>
-      expect(desktopClient.navigate).toHaveBeenCalledWith(
+      expect(desktopClient.openExternalUrl).toHaveBeenCalledWith(
         "https://github.com/openai/codex/compare/main...feature?expand=1",
-        "route-main",
       ),
     );
   });

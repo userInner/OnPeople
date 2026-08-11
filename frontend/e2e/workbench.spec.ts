@@ -227,7 +227,7 @@ test("renders active Codex-style task state and contextual output", async ({
     page.getByText("重构 OnPeople 为 Tauri", { exact: true }),
   ).toHaveCount(2);
   await expect(page.getByText("进行中的目标")).toBeVisible();
-  await expect(page.getByRole("button", { name: "停止任务" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "暂停目标" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) <= 820) {
     await page
       .getByRole("complementary", { name: "工具舱" })
@@ -505,36 +505,6 @@ test("opens functional primary workspaces instead of placeholder cards", async (
           },
         ],
       },
-      browser: {
-        hostReady: true,
-        hostStatus: "ready",
-        activeRouteId: "route-docs",
-        profilePath: "/tmp/onpeople-browser-profile",
-        tabs: [
-          {
-            routeId: "route-docs",
-            threadId: "main",
-            url: "https://openai.com/codex",
-            title: "Codex",
-            faviconUrl: null,
-            loading: false,
-            canGoBack: false,
-            canGoForward: false,
-            crashed: false,
-          },
-          {
-            routeId: "route-app",
-            threadId: "main",
-            url: "http://127.0.0.1:1420",
-            title: "OnPeople",
-            faviconUrl: null,
-            loading: false,
-            canGoBack: true,
-            canGoForward: false,
-            crashed: false,
-          },
-        ],
-      },
     });
   });
 
@@ -559,49 +529,28 @@ test("opens functional primary workspaces instead of placeholder cards", async (
     page.getByRole("button", { name: "准备拉取请求" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "站点", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "站点", level: 1 }),
-  ).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "浏览器地址" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Codex" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await expect(page.getByRole("tab", { name: "OnPeople" })).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "新建浏览器标签页" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "标注", exact: true }).click();
-  const annotations = page.getByRole("region", { name: "页面标注" });
-  await expect(annotations).toBeVisible();
-  await expect(
-    annotations.getByRole("textbox", { name: "标注内容" }),
-  ).toBeVisible();
-  await annotations.getByRole("button", { name: "关闭页面标注" }).click();
-  await page.getByRole("button", { name: "会话", exact: true }).click();
-  const browserSession = page.getByRole("region", {
-    name: "登录与浏览器数据",
-  });
-  await expect(
-    browserSession.getByRole("button", { name: "打开登录页" }),
-  ).toBeVisible();
-  await expect(
-    browserSession.getByRole("button", { name: "填充已保存凭据" }),
-  ).toBeVisible();
-  await browserSession
-    .getByRole("button", { name: "关闭登录与浏览器数据" })
-    .click();
-
   await page.evaluate(() => {
     if (!window.__ONPEOPLE_DEV__) return;
-    window.__ONPEOPLE_DEV__.invoke = async (command) => {
-      if (command === "list_extensions") {
+    window.__ONPEOPLE_DEV__.invoke = async (command, args) => {
+      const request = args.request as {
+        protocolVersion: number;
+        requestId: string;
+        method: string;
+      };
+      if (
+        command === "desktop_request" &&
+        request.method === "extensions.list"
+      ) {
         return {
-          plugins: [],
-          skills: [],
-          mcpServers: [],
-          connectors: [],
+          protocolVersion: request.protocolVersion,
+          requestId: request.requestId,
+          ok: true,
+          result: {
+            plugins: [],
+            skills: [],
+            mcpServers: [],
+            connectors: [],
+          },
         };
       }
       throw new Error(`Unexpected E2E desktop command: ${command}`);

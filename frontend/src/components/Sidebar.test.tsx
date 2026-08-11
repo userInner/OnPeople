@@ -146,7 +146,7 @@ describe("sidebar selection", () => {
     });
     vi.mocked(desktopClient.onCloudAccountUpdated).mockResolvedValue(() => {});
     useWorkbenchStore.setState({
-      primaryView: "sites",
+      primaryView: "plugins",
       selectedThreadId: "thread-1",
       draftCwd: "/workspace/project",
       search: "",
@@ -267,7 +267,7 @@ describe("sidebar selection", () => {
 
   it("highlights only the selected primary view or task, never the project row", () => {
     const view = render(<Sidebar />);
-    const sites = screen.getByRole("button", { name: "站点" });
+    const plugins = screen.getByRole("button", { name: "插件" });
     const project = screen.getByRole("menuitem", { name: "OnPeople" });
     const task = screen.getByRole("menuitem", { name: "具体任务" });
     const selectedRows = () =>
@@ -275,7 +275,7 @@ describe("sidebar selection", () => {
         ".codex-primary-nav > .is-active, .project-rail-thread.is-active, .project-rail-recent-thread.is-active",
       );
 
-    expect(sites).toHaveClass("is-active");
+    expect(plugins).toHaveClass("is-active");
     expect(task).not.toHaveClass("is-active");
     expect(project.closest(".project-rail-project-row-shell")).not.toHaveClass(
       "is-active",
@@ -284,7 +284,7 @@ describe("sidebar selection", () => {
 
     act(() => useWorkbenchStore.setState({ primaryView: "tasks" }));
 
-    expect(sites).not.toHaveClass("is-active");
+    expect(plugins).not.toHaveClass("is-active");
     expect(task).toHaveClass("is-active");
     expect(selectedRows()).toHaveLength(1);
 

@@ -23,8 +23,6 @@ pub enum ErrorCode {
     Storage,
     Migration,
     Keychain,
-    BrowserUnavailable,
-    BrowserProtocol,
     Cancelled,
     Unsupported,
     Internal,

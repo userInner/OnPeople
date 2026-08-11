@@ -199,7 +199,6 @@ export function describeLiveRuntimeItem(value: unknown): string {
   if (type === "collabAgentToolCall" || type === "subAgentActivity") {
     return "正在协调子 Agent";
   }
-  if (type === "browserAction") return "正在操作浏览器";
   if (type === "computerAction") return "正在操作电脑";
   if (type === "dynamicToolCall" || type === "mcpToolCall") {
     const tool = stringValue(item.tool ?? item.name);

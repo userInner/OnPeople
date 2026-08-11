@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    time::UNIX_EPOCH,
-};
+use std::{fs, io::Read, path::PathBuf, time::UNIX_EPOCH};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -17,7 +12,6 @@ use crate::{
     migrations,
     paths::DataPaths,
 };
-use onpeople_types::BrowserImportResult;
 use onpeople_types::{AppError, ErrorCode};
 
 const JSON_SOURCES: &[&str] = &[
@@ -30,7 +24,6 @@ const JSON_SOURCES: &[&str] = &[
     "agent-task-board.json",
     "local-memories.json",
     "usage-ledger.json",
-    "browser-annotations.json",
     "industry-plugin-state.json",
     "cloud-account.json",
     "runtime-sessions.json",
@@ -61,7 +54,6 @@ pub struct LegacyImportReport {
     pub sources_imported: u64,
     pub credentials_imported: u64,
     pub leveldb_keys_imported: u64,
-    pub browser_files_imported: u64,
     pub warnings: Vec<String>,
     #[serde(skip)]
     keychain_refs: Vec<String>,
@@ -86,7 +78,6 @@ pub fn initialize_new_database(paths: &DataPaths) -> Result<LegacyImportReport, 
 
     let migration_id = Uuid::now_v7();
     let temporary_db = paths.root.join(format!("onpeople.db.tmp-{migration_id}"));
-    let temporary_profile = paths.root.join(format!("cef-profile.tmp-{migration_id}"));
     let mut report = LegacyImportReport::default();
     let result = (|| {
         let mut connection = Connection::open(&temporary_db).map_err(AppError::storage)?;
@@ -119,17 +110,7 @@ pub fn initialize_new_database(paths: &DataPaths) -> Result<LegacyImportReport, 
                 "OnPeople 数据库已存在，拒绝覆盖",
             ));
         }
-        let staged_profile = stage_browser_profile(paths, &temporary_profile, &mut report)?;
-        if staged_profile {
-            fs::rename(&temporary_profile, &paths.cef_profile).map_err(|error| {
-                AppError::new(ErrorCode::Migration, "无法提交 Chromium Profile 迁移")
-                    .context("cause", error)
-            })?;
-        }
         if let Err(error) = fs::rename(&temporary_db, &paths.database) {
-            if staged_profile {
-                let _ = fs::remove_dir_all(&paths.cef_profile);
-            }
             return Err(
                 AppError::new(ErrorCode::Migration, "无法原子提交 OnPeople 数据库")
                     .context("cause", error),
@@ -140,7 +121,6 @@ pub fn initialize_new_database(paths: &DataPaths) -> Result<LegacyImportReport, 
 
     if let Err(error) = result {
         let _ = fs::remove_file(&temporary_db);
-        let _ = fs::remove_dir_all(&temporary_profile);
         let keychain = Keychain::new(&paths.secrets_namespace);
         for reference in &report.keychain_refs {
             let _ = keychain.delete(reference);
@@ -297,10 +277,7 @@ fn normalize_legacy_document(
                 .map_err(AppError::storage)?;
         }
         "thread-ui-state.json" => import_ui_state(value, transaction)?,
-        "browser-annotations.json"
-        | "industry-plugin-state.json"
-        | "cloud-account.json"
-        | "runtime-sessions.json" => {
+        "industry-plugin-state.json" | "cloud-account.json" | "runtime-sessions.json" => {
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO metadata(key,value_json,updated_at)
@@ -443,7 +420,7 @@ fn import_scheduled_runs(
 
 fn import_ui_state(value: &Value, transaction: &Transaction<'_>) -> Result<(), AppError> {
     let object = value.as_object().cloned().unwrap_or_default();
-    for key in ["browserTabs", "utilityWidth", "terminalHeight"] {
+    for key in ["utilityWidth", "terminalHeight"] {
         if let Some(item) = object.get(key) {
             transaction
                 .execute(
@@ -524,11 +501,7 @@ fn import_leveldb_keys(
             {
                 continue;
             }
-            for key in [
-                "onpeople.browser-tabs.v1",
-                "onpeople.utility-width",
-                "onpeople.terminal-height",
-            ] {
+            for key in ["onpeople.utility-width", "onpeople.terminal-height"] {
                 if let Some(value) = find_json_after_marker(&bytes, key.as_bytes()) {
                     transaction
                         .execute(
@@ -571,134 +544,6 @@ fn find_json_after_marker(bytes: &[u8], marker: &[u8]) -> Option<String> {
     )
 }
 
-fn stage_browser_profile(
-    paths: &DataPaths,
-    temporary: &Path,
-    report: &mut LegacyImportReport,
-) -> Result<bool, AppError> {
-    if !paths.browser_partition.is_dir() || paths.cef_profile.exists() {
-        return Ok(false);
-    }
-    copy_stateful_profile(&paths.browser_partition, temporary, report)?;
-    Ok(true)
-}
-
-fn copy_stateful_profile(
-    source: &Path,
-    target: &Path,
-    report: &mut LegacyImportReport,
-) -> Result<(), AppError> {
-    for entry in WalkDir::new(source)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        let relative = entry
-            .path()
-            .strip_prefix(source)
-            .map_err(AppError::internal)?;
-        if relative.components().any(|component| {
-            matches!(
-                component.as_os_str().to_str(),
-                Some(
-                    "Cache"
-                        | "Code Cache"
-                        | "GPUCache"
-                        | "DawnGraphiteCache"
-                        | "DawnWebGPUCache"
-                        | "GrShaderCache"
-                )
-            )
-        }) {
-            continue;
-        }
-        let destination = target.join(relative);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&destination).map_err(AppError::storage)?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent).map_err(AppError::storage)?;
-            }
-            fs::copy(entry.path(), &destination).map_err(AppError::storage)?;
-            report.browser_files_imported += 1;
-        }
-    }
-    Ok(())
-}
-
-pub fn import_chromium_profile(
-    source: &Path,
-    target: &Path,
-    include_passwords: bool,
-) -> Result<BrowserImportResult, AppError> {
-    let source = source.canonicalize().map_err(AppError::storage)?;
-    if !source.is_dir() {
-        return Err(AppError::invalid("浏览器 Profile 必须是目录"));
-    }
-    if target.exists() {
-        return Err(AppError::new(
-            ErrorCode::Conflict,
-            "目标浏览器 Profile 已存在",
-        ));
-    }
-    let mut report = LegacyImportReport::default();
-    for entry in WalkDir::new(&source)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        let relative = entry
-            .path()
-            .strip_prefix(&source)
-            .map_err(AppError::internal)?;
-        if relative.components().any(|component| {
-            matches!(
-                component.as_os_str().to_str(),
-                Some(
-                    "Cache"
-                        | "Code Cache"
-                        | "GPUCache"
-                        | "DawnGraphiteCache"
-                        | "DawnWebGPUCache"
-                        | "GrShaderCache"
-                )
-            )
-        }) {
-            continue;
-        }
-        if !include_passwords
-            && relative
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| {
-                    matches!(value, "Login Data" | "Login Data For Account" | "Web Data")
-                })
-        {
-            report
-                .warnings
-                .push(format!("已跳过凭据数据库 {}", relative.display()));
-            continue;
-        }
-        let destination = target.join(relative);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&destination).map_err(AppError::storage)?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent).map_err(AppError::storage)?;
-            }
-            fs::copy(entry.path(), &destination).map_err(AppError::storage)?;
-            report.browser_files_imported += 1;
-        }
-    }
-    let credentials = u64::from(include_passwords && target.join("Login Data").is_file());
-    Ok(BrowserImportResult {
-        cookies: u64::from(target.join("Cookies").is_file()),
-        storage_files: report.browser_files_imported,
-        credentials,
-        skipped: report.warnings.len() as u64,
-    })
-}
-
 fn write_backup_manifest(paths: &DataPaths) -> Result<PathBuf, AppError> {
     let backup = paths.migration_backup.join("pre-0.30.0");
     fs::create_dir_all(&backup).map_err(AppError::storage)?;
@@ -724,7 +569,6 @@ fn write_backup_manifest(paths: &DataPaths) -> Result<PathBuf, AppError> {
             "sources": sources,
             "originalsRetained": true,
             "codexHomeRetainedInPlace": paths.codex_home,
-            "browserPartitionRetainedInPlace": paths.browser_partition,
         }))
         .map_err(AppError::internal)?,
     )
@@ -757,15 +601,15 @@ mod tests {
 
     #[test]
     fn extracts_leveldb_json_value() {
-        let bytes = b"prefix-onpeople.browser-tabs.v1\x00[{\"id\":\"a\"}]suffix";
+        let bytes = b"prefix-onpeople.threads.v1\x00[{\"id\":\"a\"}]suffix";
         assert_eq!(
-            find_json_after_marker(bytes, b"onpeople.browser-tabs.v1").as_deref(),
+            find_json_after_marker(bytes, b"onpeople.threads.v1").as_deref(),
             Some("[{\"id\":\"a\"}]")
         );
     }
 
     #[test]
-    fn migrates_into_wal_database_and_skips_browser_caches() {
+    fn migrates_into_wal_database() {
         let root = tempdir().expect("temporary migration root");
         let paths = DataPaths::from_root(root.path().to_path_buf()).expect("data paths");
         std::fs::write(
@@ -773,18 +617,9 @@ mod tests {
             r#"{"preferences":{"theme":"dark","utilityWidth":640}}"#,
         )
         .expect("legacy settings");
-        let source_profile = paths.browser_partition.join("Default");
-        std::fs::create_dir_all(source_profile.join("Cache")).expect("cache");
-        std::fs::create_dir_all(&source_profile).expect("profile");
-        std::fs::write(source_profile.join("Cookies"), b"cookie-state").expect("cookies");
-        std::fs::write(source_profile.join("Cache").join("ignored"), b"cache").expect("cache file");
-
         let report = initialize_new_database(&paths).expect("migration succeeds");
         assert_eq!(report.sources_imported, 1);
         assert!(paths.database.is_file());
-        assert!(paths.cef_profile.join("Default/Cookies").is_file());
-        assert!(!paths.cef_profile.join("Default/Cache/ignored").exists());
-
         let connection = Connection::open(&paths.database).expect("database");
         let journal_mode: String = connection
             .pragma_query_value(None, "journal_mode", |row| row.get(0))

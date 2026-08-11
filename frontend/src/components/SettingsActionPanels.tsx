@@ -42,8 +42,6 @@ export function SettingsActionPanel(props: SettingsActionPanelProps) {
       return <ModelProviderSettings {...props} />;
     case "computer":
       return <PolicySettings {...props} />;
-    case "import":
-      return <BrowserImportSettings {...props} />;
     case "profile":
       return <AgentProfileSettings {...props} />;
     case "usage":
@@ -426,67 +424,6 @@ function PolicySettings({
         <MutationMessage message={message} />
       </section>
     </>
-  );
-}
-
-function BrowserImportSettings({
-  resource,
-  onRefresh,
-}: SettingsActionPanelProps) {
-  const profiles = recordsAt(resource, "profiles");
-  const [includePasswords, setIncludePasswords] = useState(false);
-  const { busy, message, run } = useSettingsMutation(onRefresh);
-
-  return (
-    <section className="settings-section">
-      <h2>浏览器资料</h2>
-      <p className="settings-copy">
-        复制选中的 Chromium Profile；源 Profile 保持不变，缓存不会被导入。
-      </p>
-      <div className="settings-card">
-        <ToggleSetting
-          label="导入已保存密码"
-          hint="需要系统钥匙串授权；默认关闭"
-          value={includePasswords}
-          onChange={setIncludePasswords}
-        />
-        {profiles.length === 0 ? (
-          <EmptyRow text="没有发现可导入的 Chrome、Chromium 或 Edge Profile" />
-        ) : (
-          profiles.map((profile, index) => {
-            const path = text(profile.path);
-            const profileId = text(profile.id, `profile-${index}`);
-            return (
-              <ActionSetting
-                key={profileId}
-                label={text(profile.name, "未命名 Profile")}
-                hint={`${text(profile.browser, "Chromium")} · ${path}`}
-              >
-                <button
-                  type="button"
-                  disabled={!path || busy !== null}
-                  onClick={() =>
-                    void run(
-                      `import-${profileId}`,
-                      () =>
-                        desktopClient.importBrowserProfile({
-                          path,
-                          profileId,
-                          includePasswords,
-                        }),
-                      "浏览器资料已导入",
-                    )
-                  }
-                >
-                  {busy === `import-${profileId}` ? "导入中…" : "导入"}
-                </button>
-              </ActionSetting>
-            );
-          })
-        )}
-      </div>
-      <MutationMessage message={message} />
-    </section>
   );
 }
 
@@ -1978,8 +1915,6 @@ function PluginGlyph({
   const icon = text(plugin.icon, "plugin");
   const props = { size, "aria-hidden": true } as const;
   switch (icon) {
-    case "browser":
-      return <Globe2 {...props} />;
     case "computer":
       return <Monitor {...props} />;
     case "document":

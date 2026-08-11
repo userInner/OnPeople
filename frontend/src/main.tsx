@@ -15,10 +15,6 @@ declare global {
         args?: Record<string, unknown>,
       ) => Promise<unknown>;
       on: (event: string, handler: (payload: unknown) => void) => () => void;
-      browser: (
-        command: string,
-        payload?: Record<string, unknown>,
-      ) => Promise<unknown>;
       metrics: () => Promise<Record<string, unknown>>;
     };
     __ONPEOPLE_DEV__?: {

@@ -4,7 +4,6 @@ import {
   FileCode2,
   Files,
   GitBranch,
-  Globe2,
   LayoutDashboard,
   ListFilter,
   Maximize2,
@@ -19,14 +18,13 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import type { ToolView } from "../types";
 import { IconButton } from "./IconButton";
-import { BrowserPane } from "./tools/BrowserPane";
 import { FilesPane } from "./tools/FilesPane";
 import { GitPane } from "./tools/GitPane";
+import { LocalArtifactPreview } from "./tools/LocalArtifactPreview";
 import { ManagementCenter } from "./tools/ManagementCenter";
 
-const views: Array<{ id: ToolView; label: string; icon: typeof Globe2 }> = [
+const views: Array<{ id: ToolView; label: string; icon: typeof CircleDot }> = [
   { id: "activity", label: "输出", icon: CircleDot },
-  { id: "browser", label: "浏览器", icon: Globe2 },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "files", label: "文件", icon: Files },
   { id: "manage", label: "管理", icon: LayoutDashboard },
@@ -48,6 +46,9 @@ export function UtilityPane({
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const toolView = useWorkbenchStore((state) => state.toolView);
+  const localArtifactPreview = useWorkbenchStore(
+    (state) => state.localArtifactPreview,
+  );
   const setToolView = useWorkbenchStore((state) => state.setToolView);
   const setUtilityOpen = useWorkbenchStore((state) => state.setUtilityOpen);
   const currentView = views.find((view) => view.id === toolView) ?? views[0]!;
@@ -136,9 +137,14 @@ export function UtilityPane({
       <div className="utility-frame">
         <div className="utility-content" role="tabpanel">
           {toolView === "activity" ? <ActivityPane /> : null}
-          {toolView === "browser" ? <BrowserPane /> : null}
           {toolView === "git" ? <GitPane /> : null}
-          {toolView === "files" ? <FilesPane /> : null}
+          {toolView === "files" ? (
+            localArtifactPreview ? (
+              <LocalArtifactPreview key={localArtifactPreview.id} />
+            ) : (
+              <FilesPane />
+            )
+          ) : null}
           {toolView === "manage" ? <ManagementCenter /> : null}
         </div>
       </div>

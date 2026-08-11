@@ -3,38 +3,31 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
-
-mod native_compositor;
 
 use base64::Engine;
-use onpeople_browser_host::{
-    BrowserCommand, BrowserHostEvent, BrowserHostState, BrowserIpcClient, IpcConfig,
-};
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
-    BrowserAction, BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserHostOperation,
     DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRecoveryRequired, DesktopRequest,
     DesktopResponse, ShellHostOperation, ShellOpenTaskWindowRequest, should_forward_desktop_event,
 };
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
-    AgentStatus, AppError, AppUpdateState, BrowserAnnotation, BrowserBoundsRequest, BrowserFrame,
-    BrowserState, EventEnvelope, GitCommitRequest, GitDiff, GitFileRequest, GitMutationRequest,
-    GitPushRequest, GitRequest, GitState, Goal, GoalRequest, GoalUpdateRequest, LiveStatus,
-    PreferencePatchRequest, Preferences, PromptSubmission, ProviderRequest, ProviderSettings,
-    RuntimeDiagnostics, RuntimeSnapshot, ScheduledTask, SchedulerSnapshot, SendPromptRequest,
-    StreamEnvelope, StreamKind, TerminalIdRequest, TerminalResizeRequest, TerminalSession,
-    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList, WorktreeRequest,
+    AgentStatus, AppError, AppUpdateState, EventEnvelope, GitCommitRequest, GitDiff,
+    GitFileRequest, GitMutationRequest, GitPushRequest, GitRequest, GitState, Goal, GoalRequest,
+    GoalUpdateRequest, LiveStatus, PreferencePatchRequest, Preferences, PromptSubmission,
+    ProviderRequest, ProviderSettings, RuntimeDiagnostics, RuntimeSnapshot, ScheduledTask,
+    SchedulerSnapshot, SendPromptRequest, StreamEnvelope, StreamKind, TerminalIdRequest,
+    TerminalResizeRequest, TerminalSession, TerminalStartRequest, TerminalWriteRequest,
+    ThreadFilters, ThreadList, WorktreeRequest,
 };
 use serde_json::{Value, json};
-use sha2::Digest;
 use tauri::{
     AppHandle, Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder, ipc::Channel,
 };
@@ -45,7 +38,7 @@ use tauri::{
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
 fn repair_macos_webview_layout<R: Runtime>(
@@ -411,166 +404,14 @@ fn initial_app_update_state() -> AppUpdateState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BrowserHostPhase {
-    Stopped,
-    Starting,
-    Ready,
-    Backoff,
-    Failed,
-    Crashed,
-}
-
-struct BrowserLifecycle {
-    phase: Mutex<BrowserHostPhase>,
-    notify: Notify,
-    monitor_started: AtomicBool,
-    backoff_attempt: AtomicU64,
-    error: StdMutex<Option<String>>,
-    error_kind: StdMutex<Option<String>>,
-}
-
-impl BrowserLifecycle {
-    fn new() -> Self {
-        Self {
-            phase: Mutex::new(BrowserHostPhase::Stopped),
-            notify: Notify::new(),
-            monitor_started: AtomicBool::new(false),
-            backoff_attempt: AtomicU64::new(0),
-            error: StdMutex::new(None),
-            error_kind: StdMutex::new(None),
-        }
-    }
-}
-
-fn browser_error_kind(error: &AppError) -> &'static str {
-    match error.code {
-        onpeople_types::ErrorCode::BrowserProtocol => "protocol-mismatch",
-        onpeople_types::ErrorCode::ProcessFailed => "host-exit",
-        onpeople_types::ErrorCode::PermissionDenied => "host-untrusted",
-        onpeople_types::ErrorCode::Keychain => "keychain-authorization",
-        onpeople_types::ErrorCode::Internal if error.message.contains("CEF") => "cef-init-failed",
-        _ => "startup-failed",
-    }
-}
-
-#[cfg(all(target_os = "macos", not(debug_assertions)))]
-fn validate_release_browser_host(executable: &std::path::Path) -> Result<(), AppError> {
-    const TEAM_ID: &str = "6K4S66PVRQ";
-    const HOST_BUNDLE_ID: &str = "com.userinner.onpeople.browser-host";
-
-    let current_exe = std::env::current_exe().map_err(AppError::storage)?;
-    let app = current_exe
-        .parent()
-        .and_then(std::path::Path::parent)
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| {
-            AppError::new(
-                onpeople_types::ErrorCode::PermissionDenied,
-                "当前 OnPeople.app 路径无效",
-            )
-        })?
-        .canonicalize()
-        .map_err(AppError::storage)?;
-    let expected_root = app
-        .join("Contents/Resources/.embedded-runtime")
-        .canonicalize()
-        .map_err(|error| {
-            AppError::new(
-                onpeople_types::ErrorCode::PermissionDenied,
-                "当前 OnPeople.app 的内嵌运行时路径无效",
-            )
-            .context("cause", error)
-        })?;
-    let executable = executable.canonicalize().map_err(AppError::storage)?;
-    if !executable.starts_with(&expected_root) {
-        return Err(AppError::new(
-            onpeople_types::ErrorCode::PermissionDenied,
-            "Browser Host 路径不可信：必须来自当前 OnPeople.app",
-        )
-        .context("path", executable.to_string_lossy()));
-    }
-    let host_app = executable
-        .parent()
-        .and_then(std::path::Path::parent)
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| {
-            AppError::new(
-                onpeople_types::ErrorCode::PermissionDenied,
-                "Browser Host.app 路径无效",
-            )
-        })?;
-
-    let signature_details = |path: &std::path::Path| -> Result<String, AppError> {
-        let output = Command::new("/usr/bin/codesign")
-            .args(["-dv", "--verbose=4"])
-            .arg(path)
-            .output()
-            .map_err(AppError::storage)?;
-        let details = String::from_utf8_lossy(&output.stderr).into_owned();
-        if !output.status.success()
-            || details.contains("Signature=adhoc")
-            || details.contains("Info.plist=not bound")
-            || !details.contains(&format!("TeamIdentifier={TEAM_ID}"))
-        {
-            return Err(AppError::new(
-                onpeople_types::ErrorCode::PermissionDenied,
-                "Browser Host 代码签名身份不满足正式 Profile 要求",
-            )
-            .context("path", path.to_string_lossy()));
-        }
-        Ok(details)
-    };
-    signature_details(&app)?;
-    signature_details(host_app)?;
-
-    let status = Command::new("/usr/bin/codesign")
-        .args(["--verify", "--deep", "--strict", "--verbose=2"])
-        .arg(host_app)
-        .status()
-        .map_err(AppError::storage)?;
-    if !status.success() {
-        return Err(AppError::new(
-            onpeople_types::ErrorCode::PermissionDenied,
-            "Browser Host 严格签名验证失败",
-        ));
-    }
-    let plist = host_app.join("Contents/Info.plist");
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :CFBundleIdentifier"])
-        .arg(plist)
-        .output()
-        .map_err(AppError::storage)?;
-    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != HOST_BUNDLE_ID
-    {
-        return Err(AppError::new(
-            onpeople_types::ErrorCode::PermissionDenied,
-            "Browser Host Bundle ID 不匹配",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(any(not(target_os = "macos"), debug_assertions))]
-fn validate_release_browser_host(_executable: &std::path::Path) -> Result<(), AppError> {
-    Ok(())
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub runtime: Arc<CoreRuntime>,
     pub desktop_api: Arc<DesktopDispatcher>,
-    pub browser: Arc<BrowserHostState>,
-    browser_process: Arc<StdMutex<Option<Child>>>,
-    browser_ipc: BrowserIpcClient,
-    browser_lifecycle: Arc<BrowserLifecycle>,
-    remote_browser_state: Arc<StdMutex<Option<BrowserState>>>,
     pub data_root: PathBuf,
-    runtime_root: PathBuf,
     stream_sequence: Arc<AtomicU64>,
     pending_update: Arc<Mutex<Option<PendingUpdate>>>,
     app_update_state: Arc<StdMutex<AppUpdateState>>,
-    browser_shutdown: Arc<AtomicBool>,
     pending_deep_links: Arc<StdMutex<Vec<String>>>,
     deep_link_frontend_ready: Arc<AtomicBool>,
 }
@@ -593,37 +434,17 @@ impl AppState {
                 "正式构建无法定位当前 OnPeople.app 内嵌运行时",
             )
         })?;
-        let browser_ipc =
-            BrowserIpcClient::new(IpcConfig::for_profile(&storage.paths().cef_profile));
         let runtime = Arc::new(CoreRuntime::new(storage.clone(), runtime_root.clone())?);
         let desktop_api = Arc::new(DesktopDispatcher::new(Arc::clone(&runtime)));
         install_bundled_plugins(&runtime, &runtime_root)?;
-        #[cfg(unix)]
-        let browser_mcp_socket = browser_ipc.config().address.unix_socket.clone();
-        #[cfg(windows)]
-        let browser_mcp_socket = PathBuf::from(&browser_ipc.config().address.windows_pipe);
-        runtime.configure_builtin_browser_mcp(
-            browser_mcp_socket,
-            browser_ipc.config().token.clone(),
-        )?;
-        let browser = Arc::new(BrowserHostState::with_storage(
-            storage.paths().cef_profile.clone(),
-            storage.clone(),
-        ));
+        runtime.configure_builtin_mcp()?;
         Ok(Self {
             runtime,
             desktop_api,
-            browser,
-            browser_process: Arc::new(StdMutex::new(None)),
-            browser_ipc,
-            browser_lifecycle: Arc::new(BrowserLifecycle::new()),
-            remote_browser_state: Arc::new(StdMutex::new(None)),
             data_root,
-            runtime_root,
             stream_sequence: Arc::new(AtomicU64::new(1)),
             pending_update: Arc::new(Mutex::new(None)),
             app_update_state: Arc::new(StdMutex::new(initial_app_update_state())),
-            browser_shutdown: Arc::new(AtomicBool::new(false)),
             pending_deep_links: Arc::new(StdMutex::new(Vec::new())),
             deep_link_frontend_ready: Arc::new(AtomicBool::new(false)),
         })
@@ -682,444 +503,7 @@ impl AppState {
     }
 
     pub async fn stop(&self) {
-        self.browser_shutdown.store(true, Ordering::Release);
-        *self.browser_lifecycle.phase.lock().await = BrowserHostPhase::Stopped;
-        self.browser_lifecycle.notify.notify_waiters();
-        if let Some(mut process) = self
-            .browser_process
-            .lock()
-            .expect("browser process mutex")
-            .take()
-        {
-            let _ = process.kill();
-            let _ = process.wait();
-        }
         self.runtime.stop().await;
-    }
-
-    fn spawn_browser_host(&self) -> Result<(), AppError> {
-        let mut process_guard = self
-            .browser_process
-            .lock()
-            .map_err(|_| AppError::internal("浏览器进程锁定失败"))?;
-        if process_guard.is_some() {
-            return Ok(());
-        }
-        self.browser_shutdown.store(false, Ordering::Release);
-        let component = onpeople_integrations::RuntimePaths::new(self.runtime_root.clone())
-            .browser_host()
-            .map_err(|error| {
-                AppError::new(
-                    onpeople_types::ErrorCode::BrowserUnavailable,
-                    "未找到 CEF 浏览器宿主",
-                )
-                .context("cause", error.message)
-            })?;
-        let executable = component.path;
-        validate_release_browser_host(&executable)?;
-        let profile = self.data_root.join("cef-profile");
-        std::fs::create_dir_all(&profile).map_err(AppError::storage)?;
-        let mut command = Command::new(executable);
-        command
-            .env("ONPEOPLE_CEF_PROFILE", profile)
-            .env(
-                "ONPEOPLE_WORKSPACE_ROOT",
-                self.runtime.default_cwd().to_string_lossy().into_owned(),
-            )
-            .env(
-                "ONPEOPLE_BROWSER_IPC_TOKEN",
-                self.browser_ipc.config().token.clone(),
-            )
-            .env(
-                "ONPEOPLE_BROWSER_IPC_PROTOCOL",
-                self.browser_ipc.config().protocol_version.to_string(),
-            )
-            .env(
-                "ONPEOPLE_BROWSER_IPC_SOCKET",
-                self.browser_ipc
-                    .config()
-                    .address
-                    .unix_socket
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .env(
-                "ONPEOPLE_BROWSER_IPC_PIPE",
-                self.browser_ipc.config().address.windows_pipe.clone(),
-            );
-        #[cfg(debug_assertions)]
-        command.env("ONPEOPLE_CEF_NO_SANDBOX", "1");
-        if let Some(directory) = self.runtime.preferences()?.download_directory {
-            command.env("ONPEOPLE_DOWNLOAD_DIR", directory);
-        }
-        let process = command.spawn().map_err(|error| {
-            AppError::new(
-                onpeople_types::ErrorCode::BrowserUnavailable,
-                "无法启动 CEF 浏览器宿主",
-            )
-            .context("cause", error)
-        })?;
-        *process_guard = Some(process);
-        drop(process_guard);
-        self.start_browser_monitor();
-        Ok(())
-    }
-
-    fn lifecycle_snapshot(&self) -> (String, Option<String>, Option<String>, bool) {
-        let phase = self
-            .browser_lifecycle
-            .phase
-            .try_lock()
-            .map(|phase| *phase)
-            .unwrap_or(BrowserHostPhase::Starting);
-        let status = match phase {
-            BrowserHostPhase::Stopped => "stopped",
-            BrowserHostPhase::Starting => "starting",
-            BrowserHostPhase::Ready => "ready",
-            BrowserHostPhase::Backoff => "backoff",
-            BrowserHostPhase::Failed => "failed",
-            BrowserHostPhase::Crashed => "crashed",
-        }
-        .to_owned();
-        let error = self
-            .browser_lifecycle
-            .error
-            .lock()
-            .ok()
-            .and_then(|error| error.clone());
-        let error_kind = self
-            .browser_lifecycle
-            .error_kind
-            .lock()
-            .ok()
-            .and_then(|kind| kind.clone());
-        (status, error, error_kind, phase == BrowserHostPhase::Ready)
-    }
-
-    fn current_browser_state(&self) -> BrowserState {
-        let base = self
-            .remote_browser_state
-            .lock()
-            .ok()
-            .and_then(|state| state.clone())
-            .unwrap_or_else(|| self.browser.state());
-        let (status, host_error, host_error_kind, ready) = self.lifecycle_snapshot();
-        BrowserState {
-            host_ready: ready && base.host_ready,
-            host_status: status,
-            host_error,
-            host_error_kind,
-            ..base
-        }
-    }
-
-    fn cache_remote_browser_state(&self, state: BrowserState) -> BrowserState {
-        if let Ok(mut cached) = self.remote_browser_state.lock() {
-            *cached = Some(state.clone());
-        }
-        self.current_browser_state()
-    }
-
-    fn publish_browser_state(&self) {
-        self.browser.publish_state(self.current_browser_state());
-    }
-
-    async fn wait_for_browser_ready(&self) -> Result<(), AppError> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let ping = BrowserIpcClient::with_timeout(
-            self.browser_ipc.config().clone(),
-            Duration::from_millis(250),
-        );
-        let mut delay = Duration::from_millis(20);
-        loop {
-            if let Some(message) = self.browser_process_exit_message()? {
-                return Err(AppError::new(
-                    onpeople_types::ErrorCode::ProcessFailed,
-                    "CEF 浏览器宿主在启动期间退出",
-                )
-                .context("cause", message));
-            }
-            match ping.request(BrowserCommand::Ping).await {
-                Ok(value) if value.get("ready").and_then(Value::as_bool) == Some(true) => {
-                    return Ok(());
-                }
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.code,
-                        onpeople_types::ErrorCode::BrowserUnavailable
-                            | onpeople_types::ErrorCode::RuntimeTimeout
-                    ) => {}
-                Err(error) => return Err(error),
-            }
-            if Instant::now() >= deadline {
-                return Err(AppError::new(
-                    onpeople_types::ErrorCode::BrowserUnavailable,
-                    "CEF 浏览器宿主启动超时",
-                )
-                .retryable(true));
-            }
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(Duration::from_millis(200));
-        }
-    }
-
-    fn browser_process_exit_message(&self) -> Result<Option<String>, AppError> {
-        let mut guard = self
-            .browser_process
-            .lock()
-            .map_err(|_| AppError::internal("浏览器进程锁定失败"))?;
-        let Some(child) = guard.as_mut() else {
-            return Ok(Some("浏览器宿主进程不存在".to_owned()));
-        };
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                guard.take();
-                Ok(Some(format!("exit status: {status}")))
-            }
-            Ok(None) => Ok(None),
-            Err(error) => {
-                guard.take();
-                Ok(Some(error.to_string()))
-            }
-        }
-    }
-
-    async fn rehydrate_browser(&self) -> Result<(), AppError> {
-        let value = self
-            .browser_ipc
-            .request(BrowserCommand::StateSnapshot)
-            .await?;
-        let remote: BrowserState = serde_json::from_value(value).map_err(AppError::internal)?;
-        let active_route_id = remote.active_route_id.clone();
-        self.cache_remote_browser_state(remote.clone());
-        for tab in remote.tabs {
-            let route_id = tab.route_id.clone();
-            self.browser_ipc
-                .request(BrowserCommand::CreateRoute {
-                    route_id: route_id.clone(),
-                    thread_id: tab.thread_id,
-                    url: tab.url,
-                })
-                .await
-                .map_err(|error| error.context("route_id", route_id.clone()))?;
-            let (width, height, scale_factor) = self.browser.route_dimensions(&route_id);
-            self.browser_ipc
-                .request(BrowserCommand::Resize {
-                    route_id: route_id.clone(),
-                    width,
-                    height,
-                    scale_factor,
-                    visible: true,
-                })
-                .await
-                .map_err(|error| error.context("route_id", route_id))?;
-        }
-        if let Some(route_id) = active_route_id {
-            self.browser_ipc
-                .request(BrowserCommand::ActivateRoute { route_id })
-                .await?;
-        }
-        if let Ok(value) = self
-            .browser_ipc
-            .request(BrowserCommand::StateSnapshot)
-            .await
-            && let Ok(remote) = serde_json::from_value::<BrowserState>(value)
-        {
-            self.cache_remote_browser_state(remote);
-        }
-        Ok(())
-    }
-
-    async fn ensure_browser_ready(&self) -> Result<(), AppError> {
-        loop {
-            let notified = self.browser_lifecycle.notify.notified();
-            let become_leader = {
-                let mut phase = self.browser_lifecycle.phase.lock().await;
-                match *phase {
-                    BrowserHostPhase::Ready => return Ok(()),
-                    BrowserHostPhase::Starting | BrowserHostPhase::Backoff => false,
-                    BrowserHostPhase::Failed | BrowserHostPhase::Crashed => {
-                        let error = self
-                            .browser_lifecycle
-                            .error
-                            .lock()
-                            .ok()
-                            .and_then(|error| error.clone())
-                            .unwrap_or_else(|| "CEF 浏览器宿主不可用".to_owned());
-                        return Err(AppError::new(
-                            onpeople_types::ErrorCode::BrowserUnavailable,
-                            error,
-                        )
-                        .retryable(true));
-                    }
-                    BrowserHostPhase::Stopped => {
-                        *phase = BrowserHostPhase::Starting;
-                        true
-                    }
-                }
-            };
-            if !become_leader {
-                notified.await;
-                continue;
-            }
-            self.publish_browser_state();
-            let result = async {
-                self.spawn_browser_host()?;
-                self.wait_for_browser_ready().await?;
-                self.rehydrate_browser().await
-            }
-            .await;
-            match result {
-                Ok(()) => {
-                    *self.browser_lifecycle.phase.lock().await = BrowserHostPhase::Ready;
-                    self.browser_lifecycle
-                        .backoff_attempt
-                        .store(0, Ordering::Release);
-                    if let Ok(mut error) = self.browser_lifecycle.error.lock() {
-                        *error = None;
-                    }
-                    if let Ok(mut error_kind) = self.browser_lifecycle.error_kind.lock() {
-                        *error_kind = None;
-                    }
-                    self.publish_browser_state();
-                    self.browser_lifecycle.notify.notify_waiters();
-                    return Ok(());
-                }
-                Err(error) => {
-                    if let Ok(mut message) = self.browser_lifecycle.error.lock() {
-                        *message = Some(error.message.clone());
-                    }
-                    if let Ok(mut error_kind) = self.browser_lifecycle.error_kind.lock() {
-                        *error_kind = Some(browser_error_kind(&error).to_owned());
-                    }
-                    *self.browser_lifecycle.phase.lock().await = BrowserHostPhase::Failed;
-                    self.publish_browser_state();
-                    self.browser_lifecycle.notify.notify_waiters();
-                    return Err(error);
-                }
-            }
-        }
-    }
-
-    async fn force_restart_browser_host(&self) -> Result<(), AppError> {
-        if let Some(mut process) = self
-            .browser_process
-            .lock()
-            .map_err(|_| AppError::internal("浏览器进程锁定失败"))?
-            .take()
-        {
-            let _ = process.kill();
-            let _ = process.wait();
-        }
-        *self.browser_lifecycle.phase.lock().await = BrowserHostPhase::Stopped;
-        if let Ok(mut error) = self.browser_lifecycle.error.lock() {
-            *error = None;
-        }
-        if let Ok(mut error_kind) = self.browser_lifecycle.error_kind.lock() {
-            *error_kind = None;
-        }
-        self.publish_browser_state();
-        self.browser_lifecycle.notify.notify_waiters();
-        self.ensure_browser_ready().await
-    }
-
-    fn start_browser_monitor(&self) {
-        if self
-            .browser_lifecycle
-            .monitor_started
-            .swap(true, Ordering::AcqRel)
-        {
-            return;
-        }
-        let monitor = self.clone();
-        tauri::async_runtime::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                if monitor.browser_shutdown.load(Ordering::Acquire) {
-                    break;
-                }
-                let process_exit = monitor.browser_process_exit_message().ok().flatten();
-                let phase = monitor
-                    .browser_lifecycle
-                    .phase
-                    .try_lock()
-                    .map(|phase| *phase)
-                    .unwrap_or(BrowserHostPhase::Starting);
-                // Startup failures (including a denied Keychain request) are
-                // owned by `ensure_browser_ready` and remain Failed until an
-                // explicit user retry. Only a previously Ready host is
-                // eligible for automatic crash recovery.
-                if phase != BrowserHostPhase::Ready {
-                    continue;
-                }
-                let unhealthy = process_exit.is_some()
-                    || !matches!(
-                        BrowserIpcClient::with_timeout(
-                            monitor.browser_ipc.config().clone(),
-                            Duration::from_millis(250),
-                        )
-                        .request(BrowserCommand::Ping)
-                        .await,
-                        Ok(value) if value.get("ready").and_then(Value::as_bool) == Some(true)
-                    );
-                if !unhealthy {
-                    continue;
-                }
-                if let Some(mut process) = monitor
-                    .browser_process
-                    .lock()
-                    .ok()
-                    .and_then(|mut guard| guard.take())
-                {
-                    let _ = process.kill();
-                    let _ = process.wait();
-                }
-                let message = process_exit.unwrap_or_else(|| "CEF IPC socket 不可达".to_owned());
-                if let Ok(mut error) = monitor.browser_lifecycle.error.lock() {
-                    *error = Some(message.clone());
-                }
-                if let Ok(mut error_kind) = monitor.browser_lifecycle.error_kind.lock() {
-                    *error_kind = Some("host-exit".to_owned());
-                }
-                *monitor.browser_lifecycle.phase.lock().await = BrowserHostPhase::Crashed;
-                monitor.browser.report_host_crash(message);
-                monitor.publish_browser_state();
-                let attempt = monitor
-                    .browser_lifecycle
-                    .backoff_attempt
-                    .fetch_add(1, Ordering::AcqRel)
-                    + 1;
-                let seconds = match attempt {
-                    1 => 1,
-                    2 => 2,
-                    3 => 4,
-                    _ => 5,
-                };
-                *monitor.browser_lifecycle.phase.lock().await = BrowserHostPhase::Backoff;
-                monitor.publish_browser_state();
-                tokio::time::sleep(Duration::from_secs(seconds)).await;
-                if monitor.browser_shutdown.load(Ordering::Acquire) {
-                    break;
-                }
-                *monitor.browser_lifecycle.phase.lock().await = BrowserHostPhase::Stopped;
-                monitor.browser_lifecycle.notify.notify_waiters();
-                let _ = monitor.ensure_browser_ready().await;
-            }
-        });
-    }
-
-    async fn apply_browser_remote(&self, command: BrowserCommand) -> Result<Value, AppError> {
-        self.ensure_browser_ready().await?;
-        let remote = self.browser_ipc.request(command.clone()).await?;
-        match self.browser.apply(command) {
-            Ok(_)
-            | Err(AppError {
-                code: onpeople_types::ErrorCode::BrowserUnavailable,
-                ..
-            }) => Ok(remote),
-            Err(error) => Err(error),
-        }
     }
 
     async fn check_app_update<R: Runtime>(&self, app: &AppHandle<R>) -> Result<Value, AppError> {
@@ -1328,332 +712,13 @@ impl AppState {
         Ok(json!({ "installed": true, "version": pending.version }))
     }
 
-    fn list_browser_profiles(&self) -> Result<Vec<onpeople_types::BrowserProfile>, AppError> {
-        let mut roots = Vec::new();
-        if cfg!(target_os = "macos") {
-            if let Some(home) = std::env::var_os("HOME") {
-                let home = PathBuf::from(home);
-                roots.push((
-                    "Google Chrome",
-                    home.join("Library/Application Support/Google/Chrome"),
-                ));
-                roots.push((
-                    "Chromium",
-                    home.join("Library/Application Support/Chromium"),
-                ));
-                roots.push((
-                    "Microsoft Edge",
-                    home.join("Library/Application Support/Microsoft Edge"),
-                ));
-            }
-        } else if cfg!(windows)
-            && let Some(local) = std::env::var_os("LOCALAPPDATA")
-        {
-            let local = PathBuf::from(local);
-            roots.push(("Google Chrome", local.join("Google/Chrome/User Data")));
-            roots.push(("Microsoft Edge", local.join("Microsoft/Edge/User Data")));
-        }
-        let mut profiles = Vec::new();
-        for (browser, root) in roots {
-            if !root.is_dir() {
-                continue;
-            }
-            for entry in std::fs::read_dir(root).map_err(AppError::storage)? {
-                let entry = entry.map_err(AppError::storage)?;
-                if !entry.file_type().map_err(AppError::storage)?.is_dir() {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name != "Default" && !name.starts_with("Profile ") {
-                    continue;
-                }
-                profiles.push(onpeople_types::BrowserProfile {
-                    id: hex::encode(sha2::Sha256::digest(
-                        entry.path().to_string_lossy().as_bytes(),
-                    )),
-                    name: name.clone(),
-                    browser: browser.to_owned(),
-                    path: entry.path().to_string_lossy().into_owned(),
-                    last_used_at: None,
-                });
-            }
-        }
-        Ok(profiles)
-    }
-
-    fn import_browser_profile(&self, payload: &Value) -> Result<Value, AppError> {
-        let source = payload
-            .get("path")
-            .or_else(|| payload.get("profilePath"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid("缺少浏览器 Profile 路径"))?;
-        let source = PathBuf::from(source);
-        let profile_id = payload
-            .get("profileId")
-            .and_then(Value::as_str)
-            .unwrap_or("imported");
-        let target = self
-            .data_root
-            .join("cef-profile")
-            .join("Imported")
-            .join(profile_id);
-        let result = onpeople_storage::import_chromium_profile(
-            &source,
-            &target,
-            payload
-                .get("includePasswords")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        )?;
-        serde_json::to_value(result).map_err(AppError::internal)
-    }
-
-    fn browser_session_status(&self, payload: &Value) -> Result<Value, AppError> {
-        let provider = payload
-            .get("providerId")
-            .or_else(|| payload.get("provider"))
-            .and_then(Value::as_str)
-            .unwrap_or("default");
-        Ok(self
-            .runtime
-            .storage()
-            .get_metadata(&format!("browser.session.{provider}"))?
-            .unwrap_or_else(
-                || json!({ "signedIn": false, "provider": provider, "cookies": 0, "storage": 0 }),
-            ))
-    }
-
-    fn clear_browser_session(&self, payload: &Value) -> Result<Value, AppError> {
-        let provider = payload
-            .get("providerId")
-            .or_else(|| payload.get("provider"))
-            .and_then(Value::as_str)
-            .unwrap_or("default");
-        let all = matches!(payload.get("all").and_then(Value::as_bool), Some(true))
-            || payload.get("routeId").is_none();
-        if all {
-            let profile = &self.data_root.join("cef-profile");
-            if profile.is_dir() {
-                for entry in std::fs::read_dir(profile).map_err(AppError::storage)? {
-                    let entry = entry.map_err(AppError::storage)?;
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name != "Cache" && name != "GPUCache" {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            std::fs::remove_dir_all(path).map_err(AppError::storage)?;
-                        } else {
-                            std::fs::remove_file(path).map_err(AppError::storage)?;
-                        }
-                    }
-                }
-            }
-        }
-        self.runtime
-            .storage()
-            .delete_metadata(&format!("browser.session.{provider}"))?;
-        Ok(json!({ "cleared": true, "provider": provider, "all": all }))
-    }
-
-    async fn fill_saved_browser_credential(&self, payload: &Value) -> Result<Value, AppError> {
-        let route_id = route_id(payload)?;
-        let credential_id = payload
-            .get("credentialId")
-            .and_then(Value::as_str)
-            .unwrap_or(&route_id);
-        let value = self
-            .runtime
-            .storage()
-            .read_secret(&format!("browser-credential-{credential_id}"))?
-            .ok_or_else(|| {
-                AppError::new(onpeople_types::ErrorCode::NotFound, "没有保存的浏览器凭据")
-            })?;
-        let selector = payload
-            .get("selector")
-            .and_then(Value::as_str)
-            .unwrap_or("input[type=password]")
-            .to_owned();
-        let result = self
-            .apply_browser_remote(BrowserCommand::Fill {
-                route_id,
-                selector,
-                value,
-            })
-            .await?;
-        Ok(json!({ "filled": true, "result": result }))
-    }
-
     async fn dispatch_command<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         command: &str,
         payload: Value,
     ) -> Result<Value, AppError> {
-        if command.starts_with("browser_") || command.contains("browser") {
-            self.ensure_browser_ready().await?;
-        }
         match command {
-            "browser_navigate" => {
-                self.apply_browser_remote(BrowserCommand::Navigate {
-                    route_id: required_string(&payload, "routeId")?,
-                    url: required_string(&payload, "url")?,
-                })
-                .await
-            }
-            "browser_back" => {
-                self.apply_browser_remote(BrowserCommand::Back {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_forward" => {
-                self.apply_browser_remote(BrowserCommand::Forward {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_reload" => {
-                self.apply_browser_remote(BrowserCommand::Reload {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_visual_snapshot" => {
-                self.apply_browser_remote(BrowserCommand::VisualSnapshot {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_developer_inspect" => {
-                self.apply_browser_remote(BrowserCommand::DeveloperInspect {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_dom_snapshot" => {
-                self.apply_browser_remote(BrowserCommand::DomSnapshot {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_close_route" => {
-                self.apply_browser_remote(BrowserCommand::CloseRoute {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "browser_click" => {
-                self.apply_browser_remote(BrowserCommand::Click {
-                    route_id: route_id(&payload)?,
-                    selector: required_string(&payload, "selector")?,
-                })
-                .await
-            }
-            "browser_fill" => {
-                self.apply_browser_remote(BrowserCommand::Fill {
-                    route_id: route_id(&payload)?,
-                    selector: required_string(&payload, "selector")?,
-                    value: required_string(&payload, "value")?,
-                })
-                .await
-            }
-            "browser_press" => {
-                self.apply_browser_remote(BrowserCommand::Press {
-                    route_id: route_id(&payload)?,
-                    key: required_string(&payload, "key")?,
-                })
-                .await
-            }
-            "browser_scroll" => {
-                self.apply_browser_remote(BrowserCommand::Scroll {
-                    route_id: route_id(&payload)?,
-                    x: payload.get("x").and_then(Value::as_f64).unwrap_or(0.0),
-                    y: payload.get("y").and_then(Value::as_f64).unwrap_or(0.0),
-                })
-                .await
-            }
-            "browser_resize" => {
-                self.apply_browser_remote(BrowserCommand::Resize {
-                    route_id: route_id(&payload)?,
-                    width: payload
-                        .get("width")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(1_280) as u32,
-                    height: payload.get("height").and_then(Value::as_u64).unwrap_or(720) as u32,
-                    scale_factor: payload
-                        .get("scaleFactor")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(1.0),
-                    visible: payload
-                        .get("visible")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true),
-                })
-                .await
-            }
-            "browser_evaluate" => {
-                self.apply_browser_remote(BrowserCommand::Evaluate {
-                    route_id: route_id(&payload)?,
-                    expression: required_string(&payload, "expression")?,
-                })
-                .await
-            }
-            "browser_attach" | "attach_browser" => {
-                let route_id = required_string(&payload, "routeId")?;
-                let url = payload
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .unwrap_or("about:blank");
-                self.apply_browser_remote(BrowserCommand::CreateRoute {
-                    route_id,
-                    thread_id: payload
-                        .get("threadId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    url: url.to_owned(),
-                })
-                .await
-            }
-            "browser_tab_activate" | "activate_browser_tab" => {
-                let route_id = route_id(&payload)?;
-                self.apply_browser_remote(BrowserCommand::ActivateRoute { route_id })
-                    .await
-            }
-            "browser_tab_detach" | "detach_browser_tab" => {
-                self.apply_browser_remote(BrowserCommand::CloseRoute {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "list_browser_import_profiles" => {
-                Ok(json!({ "profiles": self.list_browser_profiles()? }))
-            }
-            "import_browser_profile" => self.import_browser_profile(&payload),
-            "get_browser_session_status" => self.browser_session_status(&payload),
-            "open_browser_sign_in" => {
-                let route_id = route_id(&payload)?;
-                let url = payload
-                    .get("url")
-                    .or_else(|| payload.get("providerUrl"))
-                    .and_then(Value::as_str)
-                    .filter(|url| !url.trim().is_empty())
-                    .unwrap_or("https://aibro.vip/onpeople/")
-                    .to_owned();
-                self.apply_browser_remote(BrowserCommand::CreateRoute {
-                    route_id: route_id.clone(),
-                    thread_id: payload
-                        .get("threadId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    url: url.clone(),
-                })
-                .await
-            }
-            "clear_browser_session"
-            | "clear_all_browser_data"
-            | "clear_browser_data_from_settings" => self.clear_browser_session(&payload),
-            "fill_saved_browser_credential" => self.fill_saved_browser_credential(&payload).await,
             "get_provider_settings" => {
                 let kind = payload
                     .get("kind")
@@ -2073,11 +1138,7 @@ impl AppState {
                     .unwrap_or("")
                     .trim();
                 self.runtime
-                    .quick_launcher_suggestions(
-                        &cwd,
-                        payload.get("routeId").and_then(Value::as_str),
-                        query,
-                    )
+                    .quick_launcher_suggestions(&cwd, query)
                     .map(Value::Array)
             }
             "list_project_files" => {
@@ -2139,47 +1200,6 @@ impl AppState {
                 let resolved =
                     onpeople_workspace::resolve_inside(&root, std::path::Path::new(&path))?;
                 workspace_file_preview(&root, &resolved, payload.get("routeId"))
-            }
-            "capture_browser_visual_snapshot" => {
-                self.apply_browser_remote(BrowserCommand::VisualSnapshot {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "inspect_browser_developer_state" => {
-                self.apply_browser_remote(BrowserCommand::DeveloperInspect {
-                    route_id: route_id(&payload)?,
-                })
-                .await
-            }
-            "begin_browser_annotation" => Ok(
-                json!({ "started": true, "routeId": route_id(&payload)?, "token": Uuid::now_v7().to_string() }),
-            ),
-            "cancel_browser_annotation" => {
-                Ok(json!({ "cancelled": true, "routeId": route_id(&payload)? }))
-            }
-            "list_browser_annotations" => Ok(serde_json::to_value(
-                self.browser.annotations(&route_id(&payload)?),
-            )
-            .map_err(AppError::internal)?),
-            "save_browser_annotation" => {
-                let annotation: BrowserAnnotation = serde_json::from_value(
-                    payload
-                        .get("annotation")
-                        .cloned()
-                        .unwrap_or(payload.clone()),
-                )
-                .map_err(AppError::invalid)?;
-                serde_json::to_value(self.browser.save_annotation(annotation)?)
-                    .map_err(AppError::internal)
-            }
-            "delete_browser_annotation" => {
-                let id = payload
-                    .get("annotationId")
-                    .or_else(|| payload.get("id"))
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| AppError::invalid("缺少 annotationId"))?;
-                Ok(json!({ "deleted": self.browser.delete_annotation(id), "id": id }))
             }
             "context_state" | "get_context_state" => self
                 .runtime
@@ -2338,9 +1358,7 @@ impl AppState {
 }
 
 /// Built-in plugins ship inside OnPeople's signed runtime and are copied into
-/// the app's isolated CODEX_HOME. The packages contain only OnPeople-owned
-/// manifests and skills; they reuse the built-in MCP servers instead of
-/// extracting or redistributing another product's private plugin runtime.
+/// the app's isolated CODEX_HOME.
 fn install_bundled_plugins(runtime: &CoreRuntime, runtime_root: &Path) -> Result<(), AppError> {
     const BUNDLED_PLUGIN_IDS: &[&str] = &[
         "research-paper",
@@ -2387,15 +1405,13 @@ fn install_bundled_plugins(runtime: &CoreRuntime, runtime_root: &Path) -> Result
                         && plugin.get("version") == Some(&version)
                 })
             });
-        if already_installed {
-            continue;
+        if !already_installed {
+            runtime.install_plugin(&json!({
+                "id": id,
+                "source": source.to_string_lossy(),
+                "builtin": true,
+            }))?;
         }
-
-        runtime.install_plugin(&json!({
-            "id": id,
-            "source": source.to_string_lossy(),
-            "builtin": true,
-        }))?;
     }
     Ok(())
 }
@@ -2557,10 +1573,6 @@ fn workspace_file_preview(
         result["content"] = Value::String(content);
     }
     Ok(result)
-}
-
-fn route_id(payload: &Value) -> Result<String, AppError> {
-    required_string(payload, "routeId")
 }
 
 fn read_system_clipboard() -> Result<Value, AppError> {
@@ -3224,9 +2236,6 @@ fn install_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     let toggle_review = MenuItemBuilder::with_id("menu-toggle-review", "切换审阅面板")
         .build(app)
         .map_err(AppError::internal)?;
-    let browser = MenuItemBuilder::with_id("menu-browser", "浏览器")
-        .build(app)
-        .map_err(AppError::internal)?;
     let find = MenuItemBuilder::with_id("menu-find", "查找")
         .accelerator("CmdOrCtrl+KeyF")
         .build(app)
@@ -3250,8 +2259,6 @@ fn install_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
         .item(&open_terminal)
         .item(&toggle_files)
         .item(&toggle_review)
-        .separator()
-        .item(&browser)
         .separator()
         .item(&find)
         .separator()
@@ -3338,15 +2345,6 @@ fn forward_runtime_event<R: Runtime>(app: &AppHandle<R>, event: &EventEnvelope) 
         onpeople_types::EventKind::Runtime => {
             let _ = app.emit("runtime:updated", &event.payload);
         }
-        onpeople_types::EventKind::BrowserNavigation => {
-            let _ = app.emit("browser:agent-navigation", &event.payload);
-        }
-        onpeople_types::EventKind::BrowserPreview => {
-            let _ = app.emit("browser:preview-updated", &event.payload);
-        }
-        onpeople_types::EventKind::BrowserNewTab => {
-            let _ = app.emit("browser:new-tab-requested", &event.payload);
-        }
         onpeople_types::EventKind::Scheduler => {
             let _ = app.emit("scheduler:updated", &event.payload);
         }
@@ -3355,9 +2353,6 @@ fn forward_runtime_event<R: Runtime>(app: &AppHandle<R>, event: &EventEnvelope) 
         }
         onpeople_types::EventKind::DeepLink => {
             let _ = app.emit("app:deep-link", &event.payload);
-        }
-        onpeople_types::EventKind::BrowserState => {
-            let _ = app.emit("browser:state", &event.payload);
         }
     }
 }
@@ -3563,122 +2558,6 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
             }
         }
     });
-    let browser = state.browser.clone();
-    let browser_state_source = state.clone();
-    let browser_app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut events = browser.subscribe();
-        while let Ok(event) = events.recv().await {
-            let payload = match event {
-                BrowserHostEvent::State(_value) => {
-                    let _ = browser_app.emit(
-                        "browser:state",
-                        browser_state_source.current_browser_state(),
-                    );
-                    continue;
-                }
-                BrowserHostEvent::Frame(value) => {
-                    let _ = browser_app.emit("browser:preview-updated", &value);
-                    json!({ "kind": "frame", "value": value })
-                }
-                BrowserHostEvent::Navigation { route_id, url } => {
-                    let _ = browser_app.emit(
-                        "browser:agent-navigation",
-                        json!({ "routeId": route_id.clone(), "url": url.clone() }),
-                    );
-                    json!({ "kind": "navigation", "routeId": route_id, "url": url })
-                }
-                BrowserHostEvent::NewTab { route_id, url } => {
-                    let _ = browser_app.emit(
-                        "browser:new-tab-requested",
-                        json!({ "routeId": route_id.clone(), "url": url.clone() }),
-                    );
-                    json!({ "kind": "new-tab", "routeId": route_id, "url": url })
-                }
-                BrowserHostEvent::Crash { route_id, message } => {
-                    json!({ "kind": "crash", "routeId": route_id, "message": message })
-                }
-            };
-            let _ = browser_app.emit("browser:event", payload);
-        }
-    });
-    // The Browser Host is a separate process, so mirror its state into the
-    // shell once and publish only actual changes. Publishing every poll tick
-    // caused React to treat the active tab as new and repeatedly replace the
-    // native surface with a screenshot fallback.
-    let remote_state_source = state.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(250));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_published = None;
-        loop {
-            ticker.tick().await;
-            let Ok(value) = remote_state_source
-                .browser_ipc
-                .request(BrowserCommand::StateSnapshot)
-                .await
-            else {
-                continue;
-            };
-            let Ok(remote_state) = serde_json::from_value::<BrowserState>(value) else {
-                continue;
-            };
-            let published = remote_state_source.cache_remote_browser_state(remote_state);
-            let Ok(fingerprint) = serde_json::to_value(&published) else {
-                continue;
-            };
-            if last_published.as_ref() == Some(&fingerprint) {
-                continue;
-            }
-            last_published = Some(fingerprint);
-            remote_state_source.browser.publish_state(published);
-        }
-    });
-    // Bridge the Browser Host's retained IOSurface lease over the existing IPC
-    // commands. Render synchronously before acknowledging the frame so CEF
-    // cannot release the source surface while Metal is copying it.
-    let frame_state = state.clone();
-    let frame_app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(16));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            let current = frame_state.current_browser_state();
-            if !current.host_ready {
-                continue;
-            }
-            let Some(route_id) = current.active_route_id else {
-                continue;
-            };
-            let Ok(value) = frame_state
-                .browser_ipc
-                .request(BrowserCommand::FrameSnapshot {
-                    route_id: route_id.clone(),
-                })
-                .await
-            else {
-                continue;
-            };
-            let Ok(frame) = serde_json::from_value::<BrowserFrame>(value) else {
-                continue;
-            };
-            if frame.route_id != route_id {
-                continue;
-            }
-            let rendered = native_compositor::render_frame(&frame_app, frame.clone()).is_ok();
-            let _ = frame_state
-                .browser_ipc
-                .request(BrowserCommand::FrameConsumed {
-                    route_id: frame.route_id.clone(),
-                    sequence: frame.sequence,
-                })
-                .await;
-            if rendered {
-                frame_state.browser.emit_frame_internal(frame);
-            }
-        }
-    });
     let deep_link_state = state.clone();
     let deep_link_app = app.clone();
     app.deep_link().on_open_url(move |event| {
@@ -3744,102 +2623,7 @@ struct TauriDesktopHost<'a, R: Runtime> {
     frontend: &'a FrontendServer,
 }
 
-const fn legacy_browser_action_command(action: BrowserAction) -> &'static str {
-    match action {
-        BrowserAction::Navigate => "browser_navigate",
-        BrowserAction::Back => "browser_back",
-        BrowserAction::Forward => "browser_forward",
-        BrowserAction::Reload => "browser_reload",
-        BrowserAction::CaptureVisualSnapshot => "capture_browser_visual_snapshot",
-        BrowserAction::InspectDeveloperState => "inspect_browser_developer_state",
-        BrowserAction::BeginAnnotation => "begin_browser_annotation",
-        BrowserAction::CancelAnnotation => "cancel_browser_annotation",
-        BrowserAction::SessionStatus => "get_browser_session_status",
-        BrowserAction::OpenSignIn => "open_browser_sign_in",
-        BrowserAction::ClearSession => "clear_browser_session",
-        BrowserAction::ClearAllData => "clear_all_browser_data",
-        BrowserAction::ClearSettingsData => "clear_browser_data_from_settings",
-        BrowserAction::FillSavedCredential => "fill_saved_browser_credential",
-        BrowserAction::ListImportProfiles => "list_browser_import_profiles",
-        BrowserAction::ImportProfile => "import_browser_profile",
-        BrowserAction::Attach => "attach_browser",
-        BrowserAction::ActivateTab => "activate_browser_tab",
-        BrowserAction::DetachTab => "detach_browser_tab",
-    }
-}
-
 impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
-    fn browser<'a>(
-        &'a self,
-        operation: BrowserHostOperation,
-        params: Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            match operation {
-                BrowserHostOperation::State => {
-                    serde_json::to_value(self.state.current_browser_state())
-                        .map_err(AppError::internal)
-                }
-                BrowserHostOperation::Restart => {
-                    self.state.force_restart_browser_host().await?;
-                    serde_json::to_value(self.state.current_browser_state())
-                        .map_err(AppError::internal)
-                }
-                BrowserHostOperation::Command => {
-                    let command: BrowserCommand =
-                        serde_json::from_value(params).map_err(AppError::invalid)?;
-                    self.state.apply_browser_remote(command).await
-                }
-                BrowserHostOperation::SurfaceBounds => {
-                    let request: BrowserBoundsRequest =
-                        serde_json::from_value(params).map_err(AppError::invalid)?;
-                    native_compositor::update_bounds(self.app, request.clone())?;
-                    if request.interactive {
-                        return Ok(json!({ "interactive": true }));
-                    }
-                    self.state
-                        .apply_browser_remote(BrowserCommand::Resize {
-                            route_id: request.route_id,
-                            width: request.width.round().clamp(1.0, 8_192.0) as u32,
-                            height: request.height.round().clamp(1.0, 8_192.0) as u32,
-                            scale_factor: request.scale_factor,
-                            visible: request.visible,
-                        })
-                        .await
-                }
-                BrowserHostOperation::AnnotationList => {
-                    let route_id = route_id(&params)?;
-                    serde_json::to_value(self.state.browser.annotations(&route_id))
-                        .map_err(AppError::internal)
-                }
-                BrowserHostOperation::AnnotationSave => {
-                    let annotation: BrowserAnnotation =
-                        serde_json::from_value(params).map_err(AppError::invalid)?;
-                    serde_json::to_value(self.state.browser.save_annotation(annotation)?)
-                        .map_err(AppError::internal)
-                }
-                BrowserHostOperation::AnnotationDelete => {
-                    let request: BrowserAnnotationDeleteRequest =
-                        serde_json::from_value(params).map_err(AppError::invalid)?;
-                    serde_json::to_value(self.state.browser.delete_annotation(&request.id))
-                        .map_err(AppError::internal)
-                }
-                BrowserHostOperation::Action => {
-                    let request: BrowserActionRequest =
-                        serde_json::from_value(params).map_err(AppError::invalid)?;
-                    self.state
-                        .dispatch_command(
-                            self.app,
-                            legacy_browser_action_command(request.action),
-                            Value::Object(request.payload.into_iter().collect()),
-                        )
-                        .await
-                }
-            }
-        })
-    }
-
     fn shell<'a>(
         &'a self,
         operation: ShellHostOperation,
@@ -4253,47 +3037,6 @@ fn get_app_update_state(state: State<'_, AppState>) -> Result<AppUpdateState, Ap
 }
 
 #[tauri::command]
-fn get_browser_state(state: State<'_, AppState>) -> Result<BrowserState, AppError> {
-    Ok(state.current_browser_state())
-}
-
-#[tauri::command]
-async fn restart_browser_host(state: State<'_, AppState>) -> Result<BrowserState, AppError> {
-    state.force_restart_browser_host().await?;
-    Ok(state.current_browser_state())
-}
-
-#[tauri::command]
-async fn browser_command(
-    state: State<'_, AppState>,
-    command: BrowserCommand,
-) -> Result<Value, AppError> {
-    state.apply_browser_remote(command).await
-}
-
-#[tauri::command]
-async fn browser_surface_bounds<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-    request: BrowserBoundsRequest,
-) -> Result<Value, AppError> {
-    native_compositor::update_bounds(&app, request.clone())?;
-    if request.interactive {
-        return Ok(json!({ "interactive": true }));
-    }
-    let width = request.width.round().clamp(1.0, 8_192.0) as u32;
-    let height = request.height.round().clamp(1.0, 8_192.0) as u32;
-    let command = BrowserCommand::Resize {
-        route_id: request.route_id,
-        width,
-        height,
-        scale_factor: request.scale_factor,
-        visible: request.visible,
-    };
-    state.apply_browser_remote(command).await
-}
-
-#[tauri::command]
 fn stream_terminal(
     state: State<'_, AppState>,
     request: TerminalIdRequest,
@@ -4369,64 +3112,6 @@ fn stream_agent(
 }
 
 #[tauri::command]
-async fn stream_browser(
-    state: State<'_, AppState>,
-    channel: Channel<StreamEnvelope>,
-) -> Result<(), AppError> {
-    state.ensure_browser_ready().await?;
-    let mut events = state.browser.subscribe();
-    let sequence = Arc::clone(&state.stream_sequence);
-    let event_channel = channel.clone();
-    tauri::async_runtime::spawn(async move {
-        while let Ok(event) = events.recv().await {
-            let (stream_id, payload) = match event {
-                BrowserHostEvent::Frame(frame) => {
-                    if frame.sequence <= 3 {
-                        eprintln!(
-                            "[onpeople-tauri] browser frame event route={} sequence={}",
-                            frame.route_id, frame.sequence
-                        );
-                    }
-                    (
-                        frame.route_id.clone(),
-                        serde_json::to_value(frame).unwrap_or(Value::Null),
-                    )
-                }
-                BrowserHostEvent::Navigation { route_id, url } => {
-                    (route_id, json!({ "kind": "navigation", "url": url }))
-                }
-                BrowserHostEvent::NewTab { route_id, url } => {
-                    (route_id, json!({ "kind": "new-tab", "url": url }))
-                }
-                BrowserHostEvent::Crash { route_id, message } => {
-                    (route_id, json!({ "kind": "crash", "message": message }))
-                }
-                BrowserHostEvent::State(state) => (
-                    state
-                        .active_route_id
-                        .clone()
-                        .unwrap_or_else(|| "browser".to_owned()),
-                    serde_json::to_value(state).unwrap_or(Value::Null),
-                ),
-            };
-            if event_channel
-                .send(StreamEnvelope {
-                    sequence: sequence.fetch_add(1, Ordering::Relaxed),
-                    kind: StreamKind::BrowserFrame,
-                    stream_id,
-                    payload,
-                    terminal: false,
-                })
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-    Ok(())
-}
-
-#[tauri::command]
 fn stream_live(
     state: State<'_, AppState>,
     channel: Channel<StreamEnvelope>,
@@ -4454,30 +3139,6 @@ fn stream_live(
         }
     });
     Ok(())
-}
-
-#[tauri::command]
-fn list_browser_annotations(
-    state: State<'_, AppState>,
-    route_id: String,
-) -> Result<Vec<BrowserAnnotation>, AppError> {
-    Ok(state.browser.annotations(&route_id))
-}
-
-#[tauri::command]
-fn save_browser_annotation(
-    state: State<'_, AppState>,
-    annotation: BrowserAnnotation,
-) -> Result<BrowserAnnotation, AppError> {
-    state.browser.save_annotation(annotation)
-}
-
-#[tauri::command]
-fn delete_browser_annotation(
-    state: State<'_, AppState>,
-    request: onpeople_types::IdRequest,
-) -> Result<bool, AppError> {
-    Ok(state.browser.delete_annotation(&request.id))
 }
 
 #[tauri::command]
@@ -4664,7 +3325,6 @@ command_wrapper!(
 command_wrapper!(command_interrupt, "interrupt");
 command_wrapper!(command_resolve_approval, "resolve_approval");
 command_wrapper!(command_resolve_user_input, "resolve_user_input");
-command_wrapper!(command_browser_navigate, "browser_navigate");
 command_wrapper!(
     command_get_quick_launcher_suggestions,
     "get_quick_launcher_suggestions"
@@ -4672,45 +3332,6 @@ command_wrapper!(
 command_wrapper!(command_get_project_actions, "get_project_actions");
 command_wrapper!(command_authorize_project_action, "authorize_project_action");
 command_wrapper!(command_open_workspace_file, "open_workspace_file");
-command_wrapper!(command_browser_back, "browser_back");
-command_wrapper!(command_browser_forward, "browser_forward");
-command_wrapper!(command_browser_reload, "browser_reload");
-command_wrapper!(
-    command_capture_browser_visual_snapshot,
-    "capture_browser_visual_snapshot"
-);
-command_wrapper!(
-    command_inspect_browser_developer_state,
-    "inspect_browser_developer_state"
-);
-command_wrapper!(command_begin_browser_annotation, "begin_browser_annotation");
-command_wrapper!(
-    command_cancel_browser_annotation,
-    "cancel_browser_annotation"
-);
-command_wrapper!(
-    command_get_browser_session_status,
-    "get_browser_session_status"
-);
-command_wrapper!(command_open_browser_sign_in, "open_browser_sign_in");
-command_wrapper!(command_clear_browser_session, "clear_browser_session");
-command_wrapper!(command_clear_all_browser_data, "clear_all_browser_data");
-command_wrapper!(
-    command_clear_browser_data_from_settings,
-    "clear_browser_data_from_settings"
-);
-command_wrapper!(
-    command_fill_saved_browser_credential,
-    "fill_saved_browser_credential"
-);
-command_wrapper!(
-    command_list_browser_import_profiles,
-    "list_browser_import_profiles"
-);
-command_wrapper!(command_import_browser_profile, "import_browser_profile");
-command_wrapper!(command_attach_browser, "attach_browser");
-command_wrapper!(command_activate_browser_tab, "activate_browser_tab");
-command_wrapper!(command_detach_browser_tab, "detach_browser_tab");
 
 pub fn run() {
     // reqwest/tauri-updater and tokio-tungstenite enable different rustls
@@ -4838,17 +3459,9 @@ pub fn run() {
             get_cloud_account,
             discover_models,
             get_app_update_state,
-            get_browser_state,
-            restart_browser_host,
-            browser_command,
-            browser_surface_bounds,
             stream_terminal,
             stream_agent,
-            stream_browser,
             stream_live,
-            list_browser_annotations,
-            save_browser_annotation,
-            delete_browser_annotation,
             set_terminal_focused,
             open_task_window,
             command_pick_images,
@@ -4959,29 +3572,10 @@ pub fn run() {
             command_interrupt,
             command_resolve_approval,
             command_resolve_user_input,
-            command_browser_navigate,
             command_get_quick_launcher_suggestions,
             command_get_project_actions,
             command_authorize_project_action,
             command_open_workspace_file,
-            command_browser_back,
-            command_browser_forward,
-            command_browser_reload,
-            command_capture_browser_visual_snapshot,
-            command_inspect_browser_developer_state,
-            command_begin_browser_annotation,
-            command_cancel_browser_annotation,
-            command_get_browser_session_status,
-            command_open_browser_sign_in,
-            command_clear_browser_session,
-            command_clear_all_browser_data,
-            command_clear_browser_data_from_settings,
-            command_fill_saved_browser_credential,
-            command_list_browser_import_profiles,
-            command_import_browser_profile,
-            command_attach_browser,
-            command_activate_browser_tab,
-            command_detach_browser_tab,
         ]);
 
     builder
@@ -5051,9 +3645,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use onpeople_types::{AppError, ErrorCode};
-
-    use super::{browser_error_kind, workspace_file_preview};
+    use super::workspace_file_preview;
 
     #[test]
     fn builds_internal_previews_for_markdown_pdf_and_media() {
@@ -5096,26 +3688,5 @@ mod tests {
                 .any(|line| line.trim() == "\"open_local_artifact\","),
             "open_local_artifact must remain in the desktop command permission list"
         );
-    }
-
-    #[test]
-    fn classifies_spawn_failures_as_startup_failures() {
-        let error = AppError::new(ErrorCode::BrowserUnavailable, "无法启动 CEF 浏览器宿主");
-        assert_eq!(browser_error_kind(&error), "startup-failed");
-    }
-
-    #[test]
-    fn classifies_process_exit_separately_from_startup_failure() {
-        let error = AppError::new(ErrorCode::ProcessFailed, "CEF 浏览器宿主在启动期间退出");
-        assert_eq!(browser_error_kind(&error), "host-exit");
-    }
-
-    #[test]
-    fn classifies_protocol_and_cef_initialization_failures() {
-        let protocol = AppError::new(ErrorCode::BrowserProtocol, "协议版本不匹配");
-        assert_eq!(browser_error_kind(&protocol), "protocol-mismatch");
-
-        let cef = AppError::new(ErrorCode::Internal, "CEF 初始化失败");
-        assert_eq!(browser_error_kind(&cef), "cef-init-failed");
     }
 }

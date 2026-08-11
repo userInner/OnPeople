@@ -4,12 +4,6 @@ import type { AgentListRequest } from "../bindings/AgentListRequest";
 import type { AgentMessageRequest } from "../bindings/AgentMessageRequest";
 import type { AgentProfileIdRequest } from "../bindings/AgentProfileIdRequest";
 import type { AgentProfileSaveRequest } from "../bindings/AgentProfileSaveRequest";
-import type { BrowserActionRequest } from "../bindings/BrowserActionRequest";
-import type { BrowserAnnotation } from "../bindings/BrowserAnnotation";
-import type { BrowserAnnotationDeleteRequest } from "../bindings/BrowserAnnotationDeleteRequest";
-import type { BrowserBoundsRequest } from "../bindings/BrowserBoundsRequest";
-import type { BrowserRouteRequest } from "../bindings/BrowserRouteRequest";
-import type { BrowserState } from "../bindings/BrowserState";
 import type { CloudAccountState } from "../bindings/CloudAccountState";
 import type { CloudGroupSelectRequest } from "../bindings/CloudGroupSelectRequest";
 import type { CloudLoginRequest } from "../bindings/CloudLoginRequest";
@@ -20,7 +14,6 @@ import type { CloudRegistrationCodeRequest } from "../bindings/CloudRegistration
 import type { ConnectorOauthCompleteRequest } from "../bindings/ConnectorOauthCompleteRequest";
 import type { QueuedTaskMessage } from "../bindings/QueuedTaskMessage";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
-import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
 import type { DesktopEvent } from "../bindings/DesktopEvent";
 import type { DesktopMethod } from "../bindings/DesktopMethod";
 import type { DesktopRequest } from "../bindings/DesktopRequest";
@@ -404,38 +397,6 @@ export interface DesktopMethodMap {
   "git.review.start": { params: GitReviewStartRequest; result: JsonValue };
   "git.review.submit": { params: GitReviewSubmitRequest; result: JsonValue };
   "git.worktree": { params: WorktreeRequest; result: JsonValue };
-  "browser.state": {
-    params: Record<string, never>;
-    result: BrowserState;
-  };
-  "browser.restart": {
-    params: Record<string, never>;
-    result: BrowserState;
-  };
-  "browser.command": {
-    params: { command: DesktopBrowserCommand };
-    result: JsonValue;
-  };
-  "browser.surface.bounds": {
-    params: BrowserBoundsRequest;
-    result: JsonValue;
-  };
-  "browser.annotation.list": {
-    params: BrowserRouteRequest;
-    result: BrowserAnnotation[];
-  };
-  "browser.annotation.save": {
-    params: BrowserAnnotation;
-    result: BrowserAnnotation;
-  };
-  "browser.annotation.delete": {
-    params: BrowserAnnotationDeleteRequest;
-    result: boolean;
-  };
-  "browser.action": {
-    params: BrowserActionRequest;
-    result: JsonValue;
-  };
   "plugin.install": {
     params: PluginPayloadRequest;
     result: JsonValue;

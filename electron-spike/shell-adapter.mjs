@@ -10,8 +10,6 @@ import {
   systemPreferences,
 } from "electron";
 
-import { isSafeBrowserUrl } from "./browser-controller.mjs";
-
 function nonEmptyPath(value, field = "path") {
   const result = String(value ?? "").trim();
   if (!result) throw new Error(`${field} 不能为空`);
@@ -171,7 +169,13 @@ export class ElectronShellAdapter {
 
   async #openUrl(value) {
     const url = String(value ?? "");
-    if (!isSafeBrowserUrl(url) || new URL(url).protocol === "about:") {
+    let protocol;
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      throw new Error("只允许打开 HTTP 或 HTTPS 链接");
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
       throw new Error("只允许打开 HTTP 或 HTTPS 链接");
     }
     await shell.openExternal(url);
@@ -194,7 +198,7 @@ export class ElectronShellAdapter {
       defaultPath: initialPath || undefined,
       properties: ["openDirectory", "createDirectory"],
     });
-    const selected = result.canceled ? null : result.filePaths[0] ?? null;
+    const selected = result.canceled ? null : (result.filePaths[0] ?? null);
     const preferences = await this.#rustResult("preferences.get", {});
     if (!selected) return preferences;
     const next = { ...preferences, downloadDirectory: selected };
@@ -209,7 +213,8 @@ export class ElectronShellAdapter {
       method,
       params,
     });
-    if (!response.ok) throw response.error ?? new Error(`Rust 请求失败: ${method}`);
+    if (!response.ok)
+      throw response.error ?? new Error(`Rust 请求失败: ${method}`);
     return response.result;
   }
 

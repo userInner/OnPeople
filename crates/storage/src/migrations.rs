@@ -104,18 +104,6 @@ fn migrations() -> Vec<(i64, &'static str)> {
                value_json TEXT NOT NULL,
                updated_at TEXT NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS browser_tabs (
-               route_id TEXT PRIMARY KEY,
-               thread_id TEXT NOT NULL,
-               value_json TEXT NOT NULL,
-               updated_at TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS browser_annotations (
-               id TEXT PRIMARY KEY,
-               route_id TEXT NOT NULL,
-               value_json TEXT NOT NULL,
-               updated_at TEXT NOT NULL
-             );
              CREATE TABLE IF NOT EXISTS secrets (
                id TEXT PRIMARY KEY,
                name TEXT NOT NULL,
@@ -145,12 +133,7 @@ fn migrations() -> Vec<(i64, &'static str)> {
         ),
         (
             3,
-            "CREATE TABLE IF NOT EXISTS browser_sessions (
-               provider_id TEXT PRIMARY KEY,
-               value_json TEXT NOT NULL,
-               updated_at TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS cloud_account (
+            "CREATE TABLE IF NOT EXISTS cloud_account (
                id INTEGER PRIMARY KEY CHECK(id = 1),
                metadata_json TEXT NOT NULL,
                keychain_ref TEXT,
@@ -164,8 +147,7 @@ fn migrations() -> Vec<(i64, &'static str)> {
         ),
         (
             4,
-            "CREATE INDEX IF NOT EXISTS idx_browser_annotations_route ON browser_annotations(route_id);
-             CREATE INDEX IF NOT EXISTS idx_memories_cwd ON memories(cwd);
+            "CREATE INDEX IF NOT EXISTS idx_memories_cwd ON memories(cwd);
              CREATE INDEX IF NOT EXISTS idx_scheduled_runs_task ON scheduled_runs(task_id, started_at DESC);",
         ),
         (
@@ -210,6 +192,12 @@ fn migrations() -> Vec<(i64, &'static str)> {
              );
              CREATE INDEX IF NOT EXISTS idx_timeline_items_thread_sequence
                ON timeline_items(thread_id, sequence ASC);",
+        ),
+        (
+            9,
+            "DROP TABLE IF EXISTS browser_sessions;
+             DROP TABLE IF EXISTS browser_annotations;
+             DROP TABLE IF EXISTS browser_tabs;",
         ),
     ]
 }

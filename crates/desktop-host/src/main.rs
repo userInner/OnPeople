@@ -2,8 +2,8 @@ use std::{env, future::Future, path::PathBuf, pin::Pin, process::ExitCode, sync:
 
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
-    BrowserHostOperation, DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRequest,
-    DesktopResponse, ShellHostOperation, should_forward_desktop_event,
+    DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRequest, DesktopResponse,
+    ShellHostOperation, should_forward_desktop_event,
 };
 use onpeople_storage::Storage;
 use onpeople_types::AppError;
@@ -34,25 +34,12 @@ enum HostMessage {
     Event(DesktopEvent),
 }
 
-/// Electron owns browser and OS-shell methods in its main-process adapter.
+/// Electron owns OS-shell methods in its main-process adapter.
 /// Supplying this port keeps capability discovery complete while preserving a
 /// hard failure if a host-owned request is accidentally forwarded to Rust.
 struct ExternalDesktopHost;
 
 impl DesktopHost for ExternalDesktopHost {
-    fn browser<'a>(
-        &'a self,
-        _operation: BrowserHostOperation,
-        _params: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(async {
-            Err(AppError::new(
-                onpeople_types::ErrorCode::Unsupported,
-                "浏览器方法必须由 Electron Desktop adapter 处理",
-            ))
-        })
-    }
-
     fn shell<'a>(
         &'a self,
         _operation: ShellHostOperation,

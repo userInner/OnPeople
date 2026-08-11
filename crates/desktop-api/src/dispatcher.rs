@@ -14,10 +14,8 @@ use serde_json::{Value, json};
 
 use crate::{
     AgentIdRequest, AgentListRequest, AgentMessageRequest, AgentProfileIdRequest,
-    AgentProfileSaveRequest, AuthorizedProjectAction, BrowserActionRequest,
-    BrowserAnnotationDeleteRequest, BrowserCommandRequest, BrowserHostOperation,
-    BrowserRouteRequest, CloudGroupSelectRequest, CloudLoginRequest, CloudPayloadRequest,
-    CloudRedeemRequest, CloudRegisterRequest, CloudRegistrationCodeRequest,
+    AgentProfileSaveRequest, AuthorizedProjectAction, CloudGroupSelectRequest, CloudLoginRequest,
+    CloudPayloadRequest, CloudRedeemRequest, CloudRegisterRequest, CloudRegistrationCodeRequest,
     ConnectorOauthCompleteRequest, ContextRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities,
     DesktopEvent, DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EffectiveConfig,
     EffectiveConfigRequest, EventReplay, EventReplayRequest, ExtensionsListRequest,
@@ -284,11 +282,10 @@ impl DesktopDispatcher {
             }
             DesktopMethod::ProjectQuickLauncher => {
                 let request: QuickLauncherRequest = parse_params(params)?;
-                to_value(self.runtime.quick_launcher_suggestions(
-                    &request.cwd,
-                    request.route_id.as_deref(),
-                    &request.query,
-                )?)
+                to_value(
+                    self.runtime
+                        .quick_launcher_suggestions(&request.cwd, &request.query)?,
+                )
             }
             DesktopMethod::AgentList => {
                 let request: AgentListRequest = parse_params(params)?;
@@ -623,11 +620,7 @@ impl DesktopDispatcher {
             }
             DesktopMethod::FilePreview => {
                 let request: FilePreviewRequest = parse_params(params)?;
-                let result = self.runtime.file_preview(
-                    &request.cwd,
-                    &request.path,
-                    request.route_id.as_deref(),
-                )?;
+                let result = self.runtime.file_preview(&request.cwd, &request.path)?;
                 to_value(parse_result::<FilePreview>(result)?)
             }
             DesktopMethod::FileArtifactPreview => {
@@ -731,63 +724,6 @@ impl DesktopDispatcher {
             DesktopMethod::GitWorktree => {
                 let request: WorktreeRequest = parse_params(params)?;
                 self.runtime.worktrees(request)
-            }
-            DesktopMethod::BrowserState => {
-                parse_empty(params)?;
-                call_host(host, BrowserHostOperation::State, json!({})).await
-            }
-            DesktopMethod::BrowserRestart => {
-                parse_empty(params)?;
-                call_host(host, BrowserHostOperation::Restart, json!({})).await
-            }
-            DesktopMethod::BrowserCommand => {
-                let request: BrowserCommandRequest = parse_params(params)?;
-                call_host(
-                    host,
-                    BrowserHostOperation::Command,
-                    to_value(request.command)?,
-                )
-                .await
-            }
-            DesktopMethod::BrowserSurfaceBounds => {
-                let request: onpeople_types::BrowserBoundsRequest = parse_params(params)?;
-                call_host(
-                    host,
-                    BrowserHostOperation::SurfaceBounds,
-                    to_value(request)?,
-                )
-                .await
-            }
-            DesktopMethod::BrowserAnnotationList => {
-                let request: BrowserRouteRequest = parse_params(params)?;
-                call_host(
-                    host,
-                    BrowserHostOperation::AnnotationList,
-                    to_value(request)?,
-                )
-                .await
-            }
-            DesktopMethod::BrowserAnnotationSave => {
-                let annotation: onpeople_types::BrowserAnnotation = parse_params(params)?;
-                call_host(
-                    host,
-                    BrowserHostOperation::AnnotationSave,
-                    to_value(annotation)?,
-                )
-                .await
-            }
-            DesktopMethod::BrowserAnnotationDelete => {
-                let request: BrowserAnnotationDeleteRequest = parse_params(params)?;
-                call_host(
-                    host,
-                    BrowserHostOperation::AnnotationDelete,
-                    to_value(request)?,
-                )
-                .await
-            }
-            DesktopMethod::BrowserAction => {
-                let request: BrowserActionRequest = parse_params(params)?;
-                call_host(host, BrowserHostOperation::Action, to_value(request)?).await
             }
             DesktopMethod::PluginInstall => {
                 let request: PluginPayloadRequest = parse_params(params)?;
@@ -1142,17 +1078,6 @@ impl DesktopDispatcher {
     }
 }
 
-async fn call_host(
-    host: Option<&dyn DesktopHost>,
-    operation: BrowserHostOperation,
-    params: Value,
-) -> Result<Value, AppError> {
-    let host = host.ok_or_else(|| {
-        AppError::new(ErrorCode::Unsupported, "当前桌面适配器不支持浏览器宿主能力")
-    })?;
-    host.browser(operation, params).await
-}
-
 async fn call_shell_host<T: DeserializeOwned + Serialize>(
     host: Option<&dyn DesktopHost>,
     operation: ShellHostOperation,
@@ -1261,28 +1186,10 @@ mod tests {
 
     #[derive(Default)]
     struct FakeDesktopHost {
-        calls: Mutex<Vec<(BrowserHostOperation, Value)>>,
         shell_calls: Mutex<Vec<(ShellHostOperation, Value)>>,
     }
 
     impl DesktopHost for FakeDesktopHost {
-        fn browser<'a>(
-            &'a self,
-            operation: BrowserHostOperation,
-            params: Value,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
-        {
-            Box::pin(async move {
-                self.calls
-                    .lock()
-                    .expect("fake host calls")
-                    .push((operation, params));
-                Ok(
-                    json!({ "hostReady": true, "hostStatus": "ready", "activeRouteId": null, "tabs": [], "profilePath": "/tmp/profile" }),
-                )
-            })
-        }
-
         fn shell<'a>(
             &'a self,
             operation: ShellHostOperation,
@@ -1337,41 +1244,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("system")
         );
-        runtime.stop().await;
-    }
-
-    #[tokio::test]
-    async fn browser_methods_require_and_use_a_shell_host_port() {
-        let temporary = tempfile::tempdir().expect("temporary data root");
-        let storage =
-            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
-        let runtime = Arc::new(
-            CoreRuntime::new(storage, temporary.path().join("runtime"))
-                .expect("create core runtime"),
-        );
-        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
-        let request = || DesktopRequest {
-            protocol_version: DESKTOP_PROTOCOL_VERSION,
-            request_id: "browser-state-1".to_owned(),
-            method: DesktopMethod::BrowserState,
-            params: json!({}),
-        };
-
-        let unsupported = dispatcher.dispatch(request()).await;
-        assert!(!unsupported.ok);
-        assert_eq!(
-            unsupported.error.as_ref().map(|error| error.code),
-            Some(ErrorCode::Unsupported)
-        );
-
-        let host = FakeDesktopHost::default();
-        let response = dispatcher.dispatch_with_host(request(), &host).await;
-        assert!(response.ok, "unexpected response: {response:?}");
-        {
-            let calls = host.calls.lock().expect("fake host calls");
-            assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].0, BrowserHostOperation::State);
-        }
         runtime.stop().await;
     }
 
@@ -1572,7 +1444,6 @@ mod tests {
                 params: json!({
                     "cwd": temporary.path(),
                     "path": "hello.md",
-                    "routeId": null,
                 }),
             })
             .await;
@@ -1600,7 +1471,6 @@ mod tests {
                 params: json!({
                     "cwd": temporary.path(),
                     "path": "../outside.md",
-                    "routeId": null,
                 }),
             })
             .await;

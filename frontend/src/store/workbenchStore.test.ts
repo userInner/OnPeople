@@ -53,7 +53,7 @@ describe("live turn attribution", () => {
         role: "user",
         kind: "message",
         turnId: "turn-previous",
-        text: "检查浏览器设置",
+        text: "检查项目设置",
       },
       {
         id: "assistant-previous",
@@ -69,13 +69,13 @@ describe("live turn attribution", () => {
       [
         {
           id: "queue-search",
-          threadId: "thread-browser",
+          threadId: "thread-search",
           text: "你搜索 ChatGPT",
           queuedAt: "2026-08-11T02:59:00.000Z",
           status: "queued",
         },
       ],
-      "thread-browser",
+      "thread-search",
       "turn-search",
       "2026-08-11T02:59:01.000Z",
     );
@@ -95,11 +95,11 @@ describe("live turn attribution", () => {
     const withLiveTool = [
       ...anchored.timeline,
       {
-        id: "browser-search",
+        id: "web-search",
         turnId: "turn-search",
         role: "tool" as const,
         kind: "tool" as const,
-        text: "browser_navigate",
+        text: "web_search",
       },
     ];
     expect(withLiveTool.map((item) => item.role)).toEqual([

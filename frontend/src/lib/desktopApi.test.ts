@@ -192,26 +192,19 @@ describe("DesktopApiClient", () => {
     ]);
   });
 
-  it("routes browser and plugin capabilities through stable domain methods", async () => {
+  it("routes plugin capabilities through stable domain methods", async () => {
     const transport = vi.fn(async (request) => ({
       protocolVersion: DESKTOP_PROTOCOL_VERSION,
       requestId: request.requestId,
       ok: true,
-      result: request.method === "browser.state" ? { hostReady: true } : {},
+      result: {},
     }));
     const client = createDesktopApiClient(transport, () => "request-domains");
 
-    await client.request("browser.state", {});
-    await client.request("browser.action", {
-      action: "navigate",
-      payload: { routeId: "route-1", url: "https://example.com" },
-    });
     await client.request("plugin.uninstall", { pluginId: "example" });
     await client.request("connector.disconnect", { pluginId: "example" });
 
     expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
-      "browser.state",
-      "browser.action",
       "plugin.uninstall",
       "connector.disconnect",
     ]);

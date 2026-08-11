@@ -5,7 +5,6 @@ import { isCloudAccountState } from "../lib/cloudAccount";
 import { errorMessage } from "../lib/errors";
 import type {
   AgentStatus,
-  BrowserState,
   EventEnvelope,
   Goal,
   LocalArtifactPreviewRequest,
@@ -32,8 +31,6 @@ const defaultPreferences: Preferences = {
   showComposerFooter: true,
   showSuggestions: true,
   defaultFileOpener: "smart",
-  browserOpenLinks: "internal",
-  browserEnabled: true,
   liveVoice: "cove",
   downloadDirectory: null,
   customInstructions: "",
@@ -62,7 +59,6 @@ interface WorkbenchStore {
   selectedThreadId: string | null;
   runtime: RuntimeSnapshot | null;
   scheduler: SchedulerSnapshot;
-  browser: BrowserState | null;
   timeline: TimelineItem[];
   queuedMessages: QueuedMessage[];
   /** Last known live trace for each task, retained while switching tasks. */
@@ -785,13 +781,9 @@ function itemToTimelineBase(
     };
   }
   if (
-    [
-      "toolCall",
-      "toolInvocation",
-      "browserAction",
-      "computerAction",
-      "applyPatch",
-    ].includes(type)
+    ["toolCall", "toolInvocation", "computerAction", "applyPatch"].includes(
+      type,
+    )
   ) {
     const tool = textValue(item.tool ?? item.name ?? item.action) || "工具调用";
     const target = textValue(item.path ?? item.filePath ?? item.url);
@@ -1345,7 +1337,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
   selectedThreadId: null,
   runtime: null,
   scheduler: { tasks: [], runs: [], unread: 0 },
-  browser: null,
   timeline: [],
   queuedMessages: [],
   timelineByThread: {},
@@ -1373,7 +1364,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         desktopClient.listThreads(),
         desktopClient.runtimeSnapshot(),
         desktopClient.scheduler(),
-        desktopClient.browserState(),
       ] as const);
       const [
         statusResult,
@@ -1381,7 +1371,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         threadListResult,
         runtimeResult,
         schedulerResult,
-        browserResult,
       ] = results;
       const status =
         statusResult.status === "fulfilled" ? statusResult.value : null;
@@ -1399,8 +1388,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         schedulerResult.status === "fulfilled"
           ? schedulerResult.value
           : { tasks: [], runs: [], unread: 0 };
-      const browser =
-        browserResult.status === "fulfilled" ? browserResult.value : null;
       const threadActivity = Object.fromEntries(
         threadList.threads.map((thread) => [
           thread.id,
@@ -1417,7 +1404,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         threadList,
         runtime,
         scheduler,
-        browser,
         threadActivity,
         draftCwd: null,
         initialized: true,
@@ -1977,16 +1963,6 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
           .onSchedulerUpdated((value) => set({ scheduler: value }))
           .catch((error) => set({ error: errorMessage(error) }));
         await desktopClient
-          .onBrowserState((value) => set({ browser: value }))
-          .catch((error) => set({ error: errorMessage(error) }));
-        // The Browser Host can become ready after the initial snapshot but before
-        // this listener is installed. Re-read once after subscribing so that a
-        // startup transition cannot be lost and leave the UI showing stale state.
-        await desktopClient
-          .browserState()
-          .then((value) => set({ browser: value }))
-          .catch((error) => set({ error: errorMessage(error) }));
-        await desktopClient
           .onCloudAccountUpdated(async (account) => {
             if (!isCloudAccountState(account)) return;
             if (account.signedIn) {
@@ -2200,7 +2176,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         path,
         threadId: threadId ?? state.selectedThreadId,
       },
-      toolView: "browser",
+      toolView: "files",
       utilityOpen: true,
     });
   },

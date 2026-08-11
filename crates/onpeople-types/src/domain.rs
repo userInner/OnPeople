@@ -102,8 +102,6 @@ pub struct Preferences {
     pub show_composer_footer: bool,
     pub show_suggestions: bool,
     pub default_file_opener: String,
-    pub browser_open_links: String,
-    pub browser_enabled: bool,
     pub live_voice: String,
     pub download_directory: Option<String>,
     pub custom_instructions: String,
@@ -126,8 +124,6 @@ impl Default for Preferences {
             show_composer_footer: true,
             show_suggestions: true,
             default_file_opener: "smart".to_owned(),
-            browser_open_links: "internal".to_owned(),
-            browser_enabled: true,
             live_voice: "cove".to_owned(),
             download_directory: None,
             custom_instructions: String::new(),
@@ -314,98 +310,6 @@ pub struct WorktreeSummary {
     pub branch: Option<String>,
     pub bare: bool,
     pub prunable: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct BrowserTab {
-    pub route_id: String,
-    pub thread_id: String,
-    pub url: String,
-    pub title: String,
-    pub favicon_url: Option<String>,
-    pub loading: bool,
-    pub can_go_back: bool,
-    pub can_go_forward: bool,
-    pub crashed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserState {
-    pub host_ready: bool,
-    /// Shell-owned lifecycle state. The browser host itself only controls the
-    /// CEF-ready bit; the desktop shell adds starting/backoff/failed/crashed
-    /// states before publishing this DTO to the renderer.
-    #[serde(default)]
-    pub host_status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_error_kind: Option<String>,
-    pub active_route_id: Option<String>,
-    pub tabs: Vec<BrowserTab>,
-    pub profile_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserFrame {
-    pub route_id: String,
-    pub sequence: u64,
-    pub width: u32,
-    pub height: u32,
-    pub scale_factor: f64,
-    pub surface_kind: String,
-    pub surface_handle: String,
-    pub damage_rects: Vec<[u32; 4]>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserAnnotation {
-    pub id: String,
-    pub route_id: String,
-    pub url: String,
-    pub selector: Option<String>,
-    pub rect: Option<[f64; 4]>,
-    pub text: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserDeveloperState {
-    pub url: String,
-    pub console: Vec<Value>,
-    pub network: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserProfile {
-    pub id: String,
-    pub name: String,
-    pub browser: String,
-    pub path: String,
-    pub last_used_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct BrowserImportResult {
-    pub cookies: u64,
-    pub storage_files: u64,
-    pub credentials: u64,
-    pub skipped: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

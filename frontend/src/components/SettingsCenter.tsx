@@ -7,11 +7,9 @@ import {
   CircleUserRound,
   Cloud,
   Code2,
-  Download,
   FolderGit2,
   Gauge,
   GitBranch,
-  Globe2,
   Keyboard,
   Mic2,
   Palette,
@@ -70,12 +68,6 @@ const routeGroups: RouteGroup[] = [
         label: "模型与提供商",
         icon: BrainCircuit,
         description: "模型目录、API 和任务级配置",
-      },
-      {
-        id: "import",
-        label: "导入",
-        icon: Download,
-        description: "导入浏览器资料和旧版数据",
       },
       {
         id: "profile",
@@ -143,12 +135,6 @@ const routeGroups: RouteGroup[] = [
         description: "插件、Skills 与 MCP 服务",
       },
       {
-        id: "browser",
-        label: "浏览器",
-        icon: Globe2,
-        description: "隔离浏览器、资料与下载",
-      },
-      {
         id: "computer",
         label: "电脑操控",
         icon: ShieldCheck,
@@ -208,7 +194,6 @@ const allRoutes = routeGroups.flatMap((group) => group.routes);
 
 const interactiveSettingsRoutes = new Set<SettingsRoute>([
   "models",
-  "import",
   "profile",
   "usage",
   "account",
@@ -325,9 +310,6 @@ export function SettingsCenter() {
           };
           break;
         }
-        case "import":
-          value = await desktopClient.listBrowserImportProfiles();
-          break;
         case "profile":
           value = await desktopClient.listAgentProfiles();
           break;
@@ -349,12 +331,6 @@ export function SettingsCenter() {
           break;
         case "plugins":
           value = await desktopClient.listExtensions(cwd);
-          break;
-        case "browser":
-          value = {
-            session: await desktopClient.getBrowserSessionStatus("settings"),
-            import: await desktopClient.listBrowserImportProfiles(),
-          };
           break;
         case "hooks":
           value = {
@@ -426,7 +402,6 @@ export function SettingsCenter() {
   const routeDefinition =
     allRoutes.find((item) => item.id === route) ?? allRoutes[0];
   const voiceStatus = readableVoiceStatus(resource);
-  const browserStatus = readableBrowserStatus(resource);
 
   const persist = async (next: Preferences) => {
     setDraft(next);
@@ -708,68 +683,6 @@ export function SettingsCenter() {
           </SettingsSection>
         ) : null}
 
-        {route === "browser" ? (
-          <SettingsSection title="浏览器">
-            <div className="settings-card">
-              <ToggleRow
-                label="启用内嵌浏览器"
-                hint="为任务提供隔离浏览器路由"
-                value={draft.browserEnabled}
-                onChange={(value) => patch({ browserEnabled: value })}
-              />
-              <SelectRow
-                label="链接打开方式"
-                hint="网页请求新窗口时的处理方式"
-                value={draft.browserOpenLinks}
-                options={[
-                  { value: "internal", label: "OnPeople 标签" },
-                  { value: "system", label: "系统浏览器" },
-                ]}
-                onChange={(value) => patch({ browserOpenLinks: value })}
-              />
-              <ActionRow
-                label="下载位置"
-                hint={draft.downloadDirectory ?? "系统下载文件夹"}
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    void desktopClient.pickDirectory().then((path) => {
-                      if (path)
-                        return persist({ ...draft, downloadDirectory: path });
-                      return undefined;
-                    })
-                  }
-                >
-                  选择
-                </button>
-              </ActionRow>
-              <ActionRow
-                label="浏览器数据"
-                hint="清理隔离 Profile 中的 Cookie、存储和站点权限"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    void desktopClient
-                      .clearBrowserDataFromSettings()
-                      .then(loadRoute)
-                  }
-                >
-                  清除
-                </button>
-              </ActionRow>
-              <ActionRow label="Browser Host" hint={browserStatus.hint}>
-                <span
-                  className={`settings-status-pill is-${browserStatus.tone}`}
-                >
-                  {browserStatus.label}
-                </span>
-              </ActionRow>
-            </div>
-          </SettingsSection>
-        ) : null}
-
         {route === "shortcuts" ? <ShortcutSettings /> : null}
 
         {interactiveSettingsRoutes.has(route) ? (
@@ -799,7 +712,6 @@ export function SettingsCenter() {
         route !== "appearance" &&
         route !== "personalization" &&
         route !== "voice" &&
-        route !== "browser" &&
         route !== "shortcuts" &&
         !interactiveSettingsRoutes.has(route) ? (
           <SettingsSection title={routeDefinition?.label ?? "设置"}>
@@ -1095,48 +1007,6 @@ function readableVoiceStatus(value: unknown): {
   return {
     label: "未检查",
     hint: message ?? "开始语音会话时自动检查服务状态",
-    tone: "muted",
-  };
-}
-
-function readableBrowserStatus(value: unknown): {
-  label: string;
-  hint: string;
-  tone: "ready" | "muted" | "warning";
-} {
-  const root = settingsRecord(value);
-  const session = settingsRecord(root.session);
-  const rawStatus =
-    typeof session.status === "string"
-      ? session.status.toLocaleLowerCase()
-      : "";
-  const ready =
-    session.connected === true ||
-    session.ready === true ||
-    ["ready", "connected", "active", "running"].includes(rawStatus);
-  const failed =
-    session.error ||
-    ["failed", "error", "disconnected", "stopped"].includes(rawStatus);
-  if (ready) {
-    return {
-      label: "已就绪",
-      hint: "Browser Host 已连接，任务可以使用隔离浏览器",
-      tone: "ready",
-    };
-  }
-  if (failed) {
-    return {
-      label: "需要检查",
-      hint:
-        typeof session.error === "string"
-          ? session.error
-          : "Browser Host 当前未连接",
-      tone: "warning",
-    };
-  }
-  return {
-    label: "按需启动",
-    hint: "打开浏览器面板时自动连接 Browser Host",
     tone: "muted",
   };
 }

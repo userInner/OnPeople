@@ -16,7 +16,6 @@ tauri-build = { version = "2.5.3", features = [] }
 [dependencies]
 chrono.workspace = true
 base64.workspace = true
-onpeople-browser-host = { path = "../crates/browser-host", default-features = false }
 onpeople-core-runtime = { path = "../crates/core-runtime" }
 onpeople-desktop-api = { path = "../crates/desktop-api" }
 onpeople-integrations = { path = "../crates/integrations" }

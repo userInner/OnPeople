@@ -112,8 +112,6 @@ function annotateReviewLines(hunk: GitHunk): ReviewLine[] {
 
 export function GitPane() {
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
-  const browser = useWorkbenchStore((state) => state.browser);
-  const setToolView = useWorkbenchStore((state) => state.setToolView);
   const selectThread = useWorkbenchStore((state) => state.selectThread);
   const refreshThreads = useWorkbenchStore((state) => state.refreshThreads);
   const cwd = useWorkbenchStore((state) => {
@@ -238,25 +236,7 @@ export function GitPane() {
       setReview(value);
       const url = text(value.url);
       if (!url) throw new Error("后端没有返回 Pull Request 地址");
-      setToolView("browser");
-      const activeRoute =
-        browser?.tabs.find((tab) => tab.routeId === browser.activeRouteId) ??
-        browser?.tabs.at(0);
-      const routeId =
-        activeRoute?.routeId ??
-        `route-pr-${(selectedThreadId ?? "main").replace(/[^a-zA-Z0-9_.-]/g, "")}`;
-      if (activeRoute) {
-        await desktopClient.navigate(url, routeId);
-      } else {
-        await desktopClient.browserCommand({
-          command: "createRoute",
-          payload: {
-            routeId,
-            threadId: selectedThreadId ?? "main",
-            url,
-          },
-        });
-      }
+      await desktopClient.openExternalUrl(url);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {

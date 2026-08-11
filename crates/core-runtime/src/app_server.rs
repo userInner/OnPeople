@@ -26,8 +26,6 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct BuiltinMcpConfig {
     pub host_binary: PathBuf,
-    pub browser_socket: PathBuf,
-    pub browser_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -570,12 +568,6 @@ async fn write_onpeople_profile(
         ));
     }
     if let Some(mcp) = builtin_mcp {
-        contents.push_str(&format!(
-            "\n[mcp_servers.internal_browser]\ncommand = {}\nargs = [\"browser\"]\nrequired = false\nstartup_timeout_sec = 10\ntool_timeout_sec = 120\ndefault_tools_approval_mode = \"approve\"\n\n[mcp_servers.internal_browser.env]\nONPEOPLE_BROWSER_SOCKET = {}\nONPEOPLE_BROWSER_TOKEN = {}\n",
-            toml_string(&mcp.host_binary.to_string_lossy()),
-            toml_string(&mcp.browser_socket.to_string_lossy()),
-            toml_string(&mcp.browser_token),
-        ));
         for (server_id, argument) in [
             ("workspace_artifacts", "artifacts"),
             ("computer_use", "computer-use"),
@@ -804,7 +796,7 @@ mod profile_tests {
     }
 
     #[tokio::test]
-    async fn writes_the_builtin_browser_mcp_without_shell_quoting() {
+    async fn writes_builtin_mcp_servers_without_shell_quoting() {
         let root = tempdir().expect("temporary root");
         let provider = ProviderSettings {
             kind: ProviderKind::Onpeople,
@@ -815,8 +807,6 @@ mod profile_tests {
             host_binary:
                 "/Applications/OnPeople.app/Contents/Resources/.embedded-runtime/onpeople-mcp-host"
                     .into(),
-            browser_socket: "/tmp/OnPeople Browser/browser.sock".into(),
-            browser_token: "browser-token".to_owned(),
         };
         write_onpeople_profile(
             root.path(),
@@ -832,17 +822,12 @@ mod profile_tests {
         .expect("profile");
         let profile =
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
-        assert!(profile.contains("[mcp_servers.internal_browser]"));
-        assert!(profile.contains("args = [\"browser\"]"));
         assert!(profile.contains("[mcp_servers.workspace_artifacts]"));
+        assert_eq!(profile.matches("[mcp_servers.").count(), 4);
         assert!(profile.contains("args = [\"artifacts\"]"));
         assert!(profile.contains("[mcp_servers.computer_use]"));
         assert!(profile.contains("args = [\"computer-use\"]"));
         assert!(profile.contains("[mcp_servers.research_sources]"));
-        assert!(
-            profile.contains("ONPEOPLE_BROWSER_SOCKET = \"/tmp/OnPeople Browser/browser.sock\"")
-        );
-        assert!(profile.contains("ONPEOPLE_BROWSER_TOKEN = \"browser-token\""));
         assert!(profile.contains("enabled = false"));
         assert!(profile.contains("max_concurrent_threads_per_session = 6"));
     }

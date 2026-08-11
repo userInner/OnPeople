@@ -7,7 +7,6 @@ members = [
   "crates/core-runtime",
   "crates/storage",
   "crates/workspace",
-  "crates/browser-host",
   "crates/mcp-host",
   "crates/onpeople-cli",
   "crates/desktop-host",

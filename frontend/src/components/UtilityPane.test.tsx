@@ -4,9 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import { UtilityPane } from "./UtilityPane";
 
-vi.mock("./tools/BrowserPane", () => ({
-  BrowserPane: () => <div>Browser pane</div>,
-}));
 vi.mock("./tools/FilesPane", () => ({
   FilesPane: () => <div>Files pane</div>,
 }));
@@ -59,11 +56,11 @@ describe("UtilityPane toolbar", () => {
       screen.getByRole("button", { name: "切换工具，当前：输出" }),
     );
     const menu = screen.getByRole("menu");
-    expect(screen.getAllByRole("menuitemradio")).toHaveLength(5);
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(4);
     expect(menu).toHaveAttribute("data-native-surface-occluder", "true");
 
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "浏览器" }));
-    expect(useWorkbenchStore.getState().toolView).toBe("browser");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "文件" }));
+    expect(useWorkbenchStore.getState().toolView).toBe("files");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });

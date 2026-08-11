@@ -9,12 +9,12 @@ describe("parseDeepLinkActions", () => {
         argv: [
           "/Applications/OnPeople.app/Contents/MacOS/onpeople-tauri",
           "onpeople://task/thread-7",
-          "onpeople://settings/browser",
+          "onpeople://settings/removed-section",
         ],
       }),
     ).toEqual([
       { kind: "task", threadId: "thread-7" },
-      { kind: "settings", route: "browser" },
+      { kind: "settings", route: "general" },
     ]);
     expect(
       parseDeepLinkActions('["onpeople://new?cwd=%2Fworkspace%2Fdemo"]'),

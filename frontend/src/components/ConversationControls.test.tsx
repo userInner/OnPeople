@@ -759,7 +759,7 @@ describe("Codex conversation controls", () => {
       path: "/Users/test/Documents/web3+defi (1).pdf",
       threadId: "thread-main",
     });
-    expect(useWorkbenchStore.getState().toolView).toBe("browser");
+    expect(useWorkbenchStore.getState().toolView).toBe("files");
   });
 
   it("does not inherit a persisted industry plugin in a new task", async () => {

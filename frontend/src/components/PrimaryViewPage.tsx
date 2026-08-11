@@ -5,7 +5,6 @@ import {
   CirclePlay,
   Clock3,
   GitPullRequest,
-  Globe2,
   Pencil,
   Plus,
   Puzzle,
@@ -24,7 +23,6 @@ import type {
   SettingsRoute,
 } from "../types";
 import { SettingsActionPanel } from "./SettingsActionPanels";
-import { BrowserPane } from "./tools/BrowserPane";
 import { GitPane } from "./tools/GitPane";
 import { CustomSelect } from "./ui/CustomSelect";
 
@@ -42,11 +40,6 @@ export function PrimaryViewPage({
       icon: GitPullRequest,
       title: "拉取请求",
       description: "审阅本地变更、整理提交并准备拉取请求。",
-    },
-    sites: {
-      icon: Globe2,
-      title: "站点",
-      description: "在隔离浏览器中打开、操作和验证 Web 项目。",
     },
     scheduled: {
       icon: CalendarClock,
@@ -79,7 +72,6 @@ export function PrimaryViewPage({
       ) : null}
       <div className="primary-workspace-content">
         {view === "pull-requests" ? <GitPane /> : null}
-        {view === "sites" ? <BrowserPane /> : null}
         {view === "scheduled" ? <ScheduledWorkspace /> : null}
         {view === "plugins" ? <ExtensionsWorkspace /> : null}
       </div>

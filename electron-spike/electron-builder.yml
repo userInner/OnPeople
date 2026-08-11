@@ -8,7 +8,6 @@ files:
   - electron-spike/main.mjs
   - electron-spike/preload.cjs
   - electron-spike/rust-bridge.mjs
-  - electron-spike/browser-controller.mjs
   - electron-spike/shell-adapter.mjs
   - package.json
 extraResources:

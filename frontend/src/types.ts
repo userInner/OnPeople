@@ -2,11 +2,6 @@ export type { AgentStatus } from "./bindings/AgentStatus";
 export type { ApprovalDecision } from "./bindings/ApprovalDecision";
 export type { AppError } from "./bindings/AppError";
 export type { AppUpdateState } from "./bindings/AppUpdateState";
-export type { BrowserAnnotation } from "./bindings/BrowserAnnotation";
-export type { BrowserBoundsRequest } from "./bindings/BrowserBoundsRequest";
-export type { BrowserDeveloperState } from "./bindings/BrowserDeveloperState";
-export type { BrowserFrame } from "./bindings/BrowserFrame";
-export type { BrowserState } from "./bindings/BrowserState";
 export type { CloudAccountState } from "./bindings/CloudAccountState";
 export type { DesktopCapabilities } from "./bindings/DesktopCapabilities";
 export type { DesktopEvent } from "./bindings/DesktopEvent";
@@ -80,13 +75,7 @@ export type { ThreadList } from "./bindings/ThreadList";
 export type { ThreadSummary } from "./bindings/ThreadSummary";
 export type { WorktreeSummary } from "./bindings/WorktreeSummary";
 
-export type ToolView =
-  | "activity"
-  | "browser"
-  | "terminal"
-  | "git"
-  | "files"
-  | "manage";
+export type ToolView = "activity" | "terminal" | "git" | "files" | "manage";
 
 export interface LocalArtifactPreviewRequest {
   id: string;
@@ -106,17 +95,11 @@ export interface LocalArtifactPreview extends Record<string, unknown> {
   message?: string;
 }
 
-export type PrimaryView =
-  | "tasks"
-  | "pull-requests"
-  | "sites"
-  | "scheduled"
-  | "plugins";
+export type PrimaryView = "tasks" | "pull-requests" | "scheduled" | "plugins";
 
 export type SettingsRoute =
   | "general"
   | "models"
-  | "import"
   | "profile"
   | "appearance"
   | "voice"
@@ -127,7 +110,6 @@ export type SettingsRoute =
   | "account"
   | "snapshots"
   | "plugins"
-  | "browser"
   | "computer"
   | "hooks"
   | "connections"

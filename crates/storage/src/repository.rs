@@ -929,9 +929,6 @@ fn apply_legacy_preferences(preferences: &mut Preferences, value: &Value) {
     if let Some(reduce_motion) = value.get("reduceMotion").and_then(Value::as_bool) {
         preferences.reduce_motion = reduce_motion;
     }
-    if let Some(browser_enabled) = value.get("browserEnabled").and_then(Value::as_bool) {
-        preferences.browser_enabled = browser_enabled;
-    }
     if let Some(voice) = value.get("liveVoice").and_then(Value::as_str) {
         preferences.live_voice = voice.to_owned();
     }

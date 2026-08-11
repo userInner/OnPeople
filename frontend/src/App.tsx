@@ -465,9 +465,6 @@ export function App() {
           case "toggle-review":
             store.setToolView("git");
             break;
-          case "browser":
-            store.setToolView("browser");
-            break;
           case "find":
             setCommandOpen(true);
             break;
@@ -510,22 +507,6 @@ export function App() {
     const reset = window.setTimeout(() => setUtilityExpanded(false), 0);
     return () => window.clearTimeout(reset);
   }, [utilityOpen]);
-
-  useEffect(() => {
-    // The embedded browser page is a native surface, so it needs one update
-    // after React commits and another after the expanded/collapsed layout has
-    // settled. This keeps the page below its tabs and address bar.
-    let secondFrame: number | null = null;
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        window.dispatchEvent(new Event("onpeople:layout-resize-end"));
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
-    };
-  }, [utilityExpanded, utilityOpen, toolView]);
 
   useEffect(() => {
     const runCommand = (event: Event) => {
@@ -968,8 +949,6 @@ function viewTitle(view: PrimaryView): string {
   switch (view) {
     case "pull-requests":
       return "拉取请求";
-    case "sites":
-      return "站点";
     case "scheduled":
       return "已安排";
     case "plugins":
@@ -1035,18 +1014,6 @@ function CommandPalette({
         },
       },
       {
-        id: "sites",
-        group: "工作区",
-        label: "打开站点",
-        hint: "工作区",
-        keywords: "site 网站 页面",
-        run: () => {
-          const store = useWorkbenchStore.getState();
-          store.setPrimaryView("sites");
-          store.setUtilityOpen(false);
-        },
-      },
-      {
         id: "scheduled",
         group: "工作区",
         label: "打开已安排任务",
@@ -1069,14 +1036,6 @@ function CommandPalette({
           store.setPrimaryView("plugins");
           store.setUtilityOpen(false);
         },
-      },
-      {
-        id: "browser",
-        group: "工具",
-        label: "打开浏览器",
-        hint: "工具",
-        keywords: "browser web 网页",
-        run: () => useWorkbenchStore.getState().setToolView("browser"),
       },
       {
         id: "terminal",

@@ -11,10 +11,6 @@ import type {
   ApprovalDecision,
   AppError,
   AppUpdateState,
-  BrowserAnnotation,
-  BrowserBoundsRequest,
-  BrowserFrame,
-  BrowserState,
   DesktopEvent,
   DesktopRecoveryRequired,
   EventReplay,
@@ -24,7 +20,6 @@ import type {
   PromptSubmission,
   ProviderKind,
   SchedulerSnapshot,
-  StreamEnvelope,
   TaskStartRequest,
   TaskApprovalResolution,
   TaskInputResolution,
@@ -34,8 +29,6 @@ import type {
   QueuedTaskMessage,
   TerminalExit,
 } from "../types";
-import type { BrowserAction } from "../bindings/BrowserAction";
-import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import {
   createDesktopApiClient,
@@ -43,19 +36,9 @@ import {
   legacySteerResult,
 } from "./desktopApi";
 
-export type BrowserCommand = DesktopBrowserCommand;
-
 export interface TerminalOutput {
   processId: string;
   data: string;
-}
-
-export interface BrowserEvent {
-  kind: "frame" | "navigation" | "new-tab" | "crash";
-  routeId?: string;
-  url?: string;
-  message?: string;
-  value?: unknown;
 }
 
 export interface AppMenuAction {
@@ -71,7 +54,6 @@ export interface AppMenuAction {
     | "open-terminal"
     | "toggle-files"
     | "toggle-review"
-    | "browser"
     | "find"
     | "previous-chat"
     | "next-chat"
@@ -186,16 +168,6 @@ const desktopApi = createDesktopApiClient(
 
 function jsonRecord(value: Record<string, unknown>): Record<string, JsonValue> {
   return value as Record<string, JsonValue>;
-}
-
-async function browserAction(
-  action: BrowserAction,
-  payload: Record<string, unknown> = {},
-): Promise<Record<string, unknown>> {
-  return (await desktopApi.request("browser.action", {
-    action,
-    payload: jsonRecord(payload),
-  })) as Record<string, unknown>;
 }
 
 function legacyEventEnvelope(event: DesktopEvent): EventEnvelope {
@@ -478,16 +450,6 @@ export const desktopClient = {
     return typeof selected === "string" ? selected : null;
   },
   notify: (title: string, body: string) => sendNotification({ title, body }),
-  browserState: () => desktopApi.request("browser.state", {}),
-  restartBrowserHost: () => desktopApi.request("browser.restart", {}),
-  browserCommand: (command: BrowserCommand) =>
-    desktopApi.request("browser.command", { command }) as Promise<
-      Record<string, unknown>
-    >,
-  browserSurfaceBounds: (request: BrowserBoundsRequest) =>
-    desktopApi.request("browser.surface.bounds", request) as Promise<
-      Record<string, unknown>
-    >,
   pickFiles: async (multiple = true) => {
     const selected = await openDialog({ multiple, directory: false });
     if (!selected) return [];
@@ -497,23 +459,6 @@ export const desktopClient = {
     const selected = await openDialog({ directory: true, multiple: false });
     return typeof selected === "string" ? selected : null;
   },
-  streamBrowser: async (handler: (event: StreamEnvelope) => void) => {
-    await subscribe<BrowserFrame>("browser:preview-updated", (frame) =>
-      handler({
-        sequence: Number(frame.sequence),
-        kind: "browser-frame",
-        streamId: frame.routeId,
-        payload: frame as unknown as JsonValue,
-        terminal: false,
-      }),
-    );
-  },
-  listBrowserAnnotations: (routeId: string) =>
-    desktopApi.request("browser.annotation.list", { routeId }),
-  saveBrowserAnnotation: (annotation: BrowserAnnotation) =>
-    desktopApi.request("browser.annotation.save", annotation),
-  deleteBrowserAnnotation: (id: string) =>
-    desktopApi.request("browser.annotation.delete", { id }),
   openTaskWindow: (threadId?: string | null) =>
     desktopApi.request("shell.task-window.open", {
       threadId: threadId ?? null,
@@ -1020,16 +965,9 @@ export const desktopClient = {
       string,
       unknown
     >,
-  navigate: (url: string, routeId: string) =>
-    browserAction("navigate", { url, routeId }),
-  getQuickLauncherSuggestions: (
-    cwd: string,
-    routeId?: string | null,
-    query = "",
-  ) =>
+  getQuickLauncherSuggestions: (cwd: string, query = "") =>
     desktopApi.request("project.quick-launcher", {
       cwd,
-      routeId: routeId ?? null,
       query,
     }) as Promise<Array<Record<string, unknown>>>,
   getProjectActions: (cwd: string) =>
@@ -1041,50 +979,11 @@ export const desktopClient = {
       fingerprint:
         typeof payload.fingerprint === "string" ? payload.fingerprint : null,
     }),
-  openWorkspaceFile: (cwd: string, filePath: string, routeId?: string | null) =>
+  openWorkspaceFile: (cwd: string, filePath: string) =>
     desktopApi.request("file.preview", {
       cwd,
       path: filePath,
-      routeId: routeId ?? null,
     }) as Promise<Record<string, unknown>>,
-  back: (routeId: string) => browserAction("back", { routeId }),
-  forward: (routeId: string) => browserAction("forward", { routeId }),
-  reload: (routeId: string) => browserAction("reload", { routeId }),
-  captureBrowserVisualSnapshot: (routeId: string) =>
-    browserAction("captureVisualSnapshot", { routeId }),
-  inspectBrowserDeveloperState: (routeId: string) =>
-    browserAction("inspectDeveloperState", { routeId }),
-  beginBrowserAnnotation: (routeId: string) =>
-    browserAction("beginAnnotation", { routeId }),
-  cancelBrowserAnnotation: (routeId: string) =>
-    browserAction("cancelAnnotation", { routeId }),
-  getBrowserSessionStatus: (routeId: string) =>
-    browserAction("sessionStatus", { routeId }),
-  openBrowserSignIn: (providerId: string, routeId: string) =>
-    browserAction("openSignIn", { providerId, routeId }),
-  clearBrowserSession: (providerId: string, routeId: string) =>
-    browserAction("clearSession", { providerId, routeId }),
-  clearAllBrowserData: (routeId: string) =>
-    browserAction("clearAllData", { routeId, all: true }),
-  clearBrowserDataFromSettings: () =>
-    browserAction("clearSettingsData", { all: true }),
-  fillSavedBrowserCredential: (routeId: string) =>
-    browserAction("fillSavedCredential", { routeId }),
-  listBrowserImportProfiles: () => browserAction("listImportProfiles"),
-  importBrowserProfile: (
-    payload: Record<string, unknown>,
-    routeId?: string | null,
-  ) =>
-    browserAction("importProfile", {
-      ...payload,
-      routeId: routeId ?? payload.routeId ?? null,
-    }),
-  attachBrowser: (webContentsId: string, routeId: string) =>
-    browserAction("attach", { webContentsId, routeId }),
-  activateBrowserTab: (threadId: string, routeId: string) =>
-    browserAction("activateTab", { threadId, routeId }),
-  detachBrowserTab: (routeId: string) =>
-    browserAction("detachTab", { routeId }),
   onDesktopEvent: (handler: (event: DesktopEvent) => void) =>
     desktopApi.subscribe(handler),
   onDesktopEventRecoveryRequired: (
@@ -1104,16 +1003,6 @@ export const desktopClient = {
     subscribe("scheduler:open", handler),
   onRuntimeUpdated: (handler: (event: EventEnvelope) => void) =>
     subscribe("runtime:updated", handler),
-  onBrowserState: (handler: (state: BrowserState) => void) =>
-    subscribe("browser:state", handler),
-  onBrowserEvent: (handler: (event: BrowserEvent) => void) =>
-    subscribe("browser:event", handler),
-  onAgentBrowserNavigation: (handler: (payload: unknown) => void) =>
-    subscribe("browser:agent-navigation", handler),
-  onBrowserPreviewUpdated: (handler: (payload: unknown) => void) =>
-    subscribe("browser:preview-updated", handler),
-  onBrowserNewTabRequested: (handler: (payload: unknown) => void) =>
-    subscribe("browser:new-tab-requested", handler),
   onCloudAccountUpdated: (handler: (payload: unknown) => void) =>
     subscribe("cloud:account:updated", handler),
   onAppUpdateState: (handler: (payload: AppUpdateState) => void) =>

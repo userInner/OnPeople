@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { desktopClient } from "../../lib/desktopClient";
 import { useWorkbenchStore } from "../../store/workbenchStore";
-import { LocalArtifactBrowserPreview } from "./LocalArtifactBrowserPreview";
+import { LocalArtifactPreview } from "./LocalArtifactPreview";
 
 vi.mock("../../lib/desktopClient", () => ({
   desktopClient: {
@@ -14,7 +14,7 @@ vi.mock("../../lib/desktopClient", () => ({
   },
 }));
 
-describe("LocalArtifactBrowserPreview", () => {
+describe("LocalArtifactPreview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useWorkbenchStore.setState({
@@ -31,7 +31,7 @@ describe("LocalArtifactBrowserPreview", () => {
     vi.mocked(desktopClient.copyText).mockResolvedValue();
   });
 
-  it("renders Markdown inside the OnPeople browser and keeps system open secondary", async () => {
+  it("renders Markdown in the file preview and keeps system open secondary", async () => {
     vi.mocked(desktopClient.previewLocalArtifact).mockResolvedValue({
       name: "README.md",
       path: "README.md",
@@ -42,7 +42,7 @@ describe("LocalArtifactBrowserPreview", () => {
       content: "# OnPeople\n\n内置预览正常。",
     });
 
-    render(<LocalArtifactBrowserPreview />);
+    render(<LocalArtifactPreview />);
 
     expect(
       await screen.findByRole("heading", { name: "OnPeople" }),
@@ -79,7 +79,7 @@ describe("LocalArtifactBrowserPreview", () => {
       dataUrl: "data:application/pdf;base64,JVBERg==",
     });
 
-    render(<LocalArtifactBrowserPreview />);
+    render(<LocalArtifactPreview />);
 
     const frame = await screen.findByTitle("report.pdf");
     expect(frame).toHaveAttribute(
@@ -107,7 +107,7 @@ describe("LocalArtifactBrowserPreview", () => {
         "<!doctype html><html><head><style>p{color:red}</style></head><body><p>hello world</p><script>alert(1)</script></body></html>",
     });
 
-    render(<LocalArtifactBrowserPreview />);
+    render(<LocalArtifactPreview />);
 
     const document = await screen.findByRole("document", {
       name: "hello.html",
@@ -127,7 +127,7 @@ describe("LocalArtifactBrowserPreview", () => {
       mimeType: "application/json",
       content: '{"ready":true}',
     });
-    const view = render(<LocalArtifactBrowserPreview />);
+    const view = render(<LocalArtifactPreview />);
     expect(await screen.findByText(/"ready": true/)).toBeVisible();
 
     useWorkbenchStore.setState({
@@ -144,7 +144,7 @@ describe("LocalArtifactBrowserPreview", () => {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       size: 4096,
     });
-    view.rerender(<LocalArtifactBrowserPreview key="preview-docx" />);
+    view.rerender(<LocalArtifactPreview key="preview-docx" />);
 
     expect(await screen.findByText("这种格式暂不支持内置预览")).toBeVisible();
   });
