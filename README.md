@@ -1,16 +1,17 @@
 # OnPeople Desktop 0.30.0
 
-OnPeople 0.30.0 是最终 Tauri 桌面版本：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 后端，Tauri 2.11 壳，SQLite WAL 数据层，以及独立 Rust CEF 浏览器宿主。生产包只包含这一套运行时，不保留旧桌面运行时或前端桥接兼容层。
+OnPeople 0.30.0 的默认生产壳是 Electron 42 + WebContentsView：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 核心，SQLite WAL 数据层，以及稳定的 154 方法 Desktop API。浏览器面板按需创建、休眠和销毁，Electron 通过 JSONL stdio/Unix Socket 调用 Rust sidecar。Tauri 2.11 生产分支永久保留作为回退目标。
 
 ## 架构
 
-- `src-tauri`：窗口、托盘、深链接、单实例、更新、通知、剪贴板、对话框和安全能力白名单。
+- `electron-spike`：Electron 主进程、WebContentsView 浏览器控制器、原生 shell adapter、Rust Desktop host bridge，以及打包/验收脚本。
+- `src-tauri`：保留的 Tauri 回退壳，提供窗口、托盘、深链接、单实例、更新、通知、剪贴板、对话框和安全能力白名单。
 - `crates/core-runtime`：Codex App Server 生命周期、事件流、线程、目标、Provider、终端、Git、计划任务和运行时诊断。
 - `crates/storage`：`internal-agent-workbench` 数据目录、SQLite WAL、Keychain/Credential Manager、迁移日志、原子提交和回滚。
-- `crates/browser-host`：CEF 151.2.0 + 151.3.14、macOS Framework/Helper bundle、隔离 Profile、认证 IPC、DOM/视觉快照和浏览器事件。
+- `crates/browser-host`：Tauri 回退路径使用的 CEF 151.2.0 + 151.3.14、隔离 Profile、认证 IPC、DOM/视觉快照和浏览器事件。
 - `crates/mcp-host`：五个一方 MCP 服务：`internal_browser`、`workspace_artifacts`、`image_generation`、`computer_use`、`research_sources`。
 - `crates/onpeople-cli`：与桌面端共享 Provider、凭据和 App Server 协议的无头执行入口。
-- `frontend/src/lib/desktopClient.ts`：唯一的前端桌面边界；React 组件不直接调用 Tauri API。
+- `frontend/src/lib/desktopClient.ts`：唯一的前端桌面边界；React 组件不直接调用 Electron 或 Tauri API。
 
 固定兼容项：
 
@@ -24,7 +25,8 @@ OnPeople 0.30.0 是最终 Tauri 桌面版本：React 19 + TypeScript strict + Vi
 ```bash
 npm ci --legacy-peer-deps
 npm run dev                 # 仅启动 Vite
-npm run tauri:dev           # 启动完整桌面应用
+npm start                   # 启动默认 Electron 桌面应用
+npm run tauri:dev           # 启动 Tauri 回退壳
 ```
 
 如需使用本地 sidecar，可设置：
@@ -72,7 +74,9 @@ npm run check
 npm run eval:list
 npm run runtime:stage -- --platform darwin --arch arm64
 npm run package:contents
-npm run tauri:build
+npm run electron:package   # 默认 Electron arm64 dir + zip
+npm run electron:measure   # 打包产物内存/稳定性验收
+npm run tauri:build        # Tauri 回退包
 ```
 
 `npm run check` 包含 Rust/TypeScript 单元测试、静态检查、构建以及桌面/移动

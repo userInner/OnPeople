@@ -9,9 +9,10 @@ React -> DesktopApiClient -> shell transport -> DesktopDispatcher -> CoreRuntime
                                                     +-> DesktopHost port
 ```
 
-Tauri currently calls `DesktopDispatcher` in process through the
-`desktop_request` command. A future Electron adapter can send the same
-`DesktopRequest` envelope to a Rust sidecar over JSONL stdio or a local socket.
+Electron currently sends the same `DesktopRequest` envelope to the Rust
+`onpeople-desktop-host` sidecar over JSONL stdio (or an opt-in Unix socket).
+Tauri remains a supported rollback adapter and calls `DesktopDispatcher`
+in-process through the `desktop_request` command.
 
 ## Compatibility rules
 
@@ -101,12 +102,12 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `secret.list`, `secret.save`, `secret.delete`
 - `hook.list`, `hook.local.list`, `hook.create`
 
-Legacy Tauri commands remain registered during the transition so releases can
-be rolled back without changing stored data or the existing browser host.
+Legacy Tauri commands remain registered so the `tauri-production` branch can be
+used as a rollback without changing stored data or the existing browser host.
 
 ## Ordered events
 
-Tauri publishes `desktop:event` using `DesktopEvent`. The adapter preserves the
+Electron and Tauri publish `desktop:event` using `DesktopEvent`. Each adapter preserves the
 sequence allocated by `CoreRuntime`; it must never allocate a second sequence
 for agent or runtime events. Legacy event names remain available while React
 consumers move to `DesktopApiClient.subscribe`.
@@ -182,10 +183,9 @@ receive `UNSUPPORTED` when no native host is attached.
 
 Requests and results have generated Rust/TypeScript DTOs. The Tauri adapter
 implements these effects with its existing native dialogs, updater, clipboard,
-window, and reveal helpers. Legacy Tauri commands remain registered during the
-migration so an older renderer can roll back without changing `CoreRuntime`.
-Electron must implement the same host port rather than copying Tauri behavior
-into the dispatcher.
+window, and reveal helpers. The Electron adapter implements the same host port
+in its main process. Legacy Tauri commands remain registered so an older
+renderer can roll back without changing `CoreRuntime`.
 
 Worktree snapshot/handoff workflows and native menu/event delivery remain
 legacy adapter responsibilities. Terminal, agent, and live data continue to
@@ -237,13 +237,12 @@ until event-transport cleanup is complete.
 
 ## Browser and extension host boundaries
 
-Browser lifecycle, native surface bounds, CEF commands, profile import, sign-in
-state, and annotations are shell-owned capabilities. `DesktopDispatcher` calls
-them through the async `DesktopHost` port; it has no Tauri types or global shell
-state. Tauri supplies the current adapter to `dispatch_with_host`, while a
-sidecar or Electron shell can implement the same port independently. Headless
-dispatch rejects browser methods with `UNSUPPORTED` instead of silently
-pretending a host exists.
+Browser lifecycle, native surface bounds, browser commands, profile import,
+sign-in state, and annotations are shell-owned capabilities. `DesktopDispatcher`
+calls them through the async `DesktopHost` port; it has no Tauri types or global
+shell state. Electron supplies the WebContentsView adapter, while Tauri supplies
+the CEF adapter through `dispatch_with_host`. Headless dispatch rejects browser
+methods with `UNSUPPORTED` instead of silently pretending a host exists.
 
 `browser.action` uses a generated `BrowserAction` discriminator so transport
 names such as `browser_navigate` never leak into React. The payload remains a

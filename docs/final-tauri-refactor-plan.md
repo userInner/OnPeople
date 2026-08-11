@@ -1,4 +1,8 @@
-# OnPeople 0.30.0 最终态重构计划
+# OnPeople 0.30.0 最终态重构计划（历史回退方案）
+
+> 本文记录早期的 Tauri-only 方案。当前生产壳已切换为 Electron +
+> WebContentsView；保留本文作为 `tauri-production` 的永久回退参考。当前验收
+> 结果见 `electron-spike/RESULTS.md`。
 
 ## 1. 目标与不可变约束
 
