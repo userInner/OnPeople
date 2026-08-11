@@ -237,6 +237,9 @@ function DesktopBrowserPane() {
         document.querySelector(
           '[aria-modal="true"], [data-native-surface-occluder="true"], details.browser-overflow[open]',
         ) !== null;
+      // A focused WebContentsView makes the React document report
+      // `hasFocus() === false`. Visibility must follow the pane/route, not
+      // focus ownership, otherwise the first click hides the native page.
       const nextBounds = {
         ...viewportBounds,
         scaleFactor: window.devicePixelRatio,
@@ -245,7 +248,6 @@ function DesktopBrowserPane() {
           !showBrowserHome &&
           intersecting &&
           document.visibilityState === "visible" &&
-          document.hasFocus() &&
           rect.width > 0 &&
           rect.height > 0,
         interactive:
@@ -310,8 +312,6 @@ function DesktopBrowserPane() {
     intersectionObserver.observe(element);
     modalObserver.observe(document.body, { childList: true, subtree: true });
     document.addEventListener("visibilitychange", handleVisibility);
-    window.addEventListener("focus", handleVisibility);
-    window.addEventListener("blur", handleVisibility);
     window.addEventListener("resize", scheduleSettledBounds);
     window.addEventListener("onpeople:layout-resize-end", handleResizeEnd);
     scheduleSettledBounds();
@@ -323,8 +323,6 @@ function DesktopBrowserPane() {
       intersectionObserver.disconnect();
       modalObserver.disconnect();
       document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("focus", handleVisibility);
-      window.removeEventListener("blur", handleVisibility);
       window.removeEventListener("resize", scheduleSettledBounds);
       window.removeEventListener("onpeople:layout-resize-end", handleResizeEnd);
       if (lastBounds) {
