@@ -47,6 +47,15 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `task.queue.steer`
 - `task.approval.resolve`
 - `task.input.resolve`
+- `terminal.start`, `terminal.write`, `terminal.resize`, `terminal.terminate`
+- `terminal.ready`, `terminal.focus`, `terminal.context-menu`
+- `file.list`, `file.search`, `file.preview`, `file.artifact.preview`
+- `file.generated-image.read`, `file.project-actions`
+- `file.project-action.authorize`
+- `git.state`, `git.diff`, `git.mutate`, `git.commit`, `git.push`
+- `git.initialize`, `git.hunks`, `git.hunk.mutate`
+- `git.pull-request.prepare`, `git.review.start`, `git.review.submit`
+- `git.worktree`
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
@@ -90,3 +99,32 @@ name. Approval decisions are the typed values `accept`, `acceptForSession`, and
 `decline`; user-input answers are keyed string arrays. Legacy React helpers
 remain as compatibility aliases, but they call these methods rather than
 Tauri-specific commands.
+
+## Terminal, files, and Git
+
+Terminal lifecycle requests now cross the stable API. PTY output and exit
+notifications intentionally remain streaming shell transports: they are
+high-volume events rather than request/response commands. The legacy React
+helpers keep their previous signatures while issuing `terminal.*` requests.
+
+File listing, search, workspace preview, local-artifact preview, generated-image
+reading, and project-action authorization run in `CoreRuntime`. Every preview
+canonicalizes its workspace and rejects boundary escapes. Text previews are
+limited to 4 MiB, embedded media to 24 MiB, and generated images to 48 MiB.
+
+Git status, diff, mutations, commit/push, hunk operations, PR preparation,
+review submission, and worktree list/create/remove use `git.*`. Results that
+come directly from the Codex review protocol remain JSON values, but their
+request DTOs are strict and reject unknown fields.
+
+The following legacy commands remain shell-adapter responsibilities and are
+not falsely exposed as CoreRuntime methods:
+
+- opening/revealing a file or generated image in the operating system;
+- copying image bytes to the native clipboard;
+- picking files/directories through a native dialog;
+- worktree snapshot/handoff paths that invoke shell-specific workflows;
+- terminal output/exit streams and native menu event delivery.
+
+Tauri retains these commands during migration. Electron must implement the
+same adapter effects without changing the Desktop API protocol.

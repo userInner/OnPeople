@@ -7,6 +7,33 @@ import type { DesktopRequest } from "../bindings/DesktopRequest";
 import type { DesktopResponse } from "../bindings/DesktopResponse";
 import type { EventReplay } from "../bindings/EventReplay";
 import type { EventReplayRequest } from "../bindings/EventReplayRequest";
+import type { AuthorizedProjectAction } from "../bindings/AuthorizedProjectAction";
+import type { FileListRequest } from "../bindings/FileListRequest";
+import type { FilePreview } from "../bindings/FilePreview";
+import type { FilePreviewRequest } from "../bindings/FilePreviewRequest";
+import type { FileSearchRequest } from "../bindings/FileSearchRequest";
+import type { GeneratedImage } from "../bindings/GeneratedImage";
+import type { GitHunkMutationRequest } from "../bindings/GitHunkMutationRequest";
+import type { GitPullRequestRequest } from "../bindings/GitPullRequestRequest";
+import type { GitReviewStartRequest } from "../bindings/GitReviewStartRequest";
+import type { GitReviewSubmitRequest } from "../bindings/GitReviewSubmitRequest";
+import type { LocalArtifactRequest } from "../bindings/LocalArtifactRequest";
+import type { ProjectActionAuthorizeRequest } from "../bindings/ProjectActionAuthorizeRequest";
+import type { TerminalFocusRequest } from "../bindings/TerminalFocusRequest";
+import type { TerminalFocusState } from "../bindings/TerminalFocusState";
+import type { TerminalReadyState } from "../bindings/TerminalReadyState";
+import type { TerminalContextMenu } from "../bindings/TerminalContextMenu";
+import type { TerminalContextMenuRequest } from "../bindings/TerminalContextMenuRequest";
+import type { GitCommitRequest } from "../bindings/GitCommitRequest";
+import type { GitFileRequest } from "../bindings/GitFileRequest";
+import type { GitMutationRequest } from "../bindings/GitMutationRequest";
+import type { GitPushRequest } from "../bindings/GitPushRequest";
+import type { GitRequest } from "../bindings/GitRequest";
+import type { TerminalIdRequest } from "../bindings/TerminalIdRequest";
+import type { TerminalResizeRequest } from "../bindings/TerminalResizeRequest";
+import type { TerminalStartRequest } from "../bindings/TerminalStartRequest";
+import type { TerminalWriteRequest } from "../bindings/TerminalWriteRequest";
+import type { WorktreeRequest } from "../bindings/WorktreeRequest";
 import type { Preferences } from "../bindings/Preferences";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
@@ -32,6 +59,14 @@ import type { TaskSnapshotRequest } from "../bindings/TaskSnapshotRequest";
 import type { TaskStartRequest } from "../bindings/TaskStartRequest";
 import type { TaskSteerReceipt } from "../bindings/TaskSteerReceipt";
 import type { TaskSteerRequest } from "../bindings/TaskSteerRequest";
+import type {
+  FileEntry,
+  FileSearchResult,
+  GitDiff,
+  GitState,
+  ProjectAction,
+  TerminalSession,
+} from "../types";
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
@@ -120,6 +155,56 @@ export interface DesktopMethodMap {
     params: TaskInputResolveRequest;
     result: TaskInputResolution;
   };
+  "terminal.start": {
+    params: TerminalStartRequest;
+    result: TerminalSession;
+  };
+  "terminal.write": { params: TerminalWriteRequest; result: void };
+  "terminal.resize": { params: TerminalResizeRequest; result: void };
+  "terminal.terminate": { params: TerminalIdRequest; result: void };
+  "terminal.ready": {
+    params: TerminalIdRequest;
+    result: TerminalReadyState;
+  };
+  "terminal.focus": {
+    params: TerminalFocusRequest;
+    result: TerminalFocusState;
+  };
+  "terminal.context-menu": {
+    params: TerminalContextMenuRequest;
+    result: TerminalContextMenu;
+  };
+  "file.list": { params: FileListRequest; result: FileEntry[] };
+  "file.search": { params: FileSearchRequest; result: FileSearchResult };
+  "file.preview": { params: FilePreviewRequest; result: FilePreview };
+  "file.artifact.preview": {
+    params: LocalArtifactRequest;
+    result: FilePreview;
+  };
+  "file.generated-image.read": {
+    params: LocalArtifactRequest;
+    result: GeneratedImage;
+  };
+  "file.project-actions": { params: GitRequest; result: ProjectAction[] };
+  "file.project-action.authorize": {
+    params: ProjectActionAuthorizeRequest;
+    result: AuthorizedProjectAction;
+  };
+  "git.state": { params: GitRequest; result: GitState };
+  "git.diff": { params: GitFileRequest; result: GitDiff };
+  "git.mutate": { params: GitMutationRequest; result: GitState };
+  "git.commit": { params: GitCommitRequest; result: GitState };
+  "git.push": { params: GitPushRequest; result: GitState };
+  "git.initialize": { params: GitRequest; result: GitState };
+  "git.hunks": { params: GitFileRequest; result: JsonValue };
+  "git.hunk.mutate": { params: GitHunkMutationRequest; result: GitState };
+  "git.pull-request.prepare": {
+    params: GitPullRequestRequest;
+    result: JsonValue;
+  };
+  "git.review.start": { params: GitReviewStartRequest; result: JsonValue };
+  "git.review.submit": { params: GitReviewSubmitRequest; result: JsonValue };
+  "git.worktree": { params: WorktreeRequest; result: JsonValue };
 }
 
 type MethodName = keyof DesktopMethodMap & DesktopMethod;

@@ -1,18 +1,26 @@
 use std::sync::Arc;
 
 use onpeople_core_runtime::{CoreRuntime, MAX_EVENT_REPLAY_LIMIT};
-use onpeople_types::{AppError, ErrorCode, PreferencePatchRequest, ThreadFilters};
+use onpeople_types::{
+    AppError, ErrorCode, GitCommitRequest, GitFileRequest, GitMutationRequest, GitPushRequest,
+    GitRequest, PreferencePatchRequest, TerminalIdRequest, TerminalResizeRequest,
+    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, WorktreeRequest,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopMethod, DesktopRequest,
-    DesktopResponse, EventReplay, EventReplayRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
+    AuthorizedProjectAction, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent,
+    DesktopMethod, DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest,
+    FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest, GeneratedImage,
+    GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest, GitReviewSubmitRequest,
+    LocalArtifactRequest, ProjectActionAuthorizeRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
     TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
     TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
     TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
     TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
-    TaskSteerRequest, should_forward_desktop_event,
+    TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest,
+    TerminalFocusState, TerminalReadyState, should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -267,6 +275,167 @@ impl DesktopDispatcher {
                     answered: true,
                 })
             }
+            DesktopMethod::TerminalStart => {
+                let request: TerminalStartRequest = parse_params(params)?;
+                to_value(self.runtime.terminal_start(request)?)
+            }
+            DesktopMethod::TerminalWrite => {
+                let request: TerminalWriteRequest = parse_params(params)?;
+                self.runtime.terminal_write(request)?;
+                Ok(Value::Null)
+            }
+            DesktopMethod::TerminalResize => {
+                let request: TerminalResizeRequest = parse_params(params)?;
+                self.runtime.terminal_resize(request)?;
+                Ok(Value::Null)
+            }
+            DesktopMethod::TerminalTerminate => {
+                let request: TerminalIdRequest = parse_params(params)?;
+                self.runtime.terminal_terminate(request)?;
+                Ok(Value::Null)
+            }
+            DesktopMethod::TerminalReady => {
+                let request: TerminalIdRequest = parse_params(params)?;
+                let result = self.runtime.terminal_ready(&request.process_id)?;
+                to_value(parse_result::<TerminalReadyState>(result)?)
+            }
+            DesktopMethod::TerminalFocus => {
+                let request: TerminalFocusRequest = parse_params(params)?;
+                let process_id = request.focused.then_some(request.process_id).flatten();
+                let result = self.runtime.set_terminal_focused(process_id)?;
+                to_value(parse_result::<TerminalFocusState>(result)?)
+            }
+            DesktopMethod::TerminalContextMenu => {
+                let request: TerminalContextMenuRequest = parse_params(params)?;
+                self.runtime.terminal_ready(&request.process_id)?;
+                to_value(TerminalContextMenu {
+                    process_id: request.process_id,
+                    items: ["copy", "paste", "selectAll", "clear", "terminate"]
+                        .into_iter()
+                        .map(ToOwned::to_owned)
+                        .collect(),
+                    has_selection: request.has_selection,
+                })
+            }
+            DesktopMethod::FileList => {
+                let request: FileListRequest = parse_params(params)?;
+                to_value(self.runtime.files_list(&request.cwd, &request.relative)?)
+            }
+            DesktopMethod::FileSearch => {
+                let request: FileSearchRequest = parse_params(params)?;
+                to_value(self.runtime.files_search(&request.cwd, &request.query)?)
+            }
+            DesktopMethod::FilePreview => {
+                let request: FilePreviewRequest = parse_params(params)?;
+                let result = self.runtime.file_preview(
+                    &request.cwd,
+                    &request.path,
+                    request.route_id.as_deref(),
+                )?;
+                to_value(parse_result::<FilePreview>(result)?)
+            }
+            DesktopMethod::FileArtifactPreview => {
+                let request: LocalArtifactRequest = parse_params(params)?;
+                let result = self
+                    .runtime
+                    .local_artifact_preview(&request.path, request.thread_id.as_deref())?;
+                to_value(parse_result::<FilePreview>(result)?)
+            }
+            DesktopMethod::FileGeneratedImageRead => {
+                let request: LocalArtifactRequest = parse_params(params)?;
+                let result = self
+                    .runtime
+                    .generated_image(&request.path, request.thread_id.as_deref())?;
+                to_value(parse_result::<GeneratedImage>(result)?)
+            }
+            DesktopMethod::FileProjectActions => {
+                let request: GitRequest = parse_params(params)?;
+                to_value(self.runtime.project_actions(&request.cwd)?)
+            }
+            DesktopMethod::FileProjectActionAuthorize => {
+                let request: ProjectActionAuthorizeRequest = parse_params(params)?;
+                let action = self
+                    .runtime
+                    .project_actions(&request.cwd)?
+                    .into_iter()
+                    .find(|action| action.id == request.action_id)
+                    .ok_or_else(|| AppError::new(ErrorCode::NotFound, "项目动作不存在"))?;
+                if request.fingerprint.as_deref().is_some_and(|fingerprint| {
+                    !fingerprint.is_empty() && fingerprint != action.fingerprint
+                }) {
+                    return Err(AppError::new(
+                        ErrorCode::Conflict,
+                        "项目动作已发生变化，请重新选择后再执行",
+                    ));
+                }
+                self.runtime.storage().put_metadata(
+                    &format!("project.action.{}.{}", action.id, action.fingerprint),
+                    &json!({
+                        "cwd": request.cwd,
+                        "action": &action,
+                        "authorizedAt": chrono::Utc::now(),
+                    }),
+                )?;
+                to_value(AuthorizedProjectAction {
+                    id: action.id,
+                    label: action.label,
+                    command: action.command,
+                    source: action.source,
+                    fingerprint: action.fingerprint,
+                    authorized: true,
+                })
+            }
+            DesktopMethod::GitState => {
+                let request: GitRequest = parse_params(params)?;
+                to_value(self.runtime.git_state(request)?)
+            }
+            DesktopMethod::GitDiff => {
+                let request: GitFileRequest = parse_params(params)?;
+                to_value(self.runtime.git_diff(request)?)
+            }
+            DesktopMethod::GitMutate => {
+                let request: GitMutationRequest = parse_params(params)?;
+                to_value(self.runtime.git_mutate(request)?)
+            }
+            DesktopMethod::GitCommit => {
+                let request: GitCommitRequest = parse_params(params)?;
+                to_value(self.runtime.git_commit(request)?)
+            }
+            DesktopMethod::GitPush => {
+                let request: GitPushRequest = parse_params(params)?;
+                to_value(self.runtime.git_push(request)?)
+            }
+            DesktopMethod::GitInitialize => {
+                let request: GitRequest = parse_params(params)?;
+                to_value(self.runtime.git_initialize(&request.cwd)?)
+            }
+            DesktopMethod::GitHunks => {
+                let request: GitFileRequest = parse_params(params)?;
+                self.runtime.git_hunks(&request.cwd, &request.file_path)
+            }
+            DesktopMethod::GitHunkMutate => {
+                let request: GitHunkMutationRequest = parse_params(params)?;
+                to_value(self.runtime.mutate_git_hunk(&to_value(request)?)?)
+            }
+            DesktopMethod::GitPullRequestPrepare => {
+                let request: GitPullRequestRequest = parse_params(params)?;
+                self.runtime
+                    .prepare_pull_request(&request.cwd, request.base.as_deref())
+            }
+            DesktopMethod::GitReviewStart => {
+                let request: GitReviewStartRequest = parse_params(params)?;
+                self.runtime.start_review(&to_value(request)?).await
+            }
+            DesktopMethod::GitReviewSubmit => {
+                let request: GitReviewSubmitRequest = parse_params(params)?;
+                self.runtime
+                    .submit_review_comments(&to_value(request)?)
+                    .await
+            }
+            DesktopMethod::GitWorktree => {
+                let request: WorktreeRequest = parse_params(params)?;
+                self.runtime.worktrees(request)
+            }
         }
     }
 }
@@ -516,6 +685,103 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatches_file_preview_and_rejects_workspace_escape() {
+        let temporary = tempfile::tempdir().expect("temporary workspace");
+        std::fs::write(temporary.path().join("hello.md"), "# hello").expect("write fixture");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let response = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "file-preview-1".to_owned(),
+                method: DesktopMethod::FilePreview,
+                params: json!({
+                    "cwd": temporary.path(),
+                    "path": "hello.md",
+                    "routeId": null,
+                }),
+            })
+            .await;
+        assert!(response.ok, "unexpected response: {response:?}");
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value["kind"].as_str()),
+            Some("text")
+        );
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value["content"].as_str()),
+            Some("# hello")
+        );
+
+        let escaped = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "file-preview-escape".to_owned(),
+                method: DesktopMethod::FilePreview,
+                params: json!({
+                    "cwd": temporary.path(),
+                    "path": "../outside.md",
+                    "routeId": null,
+                }),
+            })
+            .await;
+        assert!(!escaped.ok);
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatches_git_initialize_and_state_through_stable_methods() {
+        let temporary = tempfile::tempdir().expect("temporary workspace");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+        let cwd = temporary.path().to_string_lossy();
+
+        let initialized = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "git-init-1".to_owned(),
+                method: DesktopMethod::GitInitialize,
+                params: json!({ "cwd": cwd }),
+            })
+            .await;
+        assert!(initialized.ok, "unexpected response: {initialized:?}");
+        assert_eq!(
+            initialized
+                .result
+                .as_ref()
+                .and_then(|value| value["repository"].as_bool()),
+            Some(true)
+        );
+
+        let state = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "git-state-1".to_owned(),
+                method: DesktopMethod::GitState,
+                params: json!({ "cwd": cwd }),
+            })
+            .await;
+        assert!(state.ok, "unexpected response: {state:?}");
         runtime.stop().await;
     }
 

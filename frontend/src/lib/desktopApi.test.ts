@@ -218,4 +218,40 @@ describe("DesktopApiClient", () => {
       result: { turn: { id: "turn-1" } },
     });
   });
+
+  it("routes terminal, file and git calls through stable domain methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result:
+        request.method === "terminal.write"
+          ? null
+          : request.method === "file.list"
+            ? []
+            : {
+                repository: true,
+                root: "/workspace",
+                branch: "main",
+                upstream: null,
+                ahead: 0,
+                behind: 0,
+                files: [],
+              },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-native");
+
+    await client.request("terminal.write", {
+      processId: "terminal-1",
+      data: "pwd\n",
+    });
+    await client.request("file.list", { cwd: "/workspace", relative: "" });
+    await client.request("git.state", { cwd: "/workspace" });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "terminal.write",
+      "file.list",
+      "git.state",
+    ]);
+  });
 });

@@ -19,14 +19,9 @@ import type {
   DesktopRecoveryRequired,
   EventReplay,
   EventEnvelope,
-  FileEntry,
-  FileSearchResult,
-  GitDiff,
-  GitState,
   Goal,
   LiveStatus,
   Preferences,
-  ProjectAction,
   PromptSubmission,
   ProviderKind,
   ProviderSettings,
@@ -41,7 +36,6 @@ import type {
   TaskSteerReceipt,
   QueuedTaskMessage,
   TerminalExit,
-  TerminalSession,
 } from "../types";
 import {
   createDesktopApiClient,
@@ -424,48 +418,42 @@ export const desktopClient = {
     shell?: string | null;
     windowLabel?: string | null;
   }) =>
-    call<TerminalSession>("start_terminal", {
-      request: {
-        ...request,
-        shell: request.shell ?? null,
-        windowLabel: request.windowLabel ?? null,
-      },
+    desktopApi.request("terminal.start", {
+      ...request,
+      shell: request.shell ?? null,
+      windowLabel: request.windowLabel ?? null,
     }),
   writeTerminal: (processId: string, data: string) =>
-    call<void>("write_terminal", { request: { processId, data } }),
+    desktopApi.request("terminal.write", { processId, data }),
   resizeTerminal: (processId: string, cols: number, rows: number) =>
-    call<void>("resize_terminal", { request: { processId, cols, rows } }),
+    desktopApi.request("terminal.resize", { processId, cols, rows }),
   terminateTerminal: (processId: string) =>
-    call<void>("terminate_terminal", { request: { processId } }),
-  gitState: (cwd: string) =>
-    call<GitState>("get_git_state", { request: { cwd } }),
-  getGitState: (cwd: string) =>
-    call<GitState>("get_git_state", { request: { cwd } }),
+    desktopApi.request("terminal.terminate", { processId }),
+  gitState: (cwd: string) => desktopApi.request("git.state", { cwd }),
+  getGitState: (cwd: string) => desktopApi.request("git.state", { cwd }),
   gitDiff: (cwd: string, filePath: string) =>
-    call<GitDiff>("get_git_diff", { request: { cwd, filePath } }),
+    desktopApi.request("git.diff", { cwd, filePath }),
   getGitDiff: (cwd: string, filePath: string) =>
-    call<GitDiff>("get_git_diff", { request: { cwd, filePath } }),
+    desktopApi.request("git.diff", { cwd, filePath }),
   mutateGit: (request: {
     cwd: string;
     action: string;
     paths?: string[];
     patch?: string | null;
   }) =>
-    call<GitState>("mutate_git", {
-      request: {
-        ...request,
-        paths: request.paths ?? [],
-        patch: request.patch ?? null,
-      },
+    desktopApi.request("git.mutate", {
+      ...request,
+      paths: request.paths ?? [],
+      patch: request.patch ?? null,
     }),
   commitGit: (cwd: string, message: string) =>
-    call<GitState>("commit_git", { request: { cwd, message } }),
+    desktopApi.request("git.commit", { cwd, message }),
   pushGit: (cwd: string, remote?: string | null) =>
-    call<GitState>("push_git", { request: { cwd, remote: remote ?? null } }),
+    desktopApi.request("git.push", { cwd, remote: remote ?? null }),
   listProjectFiles: (cwd: string, relative = "") =>
-    call<FileEntry[]>("list_project_files", { request: { cwd, relative } }),
+    desktopApi.request("file.list", { cwd, relative }),
   searchProjectFiles: (cwd: string, query: string) =>
-    call<FileSearchResult>("search_project_files", { request: { cwd, query } }),
+    desktopApi.request("file.search", { cwd, query }),
   scheduler: () => desktopApi.request("scheduler.get", {}),
   createScheduledTask: (request: {
     name: string;
@@ -564,9 +552,10 @@ export const desktopClient = {
       : [];
   },
   readGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("read_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("file.generated-image.read", {
+      path: imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   revealGeneratedImage: (imagePath: string, threadId?: string | null) =>
     call<Record<string, unknown>>("reveal_generated_image", {
       request: { imagePath, threadId: threadId ?? null },
@@ -580,9 +569,10 @@ export const desktopClient = {
       request: { path, threadId: threadId ?? null },
     }),
   previewLocalArtifact: (path: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("open_local_artifact", {
-      request: { path, threadId: threadId ?? null, preview: true },
-    }),
+    desktopApi.request("file.artifact.preview", {
+      path,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   newTask: (cwd?: string) =>
     call<Record<string, unknown>>("new_task", {
       request: { cwd: cwd ?? null },
@@ -670,13 +660,15 @@ export const desktopClient = {
   revealThread: (threadId: string) =>
     call<Record<string, unknown>>("reveal_thread", { request: { threadId } }),
   showTerminalContextMenu: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("show_terminal_context_menu", {
-      request: payload,
-    }),
+    desktopApi.request("terminal.context-menu", {
+      processId: String(payload.processId ?? ""),
+      hasSelection: Boolean(payload.hasSelection),
+    }) as Promise<Record<string, unknown>>,
   setTerminalFocused: (focused: boolean, processId?: string | null) =>
-    call<Record<string, unknown>>("set_terminal_focused", {
-      request: { focused, processId: processId ?? null },
-    }),
+    desktopApi.request("terminal.focus", {
+      focused,
+      processId: processId ?? null,
+    }) as Promise<Record<string, unknown>>,
   updateProject: (projectPath: string, action: string, value?: unknown) =>
     call<Record<string, unknown>>("update_project", {
       request: { projectPath, action, value: value ?? null },
@@ -690,25 +682,45 @@ export const desktopClient = {
       request: { projectPath },
     }),
   readyTerminal: (processId: string) =>
-    call<Record<string, unknown>>("ready_terminal", { request: { processId } }),
+    desktopApi.request("terminal.ready", { processId }) as Promise<
+      Record<string, unknown>
+    >,
   initGitRepository: (cwd: string) =>
-    call<GitState>("init_git_repository", { request: { cwd } }),
+    desktopApi.request("git.initialize", { cwd }),
   getGitHunks: (cwd: string, filePath: string) =>
-    call<Record<string, unknown>>("get_git_hunks", {
-      request: { cwd, filePath },
-    }),
+    desktopApi.request("git.hunks", { cwd, filePath }) as Promise<
+      Record<string, unknown>
+    >,
   mutateGitHunk: (payload: Record<string, unknown>) =>
-    call<GitState>("mutate_git_hunk", { request: payload }),
+    desktopApi.request("git.hunk.mutate", {
+      cwd: String(payload.cwd ?? ""),
+      patch: String(payload.patch ?? ""),
+      action: String(payload.action ?? "apply"),
+    }),
   preparePullRequest: (cwd: string, base?: string | null) =>
-    call<Record<string, unknown>>("prepare_pull_request", {
-      request: { cwd, base: base ?? null },
-    }),
+    desktopApi.request("git.pull-request.prepare", {
+      cwd,
+      base: base ?? null,
+    }) as Promise<Record<string, unknown>>,
   startReview: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("start_review", { request: payload }),
+    desktopApi.request("git.review.start", {
+      cwd: String(payload.cwd ?? ""),
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      targetType:
+        typeof payload.targetType === "string" ? payload.targetType : null,
+      value: typeof payload.value === "string" ? payload.value : null,
+      base: typeof payload.base === "string" ? payload.base : null,
+    }) as Promise<Record<string, unknown>>,
   submitReviewComments: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("submit_review_comments", {
-      request: payload,
-    }),
+    desktopApi.request("git.review.submit", {
+      comments: (payload.comments ?? []) as never,
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+      review:
+        payload.review && typeof payload.review === "object"
+          ? (payload.review as never)
+          : null,
+    }) as Promise<Record<string, unknown>>,
   openEditor: (payload: Record<string, unknown>) =>
     call<Record<string, unknown>>("open_editor", { request: payload }),
   restartRuntime: () =>
@@ -787,9 +799,21 @@ export const desktopClient = {
   readAgent: (agentId: string) =>
     call<Record<string, unknown>>("read_agent", { request: { agentId } }),
   listWorktrees: (cwd: string) =>
-    call<Record<string, unknown>>("list_worktrees", { request: { cwd } }),
+    desktopApi.request("git.worktree", {
+      root: cwd,
+      path: null,
+      branch: null,
+      threadId: null,
+      removeBranch: false,
+    }) as Promise<Record<string, unknown>>,
   createWorktree: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_worktree", { request: payload }),
+    desktopApi.request("git.worktree", {
+      root: String(payload.root ?? payload.cwd ?? ""),
+      path: typeof payload.path === "string" ? payload.path : null,
+      branch: typeof payload.branch === "string" ? payload.branch : null,
+      threadId: typeof payload.threadId === "string" ? payload.threadId : null,
+      removeBranch: false,
+    }) as Promise<Record<string, unknown>>,
   handoffWorktree: (worktreePath: string) =>
     call<Record<string, unknown>>("handoff_worktree", {
       request: { worktreePath },
@@ -799,9 +823,13 @@ export const desktopClient = {
       request: { worktreePath },
     }),
   removeWorktree: (worktreePath: string, root?: string | null) =>
-    call<Record<string, unknown>>("remove_worktree", {
-      request: { worktreePath, root: root ?? null },
-    }),
+    desktopApi.request("git.worktree", {
+      root: root ?? "",
+      path: worktreePath,
+      branch: null,
+      threadId: null,
+      removeBranch: true,
+    }) as Promise<Record<string, unknown>>,
   getContextState: (threadId?: string | null) =>
     call<Record<string, unknown>>("get_context_state", {
       request: { threadId: threadId ?? null },
@@ -953,15 +981,20 @@ export const desktopClient = {
       request: { cwd, routeId: routeId ?? null, query },
     }),
   getProjectActions: (cwd: string) =>
-    call<ProjectAction[]>("get_project_actions", { request: { cwd } }),
+    desktopApi.request("file.project-actions", { cwd }),
   authorizeProjectAction: (payload: Record<string, unknown>) =>
-    call<ProjectAction & { authorized?: boolean }>("authorize_project_action", {
-      request: payload,
+    desktopApi.request("file.project-action.authorize", {
+      cwd: String(payload.cwd ?? ""),
+      actionId: String(payload.actionId ?? payload.id ?? ""),
+      fingerprint:
+        typeof payload.fingerprint === "string" ? payload.fingerprint : null,
     }),
   openWorkspaceFile: (cwd: string, filePath: string, routeId?: string | null) =>
-    call<Record<string, unknown>>("open_workspace_file", {
-      request: { cwd, path: filePath, routeId: routeId ?? null },
-    }),
+    desktopApi.request("file.preview", {
+      cwd,
+      path: filePath,
+      routeId: routeId ?? null,
+    }) as Promise<Record<string, unknown>>,
   back: (routeId: string) =>
     call<Record<string, unknown>>("browser_back", { request: { routeId } }),
   forward: (routeId: string) =>

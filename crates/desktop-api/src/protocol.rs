@@ -53,10 +53,62 @@ pub enum DesktopMethod {
     TaskApprovalResolve,
     #[serde(rename = "task.input.resolve")]
     TaskInputResolve,
+    #[serde(rename = "terminal.start")]
+    TerminalStart,
+    #[serde(rename = "terminal.write")]
+    TerminalWrite,
+    #[serde(rename = "terminal.resize")]
+    TerminalResize,
+    #[serde(rename = "terminal.terminate")]
+    TerminalTerminate,
+    #[serde(rename = "terminal.ready")]
+    TerminalReady,
+    #[serde(rename = "terminal.focus")]
+    TerminalFocus,
+    #[serde(rename = "terminal.context-menu")]
+    TerminalContextMenu,
+    #[serde(rename = "file.list")]
+    FileList,
+    #[serde(rename = "file.search")]
+    FileSearch,
+    #[serde(rename = "file.preview")]
+    FilePreview,
+    #[serde(rename = "file.artifact.preview")]
+    FileArtifactPreview,
+    #[serde(rename = "file.generated-image.read")]
+    FileGeneratedImageRead,
+    #[serde(rename = "file.project-actions")]
+    FileProjectActions,
+    #[serde(rename = "file.project-action.authorize")]
+    FileProjectActionAuthorize,
+    #[serde(rename = "git.state")]
+    GitState,
+    #[serde(rename = "git.diff")]
+    GitDiff,
+    #[serde(rename = "git.mutate")]
+    GitMutate,
+    #[serde(rename = "git.commit")]
+    GitCommit,
+    #[serde(rename = "git.push")]
+    GitPush,
+    #[serde(rename = "git.initialize")]
+    GitInitialize,
+    #[serde(rename = "git.hunks")]
+    GitHunks,
+    #[serde(rename = "git.hunk.mutate")]
+    GitHunkMutate,
+    #[serde(rename = "git.pull-request.prepare")]
+    GitPullRequestPrepare,
+    #[serde(rename = "git.review.start")]
+    GitReviewStart,
+    #[serde(rename = "git.review.submit")]
+    GitReviewSubmit,
+    #[serde(rename = "git.worktree")]
+    GitWorktree,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 47] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -78,6 +130,32 @@ impl DesktopMethod {
         Self::TaskQueueSteer,
         Self::TaskApprovalResolve,
         Self::TaskInputResolve,
+        Self::TerminalStart,
+        Self::TerminalWrite,
+        Self::TerminalResize,
+        Self::TerminalTerminate,
+        Self::TerminalReady,
+        Self::TerminalFocus,
+        Self::TerminalContextMenu,
+        Self::FileList,
+        Self::FileSearch,
+        Self::FilePreview,
+        Self::FileArtifactPreview,
+        Self::FileGeneratedImageRead,
+        Self::FileProjectActions,
+        Self::FileProjectActionAuthorize,
+        Self::GitState,
+        Self::GitDiff,
+        Self::GitMutate,
+        Self::GitCommit,
+        Self::GitPush,
+        Self::GitInitialize,
+        Self::GitHunks,
+        Self::GitHunkMutate,
+        Self::GitPullRequestPrepare,
+        Self::GitReviewStart,
+        Self::GitReviewSubmit,
+        Self::GitWorktree,
     ];
 }
 
@@ -517,6 +595,187 @@ pub struct TaskInputResolution {
     pub answered: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TerminalFocusRequest {
+    pub focused: bool,
+    #[serde(default)]
+    pub process_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalFocusState {
+    pub focused: bool,
+    #[serde(default)]
+    pub process_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalReadyState {
+    pub ready: bool,
+    pub process_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TerminalContextMenuRequest {
+    pub process_id: String,
+    #[serde(default)]
+    pub has_selection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalContextMenu {
+    pub process_id: String,
+    pub items: Vec<String>,
+    pub has_selection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FileListRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub relative: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FileSearchRequest {
+    pub cwd: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct FilePreviewRequest {
+    pub cwd: String,
+    pub path: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LocalArtifactRequest {
+    pub path: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FilePreview {
+    pub opened: bool,
+    pub name: String,
+    pub path: String,
+    pub absolute_path: String,
+    #[ts(type = "number")]
+    pub size: u64,
+    pub mime_type: String,
+    pub kind: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub data_url: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GeneratedImage {
+    pub path: String,
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: usize,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectActionAuthorizeRequest {
+    pub cwd: String,
+    pub action_id: String,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AuthorizedProjectAction {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    pub source: String,
+    pub fingerprint: String,
+    pub authorized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitHunkMutationRequest {
+    pub cwd: String,
+    pub patch: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitPullRequestRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitReviewStartRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct GitReviewSubmitRequest {
+    pub comments: Value,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub review: Option<Value>,
+}
+
 pub fn export_types(output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let config = Config::default().with_out_dir(output);
@@ -556,6 +815,23 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         TaskApprovalResolution,
         TaskInputResolveRequest,
         TaskInputResolution,
+        TerminalFocusRequest,
+        TerminalFocusState,
+        TerminalReadyState,
+        TerminalContextMenuRequest,
+        TerminalContextMenu,
+        FileListRequest,
+        FileSearchRequest,
+        FilePreviewRequest,
+        LocalArtifactRequest,
+        FilePreview,
+        GeneratedImage,
+        ProjectActionAuthorizeRequest,
+        AuthorizedProjectAction,
+        GitHunkMutationRequest,
+        GitPullRequestRequest,
+        GitReviewStartRequest,
+        GitReviewSubmitRequest,
     );
     Ok(())
 }
@@ -581,6 +857,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ApprovalDecision::AcceptForSession).expect("serialize decision"),
             r#""acceptForSession""#
+        );
+    }
+
+    #[test]
+    fn serializes_terminal_file_and_git_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::TerminalStart).expect("terminal method"),
+            r#""terminal.start""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::FileArtifactPreview).expect("file method"),
+            r#""file.artifact.preview""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::GitReviewSubmit).expect("git method"),
+            r#""git.review.submit""#
         );
     }
 
