@@ -914,6 +914,41 @@ describe("Timeline activity status", () => {
     expect(screen.queryByText("browser node 1776")).not.toBeInTheDocument();
   });
 
+  it("shows a browser MCP failure without exposing the protocol envelope", () => {
+    const view = renderCommand({
+      id: "browser-open-failed",
+      turnId: "turn-browser-open-failed",
+      role: "tool",
+      kind: "tool",
+      title: "internal_browser · browser_open",
+      text: JSON.stringify({
+        _meta: null,
+        content: [
+          {
+            type: "text",
+            text: "OnPeople 内嵌浏览器尚未连接桌面应用",
+          },
+        ],
+        structuredContent: null,
+      }),
+      status: "失败",
+    });
+
+    const activity = view.container.querySelector(".activity-summary")!;
+    expect(activity.querySelector("summary strong")).toHaveTextContent(
+      "内嵌浏览器打开失败",
+    );
+    fireEvent.click(activity.querySelector("summary")!);
+    expect(
+      view.container.querySelector(".tool-card > summary strong"),
+    ).toHaveTextContent("内嵌浏览器打开失败");
+    expect(
+      screen.getByText("OnPeople 内嵌浏览器尚未连接桌面应用"),
+    ).toBeVisible();
+    expect(screen.queryByText(/structuredContent/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/_meta/)).not.toBeInTheDocument();
+  });
+
   it("stops following streaming output after the user scrolls upward", () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;

@@ -584,6 +584,16 @@ async fn write_onpeople_profile(
                 toml_string(&mcp.host_binary.to_string_lossy()),
                 toml_string(argument),
             ));
+            if server_id == "internal_browser" {
+                // Codex intentionally starts MCP servers with a restricted
+                // environment. Explicitly allow only the two ephemeral
+                // bridge values that the browser host needs; keeping them in
+                // `env_vars` avoids persisting the authentication token in
+                // the generated profile.
+                contents.push_str(
+                    "env_vars = [\"ONPEOPLE_BROWSER_AGENT_BRIDGE\", \"ONPEOPLE_BROWSER_AGENT_TOKEN\"]\n",
+                );
+            }
         }
     }
     contents.push_str(&installed_plugin_profile(codex_home)?);
@@ -835,6 +845,9 @@ mod profile_tests {
         assert!(profile.contains("args = [\"computer-use\"]"));
         assert!(profile.contains("[mcp_servers.internal_browser]"));
         assert!(profile.contains("args = [\"browser\"]"));
+        assert!(profile.contains(
+            "env_vars = [\"ONPEOPLE_BROWSER_AGENT_BRIDGE\", \"ONPEOPLE_BROWSER_AGENT_TOKEN\"]"
+        ));
         assert!(profile.contains("[mcp_servers.research_sources]"));
         assert!(profile.contains("enabled = false"));
         assert!(profile.contains("max_concurrent_threads_per_session = 6"));

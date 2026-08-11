@@ -594,6 +594,7 @@ function TimelineEntry({ item }: { item: TimelineItem }) {
   }
 
   if (item.kind === "tool") {
+    const toolText = readableToolOutput(item.text);
     return (
       <ToolCard
         icon={Wrench}
@@ -605,15 +606,15 @@ function TimelineEntry({ item }: { item: TimelineItem }) {
                 key={item.generatedImagePath}
                 path={item.generatedImagePath}
               />
-              {item.text ? (
+              {toolText ? (
                 <details className="generated-image-details">
                   <summary>查看工具输出</summary>
-                  <MarkdownMessage text={item.text} />
+                  <MarkdownMessage text={toolText} />
                 </details>
               ) : null}
             </>
-          ) : item.text ? (
-            <MarkdownMessage text={item.text} />
+          ) : toolText ? (
+            <MarkdownMessage text={toolText} />
           ) : null
         }
       />
@@ -1673,13 +1674,35 @@ function displayTimelineStatus(status: string): string {
 }
 
 function displayTimelineTitle(item: TimelineItem, pending: boolean): string {
-  if (item.kind === "command" || item.kind === "file-change") {
+  if (
+    item.kind === "command" ||
+    item.kind === "file-change" ||
+    item.kind === "tool"
+  ) {
     return activityItemHeadline(item, pending);
   }
   const title = item.title ?? (item.kind === "reasoning" ? "分析" : "工具");
   if (pending || !title.startsWith("正在")) return title;
   if (item.kind === "reasoning") return "分析";
   return `已${title.slice(2)}`;
+}
+
+function readableToolOutput(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
+  try {
+    const payload = JSON.parse(trimmed) as {
+      content?: Array<{ type?: unknown; text?: unknown }>;
+    };
+    if (!Array.isArray(payload.content)) return text;
+    const messages = payload.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => String(part.text).trim())
+      .filter(Boolean);
+    return messages.length > 0 ? messages.join("\n\n") : text;
+  } catch {
+    return text;
+  }
 }
 
 function DiffStatChip({

@@ -2,6 +2,7 @@ import { Component, StrictMode, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { RootApp } from "./App";
+import { browserBridge } from "./browser/browserBridge";
 import { useWorkbenchStore } from "./store/workbenchStore";
 import "./styles.css";
 import "./codex-parity.css";
@@ -49,6 +50,12 @@ if (import.meta.env.DEV) {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("OnPeople root element is missing");
+
+// Establish the Electron browser-agent channel at application bootstrap,
+// before a task can invoke the internal_browser MCP server. BrowserWorkspace
+// subscribes to the local queue when it mounts, so commands received while the
+// conversation view is visible are retained instead of timing out.
+browserBridge.receiveAgentCommands(() => undefined);
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.stack || error.message;

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeBrowserAddress } from "./browserBridge";
+import { browserBridge, normalizeBrowserAddress } from "./browserBridge";
+
+afterEach(() => {
+  delete window.onpeopleBrowser;
+});
 
 describe("normalizeBrowserAddress", () => {
   it("keeps supported URLs and expands host names", () => {
@@ -17,5 +21,31 @@ describe("normalizeBrowserAddress", () => {
     expect(normalizeBrowserAddress("OnPeople browser")).toBe(
       "https://www.google.com/search?q=OnPeople%20browser",
     );
+  });
+
+  it("queues Electron agent commands before the browser workspace mounts", () => {
+    let deliver: ((payload: unknown) => void) | undefined;
+    window.onpeopleBrowser = {
+      invoke: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      onAgentCommand: vi.fn((handler) => {
+        deliver = handler as (payload: unknown) => void;
+        return () => undefined;
+      }),
+    };
+
+    const stopReceiver = browserBridge.receiveAgentCommands(() => undefined);
+    deliver?.({ kind: "open", url: "https://example.com/weather" });
+    const listener = vi.fn();
+    const stopListener = browserBridge.onAgentCommand(listener);
+
+    expect(window.onpeopleBrowser.onAgentCommand).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith({
+      kind: "open",
+      url: "https://example.com/weather",
+    });
+
+    stopListener();
+    stopReceiver();
   });
 });
