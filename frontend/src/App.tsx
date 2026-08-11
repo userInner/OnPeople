@@ -334,9 +334,12 @@ export function App() {
   useEffect(
     () =>
       browserBridge.receiveAgentCommands(() => {
-        setPrimaryView("browser");
+        // Keep the task visible while its shared browser opens beside it.
+        // The standalone Sites workspace remains available for manual use.
+        setPrimaryView("tasks");
+        setToolView("browser");
       }),
-    [setPrimaryView],
+    [setPrimaryView, setToolView],
   );
 
   useEffect(() => {

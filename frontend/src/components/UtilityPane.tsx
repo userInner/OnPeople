@@ -4,20 +4,22 @@ import {
   FileCode2,
   Files,
   GitBranch,
+  Globe2,
   LayoutDashboard,
-  ListFilter,
   Maximize2,
   Minimize2,
   PanelBottom,
   PanelRightClose,
   Plus,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useWorkbenchStore } from "../store/workbenchStore";
 import type { ToolView } from "../types";
 import { IconButton } from "./IconButton";
+import { BrowserWorkspace } from "./browser/BrowserWorkspace";
 import { FilesPane } from "./tools/FilesPane";
 import { GitPane } from "./tools/GitPane";
 import { LocalArtifactPreview } from "./tools/LocalArtifactPreview";
@@ -25,6 +27,7 @@ import { ManagementCenter } from "./tools/ManagementCenter";
 
 const views: Array<{ id: ToolView; label: string; icon: typeof CircleDot }> = [
   { id: "activity", label: "输出", icon: CircleDot },
+  { id: "browser", label: "浏览器", icon: Globe2 },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "files", label: "文件", icon: Files },
   { id: "manage", label: "管理", icon: LayoutDashboard },
@@ -52,6 +55,7 @@ export function UtilityPane({
   const setToolView = useWorkbenchStore((state) => state.setToolView);
   const setUtilityOpen = useWorkbenchStore((state) => state.setUtilityOpen);
   const currentView = views.find((view) => view.id === toolView) ?? views[0]!;
+  const CurrentViewIcon = currentView.icon;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -78,9 +82,27 @@ export function UtilityPane({
     <aside className={`utility-pane utility-${toolView}`} aria-label="工具舱">
       <div className="utility-tabs utility-toolbar">
         <div className="utility-view-switcher" ref={menuRef}>
+          <div
+            className="utility-active-tab"
+            role="tab"
+            aria-selected="true"
+            aria-label={`当前侧面板：${currentView.label}`}
+          >
+            <CurrentViewIcon size={14} aria-hidden="true" />
+            <span>{currentView.label}</span>
+            {toolView !== "activity" ? (
+              <button
+                type="button"
+                aria-label={`关闭${currentView.label}标签`}
+                onClick={() => setToolView("activity")}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
           <IconButton
-            icon={ListFilter}
-            label={`切换工具，当前：${currentView.label}`}
+            icon={Plus}
+            label="新建侧面板标签"
             active={menuOpen}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
@@ -90,7 +112,7 @@ export function UtilityPane({
             <div
               className="utility-view-menu"
               role="menu"
-              aria-label="工具"
+              aria-label="新建侧面板标签"
               data-native-surface-occluder="true"
             >
               {views.map(({ id, label, icon: Icon }) => (
@@ -137,6 +159,9 @@ export function UtilityPane({
       <div className="utility-frame">
         <div className="utility-content" role="tabpanel">
           {toolView === "activity" ? <ActivityPane /> : null}
+          {toolView === "browser" ? (
+            <BrowserWorkspace onBack={() => setToolView("activity")} />
+          ) : null}
           {toolView === "git" ? <GitPane /> : null}
           {toolView === "files" ? (
             localArtifactPreview ? (

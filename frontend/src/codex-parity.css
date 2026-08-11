@@ -7793,6 +7793,46 @@ button.activity-row:hover {
   position: relative;
   display: flex;
   align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.utility-active-tab {
+  display: grid;
+  height: 31px;
+  min-width: 86px;
+  max-width: 180px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 0 7px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.utility-active-tab > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.utility-active-tab > button {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--ink-faint);
+  background: transparent;
+}
+
+.utility-active-tab > button:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
 }
 
 .utility-view-menu {

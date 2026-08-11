@@ -75,7 +75,13 @@ export type { ThreadList } from "./bindings/ThreadList";
 export type { ThreadSummary } from "./bindings/ThreadSummary";
 export type { WorktreeSummary } from "./bindings/WorktreeSummary";
 
-export type ToolView = "activity" | "terminal" | "git" | "files" | "manage";
+export type ToolView =
+  | "activity"
+  | "browser"
+  | "terminal"
+  | "git"
+  | "files"
+  | "manage";
 
 export interface LocalArtifactPreviewRequest {
   id: string;
