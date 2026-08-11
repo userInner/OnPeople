@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 onpeople-browser-host = { path = "../crates/browser-host", default-features = false }
 onpeople-core-runtime = { path = "../crates/core-runtime" }
+onpeople-desktop-api = { path = "../crates/desktop-api" }
 onpeople-types = { path = "../crates/onpeople-types" }
 serde_json.workspace = true
 sha2.workspace = true

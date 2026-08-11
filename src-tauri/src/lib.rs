@@ -18,6 +18,7 @@ use onpeople_browser_host::{
     BrowserCommand, BrowserHostEvent, BrowserHostState, BrowserIpcClient, IpcConfig,
 };
 use onpeople_core_runtime::CoreRuntime;
+use onpeople_desktop_api::{DesktopDispatcher, DesktopRequest, DesktopResponse};
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
     AgentStatus, AppError, AppUpdateState, BrowserAnnotation, BrowserBoundsRequest, BrowserFrame,
@@ -554,6 +555,7 @@ fn validate_release_browser_host(_executable: &std::path::Path) -> Result<(), Ap
 #[derive(Clone)]
 pub struct AppState {
     pub runtime: Arc<CoreRuntime>,
+    pub desktop_api: Arc<DesktopDispatcher>,
     pub browser: Arc<BrowserHostState>,
     browser_process: Arc<StdMutex<Option<Child>>>,
     browser_ipc: BrowserIpcClient,
@@ -590,6 +592,7 @@ impl AppState {
         let browser_ipc =
             BrowserIpcClient::new(IpcConfig::for_profile(&storage.paths().cef_profile));
         let runtime = Arc::new(CoreRuntime::new(storage.clone(), runtime_root.clone())?);
+        let desktop_api = Arc::new(DesktopDispatcher::new(Arc::clone(&runtime)));
         install_bundled_plugins(&runtime, &runtime_root)?;
         #[cfg(unix)]
         let browser_mcp_socket = browser_ipc.config().address.unix_socket.clone();
@@ -605,6 +608,7 @@ impl AppState {
         ));
         Ok(Self {
             runtime,
+            desktop_api,
             browser,
             browser_process: Arc::new(StdMutex::new(None)),
             browser_ipc,
@@ -2784,7 +2788,7 @@ end run"#,
             return Ok(vec![image_path]);
         }
         let _ = std::fs::remove_file(&image_path);
-        return Ok(Vec::new());
+        Ok(Vec::new())
     }
 
     #[cfg(windows)]
@@ -3809,6 +3813,14 @@ fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
 }
 
 #[tauri::command]
+async fn desktop_request(
+    state: State<'_, AppState>,
+    request: DesktopRequest,
+) -> Result<DesktopResponse, AppError> {
+    Ok(state.desktop_api.dispatch(request).await)
+}
+
+#[tauri::command]
 fn get_preferences(state: State<'_, AppState>) -> Result<Preferences, AppError> {
     state.runtime.preferences()
 }
@@ -4636,6 +4648,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_request,
             agent_status,
             get_preferences,
             activate_deep_links,

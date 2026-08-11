@@ -4126,6 +4126,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "onpeople-desktop-api"
+version = "0.30.0"
+dependencies = [
+ "chrono",
+ "onpeople-core-runtime",
+ "onpeople-storage",
+ "onpeople-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "ts-rs",
+]
+
+[[package]]
 name = "onpeople-integrations"
 version = "0.30.0"
 dependencies = [
@@ -4216,6 +4231,7 @@ dependencies = [
  "objc2-web-kit",
  "onpeople-browser-host",
  "onpeople-core-runtime",
+ "onpeople-desktop-api",
  "onpeople-integrations",
  "onpeople-storage",
  "onpeople-types",
@@ -8538,6 +8554,7 @@ version = "0.30.0"
 dependencies = [
  "onpeople-browser-host",
  "onpeople-core-runtime",
+ "onpeople-desktop-api",
  "onpeople-types",
  "serde_json",
  "sha2 0.10.9",

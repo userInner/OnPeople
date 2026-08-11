@@ -8,7 +8,6 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 
 import type {
-  AgentStatus,
   AppError,
   AppUpdateState,
   BrowserAnnotation,
@@ -28,13 +27,12 @@ import type {
   ProviderKind,
   ProviderSettings,
   RuntimeDiagnostics,
-  RuntimeSnapshot,
   SchedulerSnapshot,
   StreamEnvelope,
   TerminalExit,
   TerminalSession,
-  ThreadList,
 } from "../types";
+import { createDesktopApiClient } from "./desktopApi";
 
 export type BrowserCommand =
   | {
@@ -203,6 +201,10 @@ function isTauriRuntime(): boolean {
   );
 }
 
+const desktopApi = createDesktopApiClient((request) =>
+  call("desktop_request", { request }),
+);
+
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
   activateDeepLinks: () => call<string[]>("activate_deep_links"),
@@ -211,10 +213,10 @@ export const desktopClient = {
     call<{ agents?: Array<Record<string, unknown>> }>("list_agents", {
       request: { parentThreadId: parentThreadId ?? null },
     }),
-  agentStatus: () => call<AgentStatus>("agent_status"),
-  getPreferences: () => call<Preferences>("get_preferences"),
+  agentStatus: () => desktopApi.request("runtime.status", {}),
+  getPreferences: () => desktopApi.request("preferences.get", {}),
   savePreferences: (preferences: Preferences) =>
-    call<Preferences>("save_preferences", { request: { preferences } }),
+    desktopApi.request("preferences.save", { preferences }),
   listThreads: (
     filters: {
       archived?: boolean;
@@ -223,29 +225,22 @@ export const desktopClient = {
       limit?: number;
     } = {},
   ) =>
-    call<ThreadList>("list_threads", {
-      filters: {
-        archived: filters.archived ?? false,
-        query: filters.query ?? "",
-        projectPath: filters.projectPath ?? null,
-        limit: filters.limit ?? 200,
-      },
+    desktopApi.request("thread.list", {
+      archived: filters.archived ?? false,
+      query: filters.query ?? "",
+      projectPath: filters.projectPath ?? null,
+      limit: filters.limit ?? 200,
     }),
   threadTimeline: (threadId: string) =>
     call<Array<Record<string, unknown>>>("get_thread_timeline", { threadId }),
   runtimeSnapshot: (threadId?: string | null) =>
-    call<RuntimeSnapshot>("get_runtime_snapshot", {
-      threadId: threadId ?? null,
-    }),
+    desktopApi.request("runtime.snapshot", { threadId: threadId ?? null }),
   getRuntimeSnapshot: (threadId?: string | null) =>
-    call<RuntimeSnapshot>("get_runtime_snapshot", {
-      threadId: threadId ?? null,
-    }),
-  runtimeDiagnostics: () => call<RuntimeDiagnostics>("get_runtime_diagnostics"),
-  getRuntimeDiagnostics: () =>
-    call<RuntimeDiagnostics>("get_runtime_diagnostics"),
-  startRuntime: () => call<void>("start_runtime"),
-  stopRuntime: () => call<void>("stop_runtime"),
+    desktopApi.request("runtime.snapshot", { threadId: threadId ?? null }),
+  runtimeDiagnostics: () => desktopApi.request("runtime.diagnostics", {}),
+  getRuntimeDiagnostics: () => desktopApi.request("runtime.diagnostics", {}),
+  startRuntime: () => desktopApi.request("runtime.start", {}),
+  stopRuntime: () => desktopApi.request("runtime.stop", {}),
   sendPrompt: (request: {
     threadId?: string | null;
     text: string;
@@ -363,7 +358,7 @@ export const desktopClient = {
     call<FileEntry[]>("list_project_files", { request: { cwd, relative } }),
   searchProjectFiles: (cwd: string, query: string) =>
     call<FileSearchResult>("search_project_files", { request: { cwd, query } }),
-  scheduler: () => call<SchedulerSnapshot>("get_scheduler"),
+  scheduler: () => desktopApi.request("scheduler.get", {}),
   createScheduledTask: (request: {
     name: string;
     prompt: string;

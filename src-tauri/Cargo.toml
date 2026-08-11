@@ -18,6 +18,7 @@ chrono.workspace = true
 base64.workspace = true
 onpeople-browser-host = { path = "../crates/browser-host", default-features = false }
 onpeople-core-runtime = { path = "../crates/core-runtime" }
+onpeople-desktop-api = { path = "../crates/desktop-api" }
 onpeople-integrations = { path = "../crates/integrations" }
 onpeople-storage = { path = "../crates/storage" }
 onpeople-types = { path = "../crates/onpeople-types" }

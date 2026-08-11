@@ -2095,10 +2095,12 @@ fn bindings(check: bool) -> Result<(), String> {
     if check {
         let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
         onpeople_types::export_types(temporary.path()).map_err(|error| error.to_string())?;
+        onpeople_desktop_api::export_types(temporary.path()).map_err(|error| error.to_string())?;
         compare_dirs(temporary.path(), &target)
     } else {
         fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-        onpeople_types::export_types(&target).map_err(|error| error.to_string())
+        onpeople_types::export_types(&target).map_err(|error| error.to_string())?;
+        onpeople_desktop_api::export_types(&target).map_err(|error| error.to_string())
     }
 }
 
