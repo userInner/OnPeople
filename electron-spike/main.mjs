@@ -37,6 +37,14 @@ const browserMethods = new Set([
   "browser.annotation.delete",
   "browser.action",
 ]);
+const startupMethods = new Set([
+  "runtime.status",
+  "preferences.get",
+  "thread.list",
+  "runtime.snapshot",
+  "scheduler.get",
+]);
+const STARTUP_REQUEST_TIMEOUT_MS = 12_000;
 
 let appReadyMs = null;
 let rendererReadyMs = null;
@@ -277,7 +285,12 @@ async function bootstrap() {
           await shellAdapter?.handle(request.method, request.params ?? {}),
         );
       }
-      return await rustBridge.request(request);
+      return await rustBridge.request(
+        request,
+        startupMethods.has(request.method)
+          ? STARTUP_REQUEST_TIMEOUT_MS
+          : undefined,
+      );
     } catch (error) {
       return responseFailure(request, error);
     }
