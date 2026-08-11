@@ -1693,6 +1693,32 @@ kbd {
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
   font-size: 11px;
 }
+.tool-error-action {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.tool-error-action > span {
+  min-width: 0;
+  flex: 1;
+}
+.tool-error-action > button {
+  display: inline-flex;
+  min-height: 26px;
+  gap: 5px;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border-radius: 6px;
+  color: var(--danger);
+  background: var(--surface);
+  font-size: 10px;
+}
+.tool-error-action > button:hover {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+}
 .terminal-tabs {
   display: flex;
   height: 38px;
@@ -1796,6 +1822,11 @@ kbd {
   padding: 35px 12px;
   color: var(--ink-faint);
   font-size: 12px;
+}
+.terminal-empty-workspace {
+  min-height: 160px;
+  flex-direction: column;
+  color: var(--ink-faint);
 }
 .git-body {
   display: grid;

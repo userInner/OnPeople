@@ -95,4 +95,23 @@ describe("UtilityPane toolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to output" }));
     expect(useWorkbenchStore.getState().toolView).toBe("activity");
   });
+
+  it("routes every output creation control to the file workspace", () => {
+    render(
+      <UtilityPane
+        expanded={false}
+        bottomPanelOpen={false}
+        onToggleExpanded={vi.fn()}
+        onToggleBottomPanel={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "打开文件面板" }));
+    expect(useWorkbenchStore.getState().toolView).toBe("files");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭文件标签" }));
+    expect(useWorkbenchStore.getState().toolView).toBe("activity");
+    fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
+    expect(useWorkbenchStore.getState().toolView).toBe("files");
+  });
 });

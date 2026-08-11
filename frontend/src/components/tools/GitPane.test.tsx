@@ -187,9 +187,7 @@ describe("GitPane", () => {
       target: { value: "请保留旧行为的兼容测试" },
     });
     fireEvent.click(screen.getByRole("button", { name: "添加意见" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "发送审阅意见给 Codex" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "发送审阅意见" }));
 
     await waitFor(() =>
       expect(desktopClient.submitReviewComments).toHaveBeenCalledWith({
@@ -206,5 +204,30 @@ describe("GitPane", () => {
         ],
       }),
     );
+  });
+
+  it("retries Git state loading in place after a transport failure", async () => {
+    vi.mocked(desktopClient.gitState)
+      .mockRejectedValueOnce(new Error("Git 服务暂时不可用"))
+      .mockResolvedValueOnce(gitState);
+
+    render(<GitPane />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Git 服务暂时不可用",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+
+    expect(await screen.findByText("src/demo.ts")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("explains why Git tools are unavailable without a workspace", async () => {
+    useWorkbenchStore.setState({ draftCwd: null });
+
+    render(<GitPane />);
+
+    expect(await screen.findByText("请先选择项目目录")).toBeVisible();
+    expect(screen.getByText(/选择工作空间后/)).toBeVisible();
+    expect(desktopClient.gitState).not.toHaveBeenCalled();
   });
 });

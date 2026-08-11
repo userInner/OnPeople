@@ -7,8 +7,10 @@ import {
   ClipboardPaste,
   Copy,
   Eraser,
+  FolderOpen,
   MousePointer2,
   Plus,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -30,6 +32,7 @@ interface TerminalTab {
   processId: string | null;
   exited: boolean;
   error: string | null;
+  generation: number;
 }
 
 interface TerminalSessionProps {
@@ -79,6 +82,22 @@ export function TerminalPane({ command, onCommandSent }: TerminalPaneProps) {
     }
   };
 
+  const restartTerminal = (id: string) => {
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.id === id
+          ? {
+              ...tab,
+              processId: null,
+              exited: false,
+              error: null,
+              generation: tab.generation + 1,
+            }
+          : tab,
+      ),
+    );
+  };
+
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   return (
@@ -117,43 +136,62 @@ export function TerminalPane({ command, onCommandSent }: TerminalPaneProps) {
         />
       </div>
       {activeTab?.error ? (
-        <div className="tool-error">{activeTab.error}</div>
+        <div className="tool-error tool-error-action" role="alert">
+          <span>{activeTab.error}</span>
+          <button type="button" onClick={() => restartTerminal(activeTab.id)}>
+            <RefreshCw size={12} aria-hidden="true" />
+            重新启动
+          </button>
+        </div>
       ) : null}
-      <div className="terminal-sessions">
-        {tabs.map((tab) => (
-          <TerminalSession
-            key={tab.id}
-            tabId={tab.id}
-            cwd={cwd}
-            active={tab.id === activeId}
-            command={tab.id === activeId ? (command ?? null) : null}
-            {...(onCommandSent ? { onCommandSent } : {})}
-            onReady={(tabId, processId, label) =>
-              setTabs((current) =>
-                current.map((item) =>
-                  item.id === tabId
-                    ? { ...item, processId, label, exited: false, error: null }
-                    : item,
-                ),
-              )
-            }
-            onExit={(tabId) =>
-              setTabs((current) =>
-                current.map((item) =>
-                  item.id === tabId ? { ...item, exited: true } : item,
-                ),
-              )
-            }
-            onError={(tabId, error) =>
-              setTabs((current) =>
-                current.map((item) =>
-                  item.id === tabId ? { ...item, error } : item,
-                ),
-              )
-            }
-          />
-        ))}
-      </div>
+      {cwd ? (
+        <div className="terminal-sessions">
+          {tabs.map((tab) => (
+            <TerminalSession
+              key={`${tab.id}:${tab.generation}`}
+              tabId={tab.id}
+              cwd={cwd}
+              active={tab.id === activeId}
+              command={tab.id === activeId ? (command ?? null) : null}
+              {...(onCommandSent ? { onCommandSent } : {})}
+              onReady={(tabId, processId, label) =>
+                setTabs((current) =>
+                  current.map((item) =>
+                    item.id === tabId
+                      ? {
+                          ...item,
+                          processId,
+                          label,
+                          exited: false,
+                          error: null,
+                        }
+                      : item,
+                  ),
+                )
+              }
+              onExit={(tabId) =>
+                setTabs((current) =>
+                  current.map((item) =>
+                    item.id === tabId ? { ...item, exited: true } : item,
+                  ),
+                )
+              }
+              onError={(tabId, error) =>
+                setTabs((current) =>
+                  current.map((item) =>
+                    item.id === tabId ? { ...item, error } : item,
+                  ),
+                )
+              }
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="tool-empty terminal-empty-workspace">
+          <FolderOpen size={18} aria-hidden="true" />
+          <span>选择工作空间后即可启动终端</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -379,7 +417,7 @@ function TerminalSession({
       } catch (cause) {
         unlistenOutput?.();
         unlistenExit?.();
-        callbacks.current.onError(tabId, errorMessage(cause));
+        if (!disposed) callbacks.current.onError(tabId, errorMessage(cause));
       }
     })();
 
@@ -521,6 +559,7 @@ function createTerminalTab(id: string = crypto.randomUUID()): TerminalTab {
     processId: null,
     exited: false,
     error: null,
+    generation: 0,
   };
 }
 

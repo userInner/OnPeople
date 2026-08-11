@@ -13,7 +13,7 @@ import {
   Send,
   Upload,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { desktopClient } from "../../lib/desktopClient";
 import { errorMessage } from "../../lib/errors";
@@ -143,45 +143,89 @@ export function GitPane() {
   const [discardPath, setDiscardPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const gitRequest = useRef(0);
+  const diffRequest = useRef(0);
+  const selectedPathRef = useRef<string | null>(null);
+
+  useEffect(
+    () => () => {
+      gitRequest.current += 1;
+      diffRequest.current += 1;
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
-    if (!cwd) return;
+    const request = ++gitRequest.current;
+    if (!cwd) {
+      setGit(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      setGit(await desktopClient.gitState(cwd));
+      const next = await desktopClient.gitState(cwd);
+      if (request !== gitRequest.current) return;
+      setGit(next);
     } catch (cause) {
+      if (request !== gitRequest.current) return;
       setError(errorMessage(cause));
     } finally {
-      setLoading(false);
+      if (request === gitRequest.current) setLoading(false);
     }
   }, [cwd]);
 
   useEffect(() => {
+    gitRequest.current += 1;
+    diffRequest.current += 1;
+    selectedPathRef.current = null;
+    setGit(null);
+    setDiff(null);
+    setHunks([]);
+    setSelectedPath(null);
+    setError(null);
+    setLoading(Boolean(cwd));
+    if (!cwd) return;
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
-  }, [refresh]);
+  }, [cwd, refresh]);
 
   const openDiff = async (path: string) => {
+    const request = ++diffRequest.current;
+    selectedPathRef.current = path;
     setSelectedPath(path);
+    setDiff(null);
+    setHunks([]);
     setError(null);
     try {
       const [nextDiff, hunkResult] = await Promise.all([
         desktopClient.gitDiff(cwd, path),
         desktopClient.getGitHunks(cwd, path),
       ]);
+      if (request !== diffRequest.current || selectedPathRef.current !== path) {
+        return;
+      }
       setDiff(nextDiff);
       setHunks(readHunks(hunkResult.hunks));
     } catch (cause) {
+      if (request !== diffRequest.current || selectedPathRef.current !== path) {
+        return;
+      }
       setError(errorMessage(cause));
     }
   };
 
   const refreshSelected = async (path: string) => {
+    const request = ++diffRequest.current;
     const [nextDiff, hunkResult] = await Promise.all([
       desktopClient.gitDiff(cwd, path),
       desktopClient.getGitHunks(cwd, path),
     ]);
+    if (request !== diffRequest.current || selectedPathRef.current !== path) {
+      return;
+    }
     setDiff(nextDiff);
     setHunks(readHunks(hunkResult.hunks));
   };
@@ -259,7 +303,7 @@ export function GitPane() {
             : reviewValue.trim() || null,
       });
       setReviewSession(value);
-      setReviewStatus("Codex 代码审阅已开始");
+      setReviewStatus("代码审阅已开始");
       await refreshThreads();
       const threadId = text(value.threadId);
       if (threadId) await selectThread(threadId);
@@ -318,7 +362,7 @@ export function GitPane() {
       });
       setReviewComment("");
       setReviewComments([]);
-      setReviewStatus("审阅意见已发送给 Codex 处理");
+      setReviewStatus("审阅意见已发送，任务会继续处理");
       await refreshThreads();
       const threadId = text(value.threadId);
       if (threadId) await selectThread(threadId);
@@ -372,7 +416,14 @@ export function GitPane() {
           onClick={() => void preparePullRequest()}
         />
       </div>
-      {error ? <div className="tool-error">{error}</div> : null}
+      {error ? (
+        <div className="tool-error tool-error-action" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => void refresh()}>
+            重新读取
+          </button>
+        </div>
+      ) : null}
       {loading ? (
         <div className="tool-loading">
           <LoaderCircle className="spin" size={16} />
@@ -631,13 +682,20 @@ export function GitPane() {
           </button>
         </div>
       ) : null}
+      {!loading && !cwd ? (
+        <div className="git-empty-repository">
+          <GitBranch size={20} />
+          <strong>请先选择项目目录</strong>
+          <span>选择工作空间后，这里会显示更改、差异和提交操作。</span>
+        </div>
+      ) : null}
       {git?.repository ? (
         <div className="git-footer-stack">
           <section className="git-review-workflow">
             <header>
               <span>
                 <MessageSquareText size={14} />
-                Codex 代码审阅
+                代码审阅
               </span>
               {reviewSession ? <em>任务已创建</em> : null}
             </header>
@@ -726,7 +784,7 @@ export function GitPane() {
               />
               <button
                 type="submit"
-                aria-label="发送审阅意见给 Codex"
+                aria-label="发送审阅意见"
                 disabled={
                   (!reviewComment.trim() && reviewComments.length === 0) ||
                   mutation !== null

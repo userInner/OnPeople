@@ -201,7 +201,11 @@ function ActivityPane() {
       <section className="codex-output-section codex-output-create">
         <header>
           <h2>输出</h2>
-          <button type="button" aria-label="创建输出">
+          <button
+            type="button"
+            aria-label="打开文件面板"
+            onClick={() => setToolView("files")}
+          >
             <Plus size={17} aria-hidden="true" />
           </button>
         </header>
@@ -240,7 +244,11 @@ function ActivityPane() {
       <section className="codex-output-section codex-output-sources">
         <header>
           <h2>来源</h2>
-          <button type="button" aria-label="添加来源">
+          <button
+            type="button"
+            aria-label="查看全部来源"
+            onClick={() => setToolView("files")}
+          >
             <Plus size={17} aria-hidden="true" />
           </button>
         </header>

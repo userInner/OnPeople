@@ -9,7 +9,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { desktopClient } from "../../lib/desktopClient";
 import { errorMessage } from "../../lib/errors";
@@ -29,6 +29,10 @@ interface WorkspaceFilePreview extends Record<string, unknown> {
   message?: string;
 }
 
+type FileFailure =
+  | { kind: "list"; relative: string; query: string }
+  | { kind: "preview"; path: string };
+
 export function FilesPane() {
   const cwd = useWorkbenchStore((state) => {
     const thread = state.threadList.threads.find(
@@ -43,11 +47,26 @@ export function FilesPane() {
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<FileFailure | null>(null);
+  const listRequest = useRef(0);
+  const previewRequest = useRef(0);
+
+  useEffect(
+    () => () => {
+      listRequest.current += 1;
+      previewRequest.current += 1;
+    },
+    [],
+  );
 
   const load = useCallback(
     async (nextRelative: string, searchQuery: string) => {
+      const request = ++listRequest.current;
       if (!cwd) {
         setEntries([]);
+        setLoading(false);
+        setError(null);
+        setFailure(null);
         return;
       }
       setLoading(true);
@@ -56,21 +75,36 @@ export function FilesPane() {
           ? (await desktopClient.searchProjectFiles(cwd, searchQuery.trim()))
               .entries
           : await desktopClient.listProjectFiles(cwd, nextRelative);
+        if (request !== listRequest.current) return;
         setEntries(next);
         setError(null);
+        setFailure(null);
       } catch (cause) {
+        if (request !== listRequest.current) return;
         setError(errorMessage(cause));
+        setFailure({
+          kind: "list",
+          relative: nextRelative,
+          query: searchQuery,
+        });
       } finally {
-        setLoading(false);
+        if (request === listRequest.current) setLoading(false);
       }
     },
     [cwd],
   );
 
   useEffect(() => {
+    listRequest.current += 1;
+    previewRequest.current += 1;
     setRelative("");
     setQuery("");
+    setEntries([]);
     setPreview(null);
+    setLoading(false);
+    setPreviewLoading(false);
+    setError(null);
+    setFailure(null);
   }, [cwd]);
 
   useEffect(() => {
@@ -82,26 +116,52 @@ export function FilesPane() {
   }, [load, query, relative]);
 
   const navigate = (path: string) => {
+    previewRequest.current += 1;
     setRelative(path);
     setQuery("");
     setPreview(null);
+    setPreviewLoading(false);
+    setError(null);
+    setFailure(null);
   };
 
   const openFile = async (path: string) => {
+    const request = ++previewRequest.current;
     setPreviewLoading(true);
+    setPreview(null);
     setError(null);
+    setFailure(null);
     try {
-      setPreview(
-        (await desktopClient.openWorkspaceFile(
-          cwd,
-          path,
-        )) as WorkspaceFilePreview,
-      );
+      const next = (await desktopClient.openWorkspaceFile(
+        cwd,
+        path,
+      )) as WorkspaceFilePreview;
+      if (request !== previewRequest.current) return;
+      setPreview(next);
     } catch (cause) {
+      if (request !== previewRequest.current) return;
       setError(errorMessage(cause));
+      setFailure({ kind: "preview", path });
     } finally {
-      setPreviewLoading(false);
+      if (request === previewRequest.current) setPreviewLoading(false);
     }
+  };
+
+  const retry = () => {
+    if (!failure) return;
+    if (failure.kind === "preview") {
+      void openFile(failure.path);
+      return;
+    }
+    void load(failure.relative, failure.query);
+  };
+
+  const closePreview = () => {
+    previewRequest.current += 1;
+    setPreview(null);
+    setPreviewLoading(false);
+    setError(null);
+    setFailure(null);
   };
 
   const projectName = cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "项目";
@@ -142,7 +202,14 @@ export function FilesPane() {
           </span>
         ) : null}
       </div>
-      {error ? <div className="tool-error">{error}</div> : null}
+      {error ? (
+        <div className="tool-error tool-error-action" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={retry}>
+            重试
+          </button>
+        </div>
+      ) : null}
       <div className={`files-workspace ${preview ? "has-preview" : ""}`}>
         <div className="file-list">
           {loading ? (
@@ -219,7 +286,7 @@ export function FilesPane() {
               <IconButton
                 icon={X}
                 label="关闭文件预览"
-                onClick={() => setPreview(null)}
+                onClick={closePreview}
               />
             </header>
             <FilePreviewBody preview={preview} loading={previewLoading} />

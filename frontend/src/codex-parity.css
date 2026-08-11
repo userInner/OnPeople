@@ -3718,6 +3718,14 @@ button.activity-row:hover {
   font-size: 11px;
 }
 
+.git-empty-repository > span {
+  max-width: 260px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .git-diff-panel {
   display: flex;
   min-width: 0;

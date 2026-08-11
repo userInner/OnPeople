@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { desktopClient } from "../../lib/desktopClient";
@@ -14,6 +20,14 @@ vi.mock("../../lib/desktopClient", () => ({
     copyText: vi.fn(),
   },
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
 
 describe("FilesPane", () => {
   beforeEach(() => {
@@ -130,5 +144,99 @@ describe("FilesPane", () => {
       ),
     );
     expect(screen.getByText("export const ready = true;")).toBeInTheDocument();
+  });
+
+  it("keeps the newest search result when an older request finishes later", async () => {
+    const oldSearch =
+      deferred<Awaited<ReturnType<typeof desktopClient.searchProjectFiles>>>();
+    const newSearch =
+      deferred<Awaited<ReturnType<typeof desktopClient.searchProjectFiles>>>();
+    vi.mocked(desktopClient.searchProjectFiles).mockImplementation(
+      async (_cwd, query) =>
+        query === "old" ? oldSearch.promise : newSearch.promise,
+    );
+
+    render(<FilesPane />);
+    await screen.findByRole("button", { name: /src/ });
+
+    fireEvent.change(screen.getByLabelText("搜索文件"), {
+      target: { value: "old" },
+    });
+    await waitFor(() =>
+      expect(desktopClient.searchProjectFiles).toHaveBeenCalledWith(
+        "/workspace/project",
+        "old",
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("搜索文件"), {
+      target: { value: "new" },
+    });
+    await waitFor(() =>
+      expect(desktopClient.searchProjectFiles).toHaveBeenCalledWith(
+        "/workspace/project",
+        "new",
+      ),
+    );
+
+    await act(async () => {
+      newSearch.resolve({
+        entries: [
+          {
+            name: "new.ts",
+            path: "src/new.ts",
+            kind: "file",
+            size: 1n,
+            modifiedAt: null,
+            hidden: false,
+          },
+        ],
+        truncated: false,
+      });
+    });
+    expect(
+      await screen.findByRole("button", { name: /new\.ts/ }),
+    ).toBeVisible();
+
+    await act(async () => {
+      oldSearch.resolve({
+        entries: [
+          {
+            name: "old.ts",
+            path: "src/old.ts",
+            kind: "file",
+            size: 1n,
+            modifiedAt: null,
+            hidden: false,
+          },
+        ],
+        truncated: false,
+      });
+    });
+    expect(screen.queryByRole("button", { name: /old\.ts/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /new\.ts/ })).toBeVisible();
+  });
+
+  it("offers an in-place retry after the project file list fails", async () => {
+    vi.mocked(desktopClient.listProjectFiles)
+      .mockRejectedValueOnce(new Error("文件服务暂时不可用"))
+      .mockResolvedValueOnce([
+        {
+          name: "src",
+          path: "src",
+          kind: "directory",
+          size: null,
+          modifiedAt: null,
+          hidden: false,
+        },
+      ]);
+
+    render(<FilesPane />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "文件服务暂时不可用",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("button", { name: /src/ })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
