@@ -301,9 +301,21 @@ export function Composer() {
   const setToolView = useWorkbenchStore((state) => state.setToolView);
   const live = useLiveConversation(preferences.liveVoice);
 
-  const working = ["working", "running", "waiting-approval", "queued"].includes(
-    runtime?.state ?? "",
-  );
+  const working = [
+    "working",
+    "running",
+    "waiting-approval",
+    "waiting-input",
+    "queued",
+  ].includes(runtime?.state ?? "");
+  const runtimeActivityLabel =
+    runtime?.state === "waiting-approval"
+      ? "等待你批准"
+      : runtime?.state === "waiting-input"
+        ? "等待你回答"
+        : runtime?.state === "queued"
+          ? "等待开始"
+          : "正在工作";
   const hasDraftContent =
     Boolean(text.trim()) || images.length > 0 || attachments.length > 0;
   const selectedMode = modes.find((item) => item.id === mode) ?? modes[0];
@@ -1509,9 +1521,14 @@ export function Composer() {
           </div>
           <div className="composer-submit-tools">
             {working ? (
+              <span className="composer-working-status" role="status">
+                {runtimeActivityLabel}
+              </span>
+            ) : null}
+            {working ? (
               <span
                 className="composer-running-indicator"
-                aria-label="正在工作"
+                aria-label={runtimeActivityLabel}
               >
                 <LoaderCircle className="spin" size={17} aria-hidden="true" />
               </span>

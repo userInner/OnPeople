@@ -210,6 +210,7 @@ describe("Codex conversation controls", () => {
 
   it("queues composer input while a turn is running", async () => {
     render(<Composer />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在工作");
     fireEvent.change(screen.getByLabelText("任务输入"), {
       target: { value: "继续检查测试" },
     });
@@ -232,6 +233,38 @@ describe("Codex conversation controls", () => {
       }),
     ]);
     expect(screen.getByText("继续检查测试")).toBeInTheDocument();
+  });
+
+  it("keeps waiting-input turns active and queues follow-up messages", async () => {
+    useWorkbenchStore.setState({
+      runtime: {
+        state: "waiting-input",
+        threadId: "thread-main",
+        turnId: "turn-1",
+        queuedMessages: 0,
+        pendingApprovals: 0,
+        context: null,
+      },
+    });
+
+    render(<Composer />);
+    expect(screen.getByRole("status")).toHaveTextContent("等待你回答");
+    expect(screen.getByLabelText("任务输入")).toHaveAttribute(
+      "placeholder",
+      "输入下一条消息，发送后加入队列…",
+    );
+
+    fireEvent.change(screen.getByLabelText("任务输入"), {
+      target: { value: "我补充一条背景" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加入消息队列" }));
+
+    await waitFor(() =>
+      expect(desktopClient.queueMessage).toHaveBeenCalledWith(
+        "我补充一条背景",
+        "thread-main",
+      ),
+    );
   });
 
   it("pauses an active goal before interrupting its current turn", async () => {
@@ -835,6 +868,11 @@ describe("Codex conversation controls", () => {
     });
 
     render(<Timeline />);
+    expect(screen.getByText("命令执行")).toBeInTheDocument();
+    expect(
+      screen.queryByText("item/commandExecution/requestApproval"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("npm test")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "允许一次" }));
 
     await waitFor(() =>

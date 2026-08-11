@@ -275,6 +275,7 @@ export function Timeline() {
               <TurnSummary
                 elapsedSeconds={turnSummary.elapsedSeconds}
                 running={turnSummary.running}
+                currentStep={turnSummary.currentStep}
                 now={now}
               />
             ) : null}
@@ -672,10 +673,12 @@ function deliveryLabel(item: TimelineItem) {
 function TurnSummary({
   elapsedSeconds,
   running,
+  currentStep,
   now,
 }: {
   elapsedSeconds: number | undefined;
   running: boolean;
+  currentStep?: string | undefined;
   now: number;
 }) {
   const [observedAt] = useState(now);
@@ -685,7 +688,7 @@ function TurnSummary({
   return (
     <div
       className="turn-summary"
-      aria-label={
+      aria-label={`${
         displayedElapsed !== undefined
           ? running
             ? `正在处理 ${formatDuration(displayedElapsed)}`
@@ -693,7 +696,7 @@ function TurnSummary({
           : running
             ? "正在处理"
             : "处理完成"
-      }
+      }${running && currentStep ? `，${currentStep}` : ""}`}
     >
       <span>
         {running
@@ -704,6 +707,11 @@ function TurnSummary({
             ? `处理了 ${formatDuration(displayedElapsed)}`
             : "处理完成"}
       </span>
+      {running && currentStep ? (
+        <span className="turn-summary-current" aria-live="polite">
+          {currentStep}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -1237,6 +1245,11 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
   const resolveApproval = useWorkbenchStore((state) => state.resolveApproval);
   const busy = item.status === "正在提交决定";
   const resolved = Boolean(item.approvalDecision);
+  const request = item.text.trim();
+  const requestLines = request.split(/\r?\n/u).filter(Boolean);
+  const requestPreview = requestLines[0] ?? "";
+  const hasMoreRequestDetails =
+    requestLines.length > 1 || requestPreview.length > 140;
 
   return (
     <article
@@ -1249,11 +1262,24 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
         </span>
         <div>
           <strong>{item.title ?? "操作需要确认"}</strong>
-          <small>{item.meta}</small>
+          <small>{approvalKindLabel(item)}</small>
         </div>
         <span className="approval-status">{item.status}</span>
       </div>
-      <pre className="approval-details">{item.text}</pre>
+      {request ? (
+        <div className="approval-request">
+          <code title={request}>{requestPreview}</code>
+          {hasMoreRequestDetails ? (
+            <details className="approval-details-disclosure">
+              <summary>
+                <ChevronRight size={13} aria-hidden="true" />
+                查看完整请求
+              </summary>
+              <pre className="approval-details">{request}</pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
       {!resolved ? (
         <div className="approval-actions">
           <button
@@ -1290,6 +1316,14 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
       ) : null}
     </article>
   );
+}
+
+function approvalKindLabel(item: TimelineItem): string {
+  const identity = `${item.approvalMethod ?? ""} ${item.meta ?? ""}`;
+  if (/commandExecution|command|shell/iu.test(identity)) return "命令执行";
+  if (/file|patch|write/iu.test(identity)) return "文件更改";
+  if (/browser|network|http/iu.test(identity)) return "外部访问";
+  return "需要你的批准";
 }
 
 function UserInputCard({ item }: { item: TimelineItem }) {

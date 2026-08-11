@@ -1274,12 +1274,50 @@ summary:focus-visible {
   color: var(--ink-faint);
 }
 
+.approval-request {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 0 35px;
+}
+
+.approval-request > code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font:
+    10px/1.55 "SFMono-Regular",
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-details-disclosure > summary {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  color: var(--ink-faint);
+  font-size: 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.approval-details-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.approval-details-disclosure[open] > summary svg {
+  transform: rotate(90deg);
+}
+
 .approval-details {
   max-height: 180px;
-  margin: 9px 0 0 35px;
+  margin: 6px 0 0;
   overflow: auto;
   color: var(--ink-soft);
-  background: transparent;
+  background: var(--surface-soft);
+  border-radius: 7px;
+  padding: 7px 8px;
   white-space: pre-wrap;
   font:
     10px/1.55 "SFMono-Regular",

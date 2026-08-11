@@ -332,7 +332,13 @@ describe("Timeline activity status", () => {
 
     const view = render(<Timeline />);
     expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
-    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
+    expect(
+      view.container.querySelector(".turn-summary-current"),
+    ).toHaveTextContent("正在分析");
+    expect(view.container.querySelector(".turn-summary")).toHaveAttribute(
+      "aria-label",
+      "正在处理 0s，正在分析",
+    );
     expect(
       view.container.querySelector(".activity-summary > summary strong"),
     ).toHaveTextContent("正在分析");
@@ -424,10 +430,50 @@ describe("Timeline activity status", () => {
     expect(view.container.querySelector(".turn-summary")).not.toHaveTextContent(
       "已完成",
     );
-    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
+    expect(
+      view.container.querySelector(".turn-summary-current"),
+    ).toHaveTextContent("正在生成回复");
 
     act(() => vi.advanceTimersByTime(2_000));
     expect(screen.getByText("正在处理 2s")).toBeInTheDocument();
+  });
+
+  it("shows the live browser and web-search phase beside elapsed time", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T01:31:08.000Z"));
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-web-search",
+      timeline: [
+        {
+          id: "user-web-search",
+          role: "user",
+          kind: "message",
+          text: "帮我搜索今天天气",
+          timestamp: "2026-08-08T01:31:08.000Z",
+        },
+        {
+          id: "tool-web-search",
+          role: "tool",
+          kind: "tool",
+          title: "web_search",
+          meta: "search_query",
+          text: "",
+          pending: true,
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    const view = render(<Timeline />);
+    expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
+    expect(
+      view.container.querySelector(".turn-summary-current"),
+    ).toHaveTextContent("正在搜索网页");
+    expect(
+      view.container.querySelector(".activity-summary > summary strong"),
+    ).toHaveTextContent("正在搜索网页");
   });
 
   it("warns after three minutes without a live event and can keep waiting", () => {
