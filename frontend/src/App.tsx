@@ -947,6 +947,8 @@ function TaskMenu({
 
 function viewTitle(view: PrimaryView): string {
   switch (view) {
+    case "browser":
+      return "站点";
     case "pull-requests":
       return "拉取请求";
     case "scheduled":

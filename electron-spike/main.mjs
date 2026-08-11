@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 
+import { ElectronBrowserHost } from "./browser-host.mjs";
 import { RustBridge } from "./rust-bridge.mjs";
 import { ElectronShellAdapter } from "./shell-adapter.mjs";
 
@@ -25,6 +26,7 @@ const STARTUP_REQUEST_TIMEOUT_MS = 12_000;
 let appReadyMs = null;
 let rendererReadyMs = null;
 let mainWindow = null;
+let browserHost = null;
 let windowCrashCount = 0;
 
 const elapsedMs = () =>
@@ -72,12 +74,14 @@ function safeExternalUrl(value) {
 
 async function bootstrap() {
   appReadyMs = elapsedMs();
-  const dataRoot = path.join(
-    app.getPath("appData"),
-    app.isPackaged
-      ? "internal-agent-workbench"
-      : "internal-agent-workbench-dev",
-  );
+  const dataRoot =
+    process.env.ONPEOPLE_DATA_ROOT ||
+    path.join(
+      app.getPath("appData"),
+      app.isPackaged
+        ? "internal-agent-workbench"
+        : "internal-agent-workbench-dev",
+    );
   await mkdir(dataRoot, { recursive: true });
   const rustBridge = new RustBridge({
     binary: hostBinary,
@@ -111,6 +115,8 @@ async function bootstrap() {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        webSecurity: true,
+        webviewTag: true,
       },
     });
     window.webContents.setWindowOpenHandler(({ url }) => {
@@ -143,6 +149,13 @@ async function bootstrap() {
 
   const attachDesktopWindow = () => {
     mainWindow = createWindow();
+    browserHost?.close();
+    browserHost = new ElectronBrowserHost({
+      window: mainWindow,
+      emit,
+      preloadPath: path.join(moduleRoot, "browser-page-preload.cjs"),
+    });
+    browserHost.start();
     shellAdapter = new ElectronShellAdapter({
       window: mainWindow,
       requestRust: (request) => rustBridge.request(request),
@@ -177,6 +190,13 @@ async function bootstrap() {
   };
 
   ipcMain.handle("onpeople:metrics", () => metrics(rustBridge));
+  ipcMain.handle("onpeople:browser", async (_event, command, payload = {}) => {
+    if (!browserHost) throw new Error("浏览器服务尚未就绪");
+    return browserHost.handle(command, payload);
+  });
+  ipcMain.on("onpeople:browser-page-event", (event, payload) => {
+    browserHost?.pageEvent(event.sender.id, payload);
+  });
   ipcMain.handle("onpeople:invoke", async (_event, command, args = {}) => {
     if (command === "desktop_request") return desktopRequest(args.request);
     throw new Error(`Electron 只接受 Desktop API transport: ${command}`);
@@ -185,7 +205,10 @@ async function bootstrap() {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) attachDesktopWindow();
   });
-  app.on("before-quit", () => rustBridge.stop());
+  app.on("before-quit", () => {
+    browserHost?.close();
+    rustBridge.stop();
+  });
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
@@ -245,6 +268,7 @@ async function metrics(rustBridge) {
     rustTransport: rustBridge.transport,
     rustHostRestartCount: rustBridge.restartCount,
     windowCrashCount,
+    browser: browserHost?.state() ?? null,
     processes,
   };
 }

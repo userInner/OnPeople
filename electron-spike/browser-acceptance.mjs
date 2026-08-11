@@ -1,0 +1,291 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { _electron as electron } from "playwright";
+
+const moduleRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(moduleRoot, "..");
+const temporaryRoot = await mkdtemp(
+  path.join(os.tmpdir(), "onpeople-browser-acceptance-"),
+);
+const downloadRoot = path.join(temporaryRoot, "downloads");
+const uploadPath = path.join(temporaryRoot, "upload.txt");
+await mkdir(downloadRoot, { recursive: true });
+await writeFile(uploadPath, "OnPeople upload acceptance\n");
+
+const server = createServer((request, response) => {
+  if (request.url === "/download.txt") {
+    response.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="onpeople-download.txt"',
+    });
+    response.end("OnPeople download acceptance\n");
+    return;
+  }
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Set-Cookie": "onpeople_acceptance=ready; Path=/; SameSite=Lax",
+  });
+  response.end(`<!doctype html>
+    <html><head><title>OnPeople Browser Test</title></head>
+    <body>
+      <h1>OnPeople Browser Test</h1>
+      <a id="popup" target="_blank" href="/popup">Open popup</a>
+      <a id="download" href="/download.txt" download>Download fixture</a>
+      <input id="upload" type="file" />
+    </body></html>`);
+});
+server.listen(0, "127.0.0.1");
+await once(server, "listening");
+const address = server.address();
+assert(address && typeof address === "object");
+const fixtureUrl = `http://127.0.0.1:${address.port}/`;
+
+const electronApp = await electron.launch({
+  args: [path.join(moduleRoot, "main.mjs"), `--user-data-dir=${temporaryRoot}`],
+  cwd: repositoryRoot,
+  env: {
+    ...process.env,
+    ONPEOPLE_BROWSER_DOWNLOAD_DIR: downloadRoot,
+    ONPEOPLE_DATA_ROOT: path.join(temporaryRoot, "runtime-data"),
+  },
+  timeout: 30_000,
+});
+
+try {
+  const page = await electronApp.firstWindow();
+  await page.waitForFunction(async () => {
+    const metrics = await window.onpeopleElectron?.metrics();
+    return metrics?.rendererReadyMs !== null;
+  });
+  const idleMetrics = await page.evaluate(() =>
+    window.onpeopleElectron.metrics(),
+  );
+  await page.getByRole("button", { name: "站点", exact: true }).click();
+  try {
+    await page.getByLabel("地址和搜索").waitFor({ timeout: 5_000 });
+  } catch (error) {
+    process.stderr.write(
+      `${(await page.locator("body").innerText()).slice(0, 4_000)}\n`,
+    );
+    await page.screenshot({
+      path: path.join(os.tmpdir(), "onpeople-browser-acceptance-failure.png"),
+    });
+    throw error;
+  }
+  await navigate(page, fixtureUrl);
+
+  const initialMetrics = await page.evaluate(() =>
+    window.onpeopleElectron.metrics(),
+  );
+  const browserIncrementKb =
+    initialMetrics.totalWorkingSetKb - idleMetrics.totalWorkingSetKb;
+  assert(
+    browserIncrementKb < 250 * 1024,
+    `opening one browser tab added more than 250 MiB: ${Math.round(browserIncrementKb / 1024)} MiB`,
+  );
+  const active = await activeBrowser(page);
+  const session = await browserInvoke(page, "session-status", {
+    tabId: active.tabId,
+  });
+  assert(
+    session.cookies.some((cookie) => cookie.name === "onpeople_acceptance"),
+    "persistent session did not expose the fixture cookie",
+  );
+
+  const domSnapshot = await browserInvoke(page, "dom-snapshot", {
+    tabId: active.tabId,
+  });
+  assert.equal(domSnapshot.title, "OnPeople Browser Test");
+  assert(
+    domSnapshot.viewport.height > 0,
+    "guest viewport height must be non-zero",
+  );
+  assert(
+    domSnapshot.nodes.some((node) => node.name === "OnPeople Browser Test"),
+  );
+
+  const visualSnapshot = await browserInvoke(page, "visual-snapshot", {
+    tabId: active.tabId,
+  });
+  assert(visualSnapshot.width > 0 && visualSnapshot.height > 0);
+  assert(visualSnapshot.dataUrl.startsWith("data:image/png;base64,"));
+
+  await setUploadFile(electronApp, active.webContentsId, uploadPath);
+  const uploadName = await executeInGuest(
+    electronApp,
+    active.webContentsId,
+    `document.querySelector("#upload").files[0]?.name || ""`,
+  );
+  assert.equal(uploadName, path.basename(uploadPath));
+
+  await executeInGuest(
+    electronApp,
+    active.webContentsId,
+    `document.querySelector("#download").click()`,
+  );
+  const completedDownload = await waitForCompletedDownload(page);
+  assert.equal(
+    (await readFile(completedDownload.path, "utf8")).trim(),
+    "OnPeople download acceptance",
+  );
+
+  await executeInGuest(
+    electronApp,
+    active.webContentsId,
+    `document.querySelector("#popup").click()`,
+  );
+  await page.waitForFunction(async () => {
+    const value = await window.onpeopleBrowser.invoke("state");
+    return value.attachedTabs.length >= 2;
+  });
+  await page
+    .getByRole("tab", { name: /OnPeople Browser Test/ })
+    .first()
+    .click();
+
+  for (let index = 0; index < 30; index += 1) {
+    await page.getByRole("button", { name: "新建标签页" }).click();
+    await navigate(page, `${fixtureUrl}?cycle=${index}`);
+    const selected = page.getByRole("tab", { selected: true });
+    await selected.getByRole("button", { name: /关闭/ }).click();
+  }
+
+  const cycleState = await browserInvoke(page, "state");
+  assert(
+    cycleState.attachedTabs.length <= 3,
+    `resident tab budget exceeded: ${cycleState.attachedTabs.length}`,
+  );
+  assert.equal(cycleState.crashCount, 0, "browser crashed during 30 cycles");
+
+  const originalAfterCycles = await activeBrowser(page);
+  await electronApp.evaluate(({ webContents }, webContentsId) => {
+    webContents.fromId(webContentsId)?.forcefullyCrashRenderer();
+  }, originalAfterCycles.webContentsId);
+  await page.getByText("页面没有正常响应").waitFor();
+  await page.getByRole("button", { name: "重新加载页面" }).click();
+  await page.getByRole("tab", { name: /OnPeople Browser Test/ }).waitFor();
+
+  const finalMetrics = await page.evaluate(() =>
+    window.onpeopleElectron.metrics(),
+  );
+  const finalBrowserState = await browserInvoke(page, "state");
+  assert.equal(finalMetrics.rustHostRestartCount, 0);
+  assert.equal(finalMetrics.windowCrashCount, 0);
+  assert.equal(finalBrowserState.crashCount, 1);
+  assert.equal(finalBrowserState.recoveryCount, 1);
+
+  const memoryGrowthKb =
+    finalMetrics.totalWorkingSetKb - initialMetrics.totalWorkingSetKb;
+  assert(
+    memoryGrowthKb < 200 * 1024,
+    `30-cycle memory growth exceeded 200 MiB: ${Math.round(memoryGrowthKb / 1024)} MiB`,
+  );
+
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        fixtureUrl,
+        cycles: 30,
+        upload: uploadName,
+        download: completedDownload.path,
+        idleWorkingSetKb: idleMetrics.totalWorkingSetKb,
+        initialWorkingSetKb: initialMetrics.totalWorkingSetKb,
+        browserIncrementKb,
+        finalWorkingSetKb: finalMetrics.totalWorkingSetKb,
+        memoryGrowthKb,
+        browser: finalBrowserState,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+} finally {
+  await electronApp.close();
+  server.close();
+  await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+async function navigate(page, url) {
+  const addressInput = page.getByLabel("地址和搜索");
+  await addressInput.fill(url);
+  await addressInput.evaluate((input) => input.form?.requestSubmit());
+  try {
+    await page
+      .getByRole("tab", { selected: true })
+      .filter({ hasText: "OnPeople Browser Test" })
+      .waitFor({ timeout: 5_000 });
+  } catch (error) {
+    process.stderr.write(
+      `${JSON.stringify(await browserInvoke(page, "state"))}\n`,
+    );
+    process.stderr.write(
+      `${(await page.locator("body").innerText()).slice(0, 4_000)}\n`,
+    );
+    throw error;
+  }
+}
+
+async function browserInvoke(page, command, payload = {}) {
+  return page.evaluate(
+    ({ command: method, payload: params }) =>
+      window.onpeopleBrowser.invoke(method, params),
+    { command, payload },
+  );
+}
+
+async function waitForCompletedDownload(page) {
+  const deadline = Date.now() + 15_000;
+  let latest = [];
+  while (Date.now() < deadline) {
+    latest = await browserInvoke(page, "downloads");
+    const completed = latest.find((item) => item.state === "completed");
+    if (completed) return completed;
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`download did not complete: ${JSON.stringify(latest)}`);
+}
+
+async function activeBrowser(page) {
+  const state = await browserInvoke(page, "state");
+  const activePage = state.attachedPages.find(
+    (item) => item.tabId === state.activeTabId,
+  );
+  assert(activePage, "no active browser guest");
+  return activePage;
+}
+
+async function executeInGuest(appHandle, webContentsId, expression) {
+  return appHandle.evaluate(
+    ({ webContents }, input) =>
+      webContents
+        .fromId(input.webContentsId)
+        ?.executeJavaScript(input.expression),
+    { webContentsId, expression },
+  );
+}
+
+async function setUploadFile(appHandle, webContentsId, filePath) {
+  await appHandle.evaluate(
+    async ({ webContents }, input) => {
+      const guest = webContents.fromId(input.webContentsId);
+      if (!guest) throw new Error("browser guest not found");
+      if (!guest.debugger.isAttached()) guest.debugger.attach("1.3");
+      const document = await guest.debugger.sendCommand("DOM.getDocument");
+      const inputNode = await guest.debugger.sendCommand("DOM.querySelector", {
+        nodeId: document.root.nodeId,
+        selector: "#upload",
+      });
+      await guest.debugger.sendCommand("DOM.setFileInputFiles", {
+        nodeId: inputNode.nodeId,
+        files: [input.filePath],
+      });
+    },
+    { webContentsId, filePath },
+  );
+}

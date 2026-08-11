@@ -12,3 +12,14 @@ contextBridge.exposeInMainWorld("onpeopleElectron", {
   },
   metrics: () => ipcRenderer.invoke("onpeople:metrics"),
 });
+
+contextBridge.exposeInMainWorld("onpeopleBrowser", {
+  invoke: (command, payload = {}) =>
+    ipcRenderer.invoke("onpeople:browser", command, payload),
+  onEvent: (handler) => {
+    const channel = "onpeople:event:browser:event";
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on(channel, listener);
+    return () => ipcRenderer.removeListener(channel, listener);
+  },
+});

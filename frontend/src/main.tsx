@@ -17,6 +17,15 @@ declare global {
       on: (event: string, handler: (payload: unknown) => void) => () => void;
       metrics: () => Promise<Record<string, unknown>>;
     };
+    onpeopleBrowser?: {
+      invoke: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      onEvent: (
+        handler: (payload: import("./browser/types").BrowserHostEvent) => void,
+      ) => () => void;
+    };
     __ONPEOPLE_DEV__?: {
       setWorkbenchState: typeof useWorkbenchStore.setState;
       invoke?: (

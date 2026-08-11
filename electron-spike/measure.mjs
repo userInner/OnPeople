@@ -36,6 +36,7 @@ const child = execFile(
     cwd: repositoryRoot,
     env: {
       ...process.env,
+      ONPEOPLE_DATA_ROOT: path.join(temporaryRoot, "runtime-data"),
       ONPEOPLE_ELECTRON_METRICS_FILE: metricsPath,
       ONPEOPLE_ELECTRON_AUTO_QUIT_MS: "5000",
     },

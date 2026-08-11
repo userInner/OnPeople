@@ -5,6 +5,7 @@ import {
   CirclePlay,
   Clock3,
   GitPullRequest,
+  Globe2,
   Pencil,
   Plus,
   Puzzle,
@@ -25,6 +26,7 @@ import type {
 import { SettingsActionPanel } from "./SettingsActionPanels";
 import { GitPane } from "./tools/GitPane";
 import { CustomSelect } from "./ui/CustomSelect";
+import { BrowserWorkspace } from "./browser/BrowserWorkspace";
 
 type WorkspaceView = Exclude<PrimaryView, "tasks">;
 
@@ -35,6 +37,9 @@ export function PrimaryViewPage({
   view: WorkspaceView;
   onBack: () => void;
 }) {
+  if (view === "browser") {
+    return <BrowserWorkspace onBack={onBack} />;
+  }
   const config = {
     "pull-requests": {
       icon: GitPullRequest,
@@ -50,6 +55,11 @@ export function PrimaryViewPage({
       icon: Puzzle,
       title: "插件",
       description: "管理项目 Skills、插件与 MCP 服务。",
+    },
+    browser: {
+      icon: Globe2,
+      title: "站点",
+      description: "打开、操作并验证 Web 项目。",
     },
   }[view];
   const Icon = config.icon;
