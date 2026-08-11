@@ -565,7 +565,9 @@ export const desktopClient = {
   redeemCloudCode: (code: string) =>
     call<Record<string, unknown>>("redeem_cloud_code", { request: { code } }),
   openCloudConsole: () =>
-    call<Record<string, unknown>>("open_cloud_console", { request: {} }),
+    desktopApi.request("shell.cloud-console.open", {}) as Promise<
+      Record<string, unknown>
+    >,
   openExternalUrl: (url: string) =>
     desktopApi.request("shell.external-url.open", { url }) as Promise<
       Record<string, unknown>

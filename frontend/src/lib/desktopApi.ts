@@ -319,6 +319,10 @@ export interface DesktopMethodMap {
     params: Record<string, never>;
     result: ShellMicrophoneAccess;
   };
+  "shell.cloud-console.open": {
+    params: Record<string, never>;
+    result: ShellOpenedUrl;
+  };
   "shell.external-url.open": {
     params: ShellExternalUrlRequest;
     result: ShellOpenedUrl;

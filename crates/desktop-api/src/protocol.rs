@@ -147,6 +147,8 @@ pub enum DesktopMethod {
     ShellOpenTaskWindow,
     #[serde(rename = "shell.microphone.request")]
     ShellRequestMicrophoneAccess,
+    #[serde(rename = "shell.cloud-console.open")]
+    ShellOpenCloudConsole,
     #[serde(rename = "shell.external-url.open")]
     ShellOpenExternalUrl,
     #[serde(rename = "shell.editor.open")]
@@ -184,7 +186,7 @@ pub enum DesktopMethod {
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 85] = [
+    pub const ALL: [Self; 86] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -253,6 +255,7 @@ impl DesktopMethod {
         Self::ShellFrontendReady,
         Self::ShellOpenTaskWindow,
         Self::ShellRequestMicrophoneAccess,
+        Self::ShellOpenCloudConsole,
         Self::ShellOpenExternalUrl,
         Self::ShellOpenEditor,
         Self::ShellOpenLocalArtifact,
@@ -288,6 +291,7 @@ impl DesktopMethod {
                 | Self::ShellFrontendReady
                 | Self::ShellOpenTaskWindow
                 | Self::ShellRequestMicrophoneAccess
+                | Self::ShellOpenCloudConsole
                 | Self::ShellOpenExternalUrl
                 | Self::ShellOpenEditor
                 | Self::ShellOpenLocalArtifact
@@ -327,6 +331,7 @@ pub enum ShellHostOperation {
     FrontendReady,
     OpenTaskWindow,
     RequestMicrophoneAccess,
+    OpenCloudConsole,
     OpenExternalUrl,
     OpenEditor,
     OpenLocalArtifact,
@@ -1462,6 +1467,11 @@ mod tests {
             serde_json::to_string(&DesktopMethod::ShellAppUpdateDownload)
                 .expect("serialize update method"),
             r#""shell.app-update.download""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenCloudConsole)
+                .expect("serialize cloud console method"),
+            r#""shell.cloud-console.open""#
         );
     }
 

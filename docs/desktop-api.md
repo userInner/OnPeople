@@ -145,7 +145,7 @@ receive `UNSUPPORTED` when no native host is attached.
 - lifecycle/window: `shell.deep-links.activate`, `shell.frontend.ready`,
   `shell.task-window.open`, `shell.scheduler.open`;
 - permissions/navigation: `shell.microphone.request`,
-  `shell.external-url.open`, `shell.editor.open`,
+  `shell.cloud-console.open`, `shell.external-url.open`, `shell.editor.open`,
   `shell.local-artifact.open`;
 - native files: `shell.generated-image.reveal`,
   `shell.generated-image.copy`, `shell.images.pick`,

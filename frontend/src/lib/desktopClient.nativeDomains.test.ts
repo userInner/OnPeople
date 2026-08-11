@@ -91,10 +91,12 @@ describe("desktopClient native domain compatibility", () => {
     };
 
     const opened = await desktopClient.openExternalUrl("https://example.com");
+    const cloudConsole = await desktopClient.openCloudConsole();
     const picked = await desktopClient.pickImages();
     const update = await desktopClient.getAppUpdateState();
 
     expect(opened).toEqual({ opened: true, url: "https://example.com" });
+    expect(cloudConsole).toEqual({ opened: true, url: "https://example.com" });
     expect(picked).toEqual({ selected: ["/tmp/image.png"] });
     expect(update.currentVersion).toBe("0.30.0");
     expect(
@@ -103,6 +105,7 @@ describe("desktopClient native domain compatibility", () => {
       ),
     ).toEqual([
       "shell.external-url.open",
+      "shell.cloud-console.open",
       "shell.images.pick",
       "shell.app-update.state",
     ]);

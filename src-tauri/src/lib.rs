@@ -4014,6 +4014,11 @@ impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
                     Ok(Value::Null)
                 }
                 ShellHostOperation::RequestMicrophoneAccess => request_microphone_access().await,
+                ShellHostOperation::OpenCloudConsole => {
+                    self.state
+                        .dispatch_command(self.app, "open_cloud_console", params)
+                        .await
+                }
                 ShellHostOperation::OpenExternalUrl => {
                     self.state
                         .dispatch_command(self.app, "open_external_url", params)

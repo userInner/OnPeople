@@ -604,6 +604,15 @@ impl DesktopDispatcher {
                 )
                 .await
             }
+            DesktopMethod::ShellOpenCloudConsole => {
+                parse_empty(params)?;
+                call_shell_host::<ShellOpenedUrl>(
+                    host,
+                    ShellHostOperation::OpenCloudConsole,
+                    json!({}),
+                )
+                .await
+            }
             DesktopMethod::ShellOpenExternalUrl => {
                 let request: ShellExternalUrlRequest = parse_params(params)?;
                 call_shell_host::<ShellOpenedUrl>(
@@ -1026,6 +1035,25 @@ mod tests {
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].0, ShellHostOperation::OpenExternalUrl);
             assert_eq!(calls[0].1, json!({ "url": "https://example.com" }));
+        }
+
+        let cloud_console = dispatcher
+            .dispatch_with_host(
+                DesktopRequest {
+                    protocol_version: DESKTOP_PROTOCOL_VERSION,
+                    request_id: "shell-cloud-console-1".to_owned(),
+                    method: DesktopMethod::ShellOpenCloudConsole,
+                    params: json!({}),
+                },
+                &host,
+            )
+            .await;
+        assert!(cloud_console.ok, "unexpected response: {cloud_console:?}");
+        {
+            let calls = host.shell_calls.lock().expect("fake shell calls");
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[1].0, ShellHostOperation::OpenCloudConsole);
+            assert_eq!(calls[1].1, json!({}));
         }
         runtime.stop().await;
     }
