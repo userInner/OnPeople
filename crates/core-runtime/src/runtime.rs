@@ -506,7 +506,7 @@ impl CoreRuntime {
     pub fn new(storage: Storage, runtime_root: PathBuf) -> Result<Self, AppError> {
         let runtime_paths = RuntimePaths::new(runtime_root);
         let binary = runtime_paths
-            .codex()
+            .codex_startup_path()
             .map(|component| component.path)
             .unwrap_or_else(|_| PathBuf::from(if cfg!(windows) { "codex.exe" } else { "codex" }));
         let app_server = AppServerClient::new(binary);
@@ -1414,6 +1414,11 @@ impl CoreRuntime {
     }
 
     async fn start_once(&self) -> Result<(), AppError> {
+        // Verify the signed sidecar at the point where it is actually about
+        // to execute. Keeping this out of `CoreRuntime::new` makes the
+        // desktop host responsive immediately instead of hashing the large
+        // Codex bundle before it can answer its first request.
+        self.runtime_paths.codex()?;
         let cwd = self.default_cwd();
         let mut provider = self.effective_onpeople_provider()?;
         let mut api_key = onpeople_credential(&self.storage)?;

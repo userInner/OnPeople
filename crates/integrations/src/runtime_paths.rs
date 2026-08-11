@@ -37,6 +37,21 @@ impl RuntimePaths {
         )
     }
 
+    /// Resolves the bundled Codex path without reading the executable.
+    ///
+    /// Desktop hosts use this only to construct their lightweight startup
+    /// state. The full manifest/hash verification is performed immediately
+    /// before the App Server is spawned by `CoreRuntime::start_once`, so a
+    /// cold desktop connection does not block on hashing the 258 MiB sidecar.
+    /// All other public component accessors retain eager verification.
+    pub fn codex_startup_path(&self) -> Result<RuntimeComponent, AppError> {
+        self.resolve_unverified(
+            "codex",
+            "CODEX_BIN",
+            if cfg!(windows) { "codex.exe" } else { "codex" },
+        )
+    }
+
     pub fn cua_driver(&self) -> Result<RuntimeComponent, AppError> {
         self.resolve(
             "cua-driver",
@@ -250,6 +265,46 @@ impl RuntimePaths {
                 )
             })?;
         self.verify_manifest_component(name, &path)?;
+        Ok(RuntimeComponent {
+            name,
+            path,
+            bundled: true,
+        })
+    }
+
+    fn resolve_unverified(
+        &self,
+        name: &'static str,
+        override_name: &str,
+        executable: &str,
+    ) -> Result<RuntimeComponent, AppError> {
+        if let Some(path) = std::env::var_os(override_name).map(PathBuf::from) {
+            if executable_file(&path) {
+                return Ok(RuntimeComponent {
+                    name,
+                    path,
+                    bundled: false,
+                });
+            }
+            return Err(AppError::new(
+                ErrorCode::RuntimeUnavailable,
+                format!("{name} 覆盖路径不可执行"),
+            )
+            .context("path", path.to_string_lossy()));
+        }
+        let candidates = [
+            self.root.join("bin").join(executable),
+            self.root.join(executable),
+        ];
+        let path = candidates
+            .into_iter()
+            .find(|path| executable_file(path))
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::RuntimeUnavailable,
+                    format!("未找到已签名的 {name} 运行时"),
+                )
+            })?;
         Ok(RuntimeComponent {
             name,
             path,
