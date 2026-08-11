@@ -1092,6 +1092,13 @@ impl CoreRuntime {
         self.events.subscribe()
     }
 
+    #[must_use]
+    pub fn event_cursor(&self) -> u64 {
+        self.event_sequence
+            .load(Ordering::Acquire)
+            .saturating_sub(1)
+    }
+
     pub async fn start(&self) -> Result<(), AppError> {
         let first_attempt = self.start_once().await;
         let result = match first_attempt {

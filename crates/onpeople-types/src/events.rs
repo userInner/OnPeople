@@ -27,6 +27,7 @@ pub enum EventKind {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct EventEnvelope {
+    #[ts(type = "number")]
     pub sequence: u64,
     pub kind: EventKind,
     pub emitted_at: DateTime<Utc>,
@@ -51,6 +52,7 @@ pub enum StreamKind {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct StreamEnvelope {
+    #[ts(type = "number")]
     pub sequence: u64,
     pub kind: StreamKind,
     pub stream_id: String,

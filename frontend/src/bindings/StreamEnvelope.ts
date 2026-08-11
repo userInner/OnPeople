@@ -2,4 +2,4 @@
 import type { StreamKind } from "./StreamKind";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type StreamEnvelope = { sequence: bigint, kind: StreamKind, streamId: string, payload: JsonValue, terminal: boolean, };
+export type StreamEnvelope = { sequence: number, kind: StreamKind, streamId: string, payload: JsonValue, terminal: boolean, };

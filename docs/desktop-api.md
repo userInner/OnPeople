@@ -36,6 +36,9 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `preferences.save`
 - `thread.list`
 - `scheduler.get`
+- `task.start`
+- `task.cancel`
+- `task.snapshot`
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
@@ -46,3 +49,8 @@ Tauri publishes `desktop:event` using `DesktopEvent`. The adapter preserves the
 sequence allocated by `CoreRuntime`; it must never allocate a second sequence
 for agent or runtime events. Legacy event names remain available while React
 consumers move to `DesktopApiClient.subscribe`.
+
+`task.start` returns a task handle immediately after Codex accepts the turn.
+`task.cancel` reports `cancelling`; the ordered terminal event remains the
+authority for completion. `task.snapshot` exposes the current task state and
+event cursor without requiring React to infer state from loading indicators.

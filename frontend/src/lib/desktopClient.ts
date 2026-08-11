@@ -30,6 +30,7 @@ import type {
   RuntimeDiagnostics,
   SchedulerSnapshot,
   StreamEnvelope,
+  TaskStartRequest,
   TerminalExit,
   TerminalSession,
 } from "../types";
@@ -140,6 +141,20 @@ export interface AppMenuAction {
     | "task-manager";
 }
 
+export interface StartTaskInput {
+  threadId?: string | null;
+  text: string;
+  cwd?: string | null;
+  workspaceMode?: string | null;
+  images?: string[];
+  attachments?: string[];
+  capability?: string | null;
+  mode?: string | null;
+  industryPlugin?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
+
 function normalizeError(error: unknown): AppError {
   if (typeof error === "object" && error !== null && "message" in error) {
     const value = error as Partial<AppError>;
@@ -219,6 +234,22 @@ function legacyEventEnvelope(event: DesktopEvent): EventEnvelope {
   };
 }
 
+function taskStartRequest(request: StartTaskInput): TaskStartRequest {
+  return {
+    threadId: request.threadId ?? null,
+    text: request.text,
+    cwd: request.cwd ?? null,
+    workspaceMode: request.workspaceMode ?? null,
+    images: request.images ?? [],
+    attachments: request.attachments ?? [],
+    capability: request.capability ?? null,
+    mode: request.mode ?? null,
+    industryPlugin: request.industryPlugin ?? null,
+    model: request.model ?? null,
+    reasoningEffort: request.reasoningEffort ?? null,
+  };
+}
+
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
   activateDeepLinks: () => call<string[]>("activate_deep_links"),
@@ -255,34 +286,19 @@ export const desktopClient = {
   getRuntimeDiagnostics: () => desktopApi.request("runtime.diagnostics", {}),
   startRuntime: () => desktopApi.request("runtime.start", {}),
   stopRuntime: () => desktopApi.request("runtime.stop", {}),
-  sendPrompt: (request: {
-    threadId?: string | null;
-    text: string;
-    cwd?: string | null;
-    workspaceMode?: string | null;
-    images?: string[];
-    attachments?: string[];
-    capability?: string | null;
-    mode?: string | null;
-    industryPlugin?: string | null;
-    model?: string | null;
-    reasoningEffort?: string | null;
-  }) =>
-    call<PromptSubmission>("send_prompt", {
-      request: {
-        threadId: request.threadId ?? null,
-        text: request.text,
-        ...(request.cwd ? { cwd: request.cwd } : {}),
-        workspaceMode: request.workspaceMode ?? null,
-        images: request.images ?? [],
-        attachments: request.attachments ?? [],
-        capability: request.capability ?? null,
-        mode: request.mode ?? null,
-        industryPlugin: request.industryPlugin ?? null,
-        model: request.model ?? null,
-        reasoningEffort: request.reasoningEffort ?? null,
-      },
-    }),
+  startTask: (request: StartTaskInput) =>
+    desktopApi.request("task.start", taskStartRequest(request)),
+  sendPrompt: async (request: StartTaskInput): Promise<PromptSubmission> => {
+    const task = await desktopApi.request(
+      "task.start",
+      taskStartRequest(request),
+    );
+    return {
+      threadId: task.threadId,
+      turnId: task.taskId,
+      queued: task.state === "queued",
+    };
+  },
   setGoal: (request: {
     objective: string;
     tokenBudget?: number | null;
@@ -789,10 +805,26 @@ export const desktopClient = {
     call<SchedulerSnapshot>("mark_scheduled_notifications_read", {
       request: { runId: runId ?? null },
     }),
-  interrupt: (threadId: string, turnId?: string | null) =>
-    call<Record<string, unknown>>("interrupt", {
-      request: { threadId, turnId: turnId ?? null },
+  cancelTask: (threadId: string, taskId?: string | null) =>
+    desktopApi.request("task.cancel", {
+      threadId,
+      taskId: taskId ?? null,
     }),
+  taskSnapshot: (threadId: string, taskId?: string | null) =>
+    desktopApi.request("task.snapshot", {
+      threadId,
+      taskId: taskId ?? null,
+    }),
+  interrupt: async (
+    threadId: string,
+    turnId?: string | null,
+  ): Promise<Record<string, unknown>> => {
+    const task = await desktopApi.request("task.cancel", {
+      threadId,
+      taskId: turnId ?? null,
+    });
+    return { interrupted: true, task };
+  },
   resolveApproval: (requestId: string, decision: string) =>
     call<Record<string, unknown>>("resolve_approval", {
       request: { requestId, decision },

@@ -11,6 +11,12 @@ import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
+import type { TaskCancelRequest } from "../bindings/TaskCancelRequest";
+import type { TaskCancellation } from "../bindings/TaskCancellation";
+import type { TaskHandle } from "../bindings/TaskHandle";
+import type { TaskSnapshot } from "../bindings/TaskSnapshot";
+import type { TaskSnapshotRequest } from "../bindings/TaskSnapshotRequest";
+import type { TaskStartRequest } from "../bindings/TaskStartRequest";
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
@@ -54,6 +60,18 @@ export interface DesktopMethodMap {
   "scheduler.get": {
     params: Record<string, never>;
     result: SchedulerSnapshot;
+  };
+  "task.start": {
+    params: TaskStartRequest;
+    result: TaskHandle;
+  };
+  "task.cancel": {
+    params: TaskCancelRequest;
+    result: TaskCancellation;
+  };
+  "task.snapshot": {
+    params: TaskSnapshotRequest;
+    result: TaskSnapshot;
   };
 }
 

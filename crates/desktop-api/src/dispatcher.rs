@@ -3,11 +3,12 @@ use std::sync::Arc;
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_types::{AppError, ErrorCode, PreferencePatchRequest, ThreadFilters};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopMethod, DesktopRequest, DesktopResponse,
-    RuntimeSnapshotRequest,
+    RuntimeSnapshotRequest, TaskCancelRequest, TaskCancellation, TaskHandle, TaskSnapshot,
+    TaskSnapshotRequest, TaskStartRequest, TaskState,
 };
 
 #[derive(Clone)]
@@ -75,7 +76,106 @@ impl DesktopDispatcher {
                 to_value(self.runtime.list_threads(filters).await?)
             }
             DesktopMethod::SchedulerGet => to_value(self.runtime.scheduler_snapshot()),
+            DesktopMethod::TaskStart => {
+                let request: TaskStartRequest = parse_params(params)?;
+                let submission = self
+                    .runtime
+                    .send_prompt(onpeople_types::SendPromptRequest {
+                        thread_id: request.thread_id,
+                        text: request.text,
+                        cwd: request.cwd,
+                        workspace_mode: request.workspace_mode,
+                        images: request.images,
+                        attachments: request.attachments,
+                        capability: request.capability,
+                        mode: request.mode,
+                        industry_plugin: request.industry_plugin,
+                        model: request.model,
+                        reasoning_effort: request.reasoning_effort,
+                    })
+                    .await?;
+                to_value(TaskHandle {
+                    task_id: submission.turn_id,
+                    thread_id: submission.thread_id,
+                    state: if submission.queued {
+                        TaskState::Queued
+                    } else {
+                        TaskState::Running
+                    },
+                    accepted_at: chrono::Utc::now(),
+                    last_sequence: self.runtime.event_cursor(),
+                })
+            }
+            DesktopMethod::TaskCancel => {
+                let request: TaskCancelRequest = parse_params(params)?;
+                if request.thread_id.trim().is_empty() {
+                    return Err(AppError::invalid("缺少 threadId"));
+                }
+                let active = self.runtime.runtime_snapshot(None);
+                let task_id = request.task_id.or_else(|| {
+                    (active.thread_id.as_deref() == Some(request.thread_id.as_str()))
+                        .then_some(active.turn_id)
+                        .flatten()
+                });
+                let task_id = task_id.ok_or_else(|| AppError::invalid("没有可中断的任务"))?;
+                self.runtime
+                    .interrupt(&json!({
+                        "threadId": request.thread_id,
+                        "turnId": task_id,
+                    }))
+                    .await?;
+                to_value(TaskCancellation {
+                    task_id,
+                    thread_id: request.thread_id,
+                    state: TaskState::Cancelling,
+                    last_sequence: self.runtime.event_cursor(),
+                })
+            }
+            DesktopMethod::TaskSnapshot => {
+                let request: TaskSnapshotRequest = parse_params(params)?;
+                if request.thread_id.trim().is_empty() {
+                    return Err(AppError::invalid("缺少 threadId"));
+                }
+                let runtime = self.runtime.runtime_snapshot(None);
+                let is_active_thread =
+                    runtime.thread_id.as_deref() == Some(request.thread_id.as_str());
+                let task_id = if is_active_thread {
+                    runtime.turn_id.clone()
+                } else {
+                    None
+                };
+                let state = if !is_active_thread || task_id.is_none() {
+                    TaskState::Ready
+                } else if let Some(expected) = request.task_id.as_deref() {
+                    if task_id.as_deref() == Some(expected) {
+                        task_state(&runtime.state)
+                    } else {
+                        TaskState::Unknown
+                    }
+                } else {
+                    task_state(&runtime.state)
+                };
+                to_value(TaskSnapshot {
+                    task_id,
+                    thread_id: request.thread_id,
+                    state,
+                    queued_messages: runtime.queued_messages,
+                    pending_approvals: runtime.pending_approvals,
+                    last_sequence: self.runtime.event_cursor(),
+                })
+            }
         }
+    }
+}
+
+fn task_state(runtime_state: &str) -> TaskState {
+    match runtime_state {
+        "working" => TaskState::Running,
+        "queued" => TaskState::Queued,
+        "waiting-approval" | "waiting-input" | "recovering" => TaskState::Waiting,
+        "unavailable" => TaskState::Failed,
+        "ready" | "stopped" => TaskState::Ready,
+        _ => TaskState::Unknown,
     }
 }
 
@@ -133,5 +233,45 @@ mod tests {
             Some("system")
         );
         runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn task_snapshot_is_ready_for_an_inactive_thread() {
+        let temporary = tempfile::tempdir().expect("temporary data root");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let response = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "task-snapshot-1".to_owned(),
+                method: DesktopMethod::TaskSnapshot,
+                params: json!({ "threadId": "thread-1", "taskId": null }),
+            })
+            .await;
+
+        assert!(response.ok, "unexpected response: {response:?}");
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("state"))
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        runtime.stop().await;
+    }
+
+    #[test]
+    fn maps_runtime_states_to_stable_task_states() {
+        assert_eq!(task_state("working"), TaskState::Running);
+        assert_eq!(task_state("waiting-approval"), TaskState::Waiting);
+        assert_eq!(task_state("queued"), TaskState::Queued);
+        assert_eq!(task_state("unexpected"), TaskState::Unknown);
     }
 }

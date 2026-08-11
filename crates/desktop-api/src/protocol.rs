@@ -31,10 +31,16 @@ pub enum DesktopMethod {
     ThreadList,
     #[serde(rename = "scheduler.get")]
     SchedulerGet,
+    #[serde(rename = "task.start")]
+    TaskStart,
+    #[serde(rename = "task.cancel")]
+    TaskCancel,
+    #[serde(rename = "task.snapshot")]
+    TaskSnapshot,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 13] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -45,6 +51,9 @@ impl DesktopMethod {
         Self::PreferencesSave,
         Self::ThreadList,
         Self::SchedulerGet,
+        Self::TaskStart,
+        Self::TaskCancel,
+        Self::TaskSnapshot,
     ];
 }
 
@@ -101,6 +110,7 @@ impl DesktopResponse {
 #[ts(export)]
 pub struct DesktopEvent {
     pub protocol_version: u16,
+    #[ts(type = "number")]
     pub sequence: u64,
     pub topic: String,
     pub emitted_at: DateTime<Utc>,
@@ -178,6 +188,102 @@ pub struct RuntimeSnapshotRequest {
     pub thread_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TaskStartRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub workspace_mode: Option<String>,
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub industry_plugin: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TaskCancelRequest {
+    pub thread_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TaskSnapshotRequest {
+    pub thread_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export)]
+pub enum TaskState {
+    Ready,
+    Running,
+    Waiting,
+    Queued,
+    Cancelling,
+    Cancelled,
+    Failed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TaskHandle {
+    pub task_id: String,
+    pub thread_id: String,
+    pub state: TaskState,
+    pub accepted_at: DateTime<Utc>,
+    #[ts(type = "number")]
+    pub last_sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TaskSnapshot {
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub thread_id: String,
+    pub state: TaskState,
+    pub queued_messages: u32,
+    pub pending_approvals: u32,
+    #[ts(type = "number")]
+    pub last_sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TaskCancellation {
+    pub task_id: String,
+    pub thread_id: String,
+    pub state: TaskState,
+    #[ts(type = "number")]
+    pub last_sequence: u64,
+}
+
 pub fn export_types(output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let config = Config::default().with_out_dir(output);
@@ -193,6 +299,13 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         DesktopEvent,
         DesktopCapabilities,
         RuntimeSnapshotRequest,
+        TaskStartRequest,
+        TaskCancelRequest,
+        TaskSnapshotRequest,
+        TaskState,
+        TaskHandle,
+        TaskSnapshot,
+        TaskCancellation,
     );
     Ok(())
 }

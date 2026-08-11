@@ -88,4 +88,37 @@ describe("DesktopApiClient", () => {
     unsubscribe();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it("uses the task domain instead of a shell-specific prompt command", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {
+        taskId: "turn-1",
+        threadId: "thread-1",
+        state: "running",
+        acceptedAt: "2026-08-11T00:00:00Z",
+        lastSequence: 4,
+      },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-5");
+
+    const task = await client.request("task.start", {
+      threadId: null,
+      text: "hello",
+      cwd: null,
+      workspaceMode: "isolated",
+      images: [],
+      attachments: [],
+      capability: null,
+      mode: null,
+      industryPlugin: null,
+      model: null,
+      reasoningEffort: null,
+    });
+
+    expect(task.taskId).toBe("turn-1");
+    expect(transport.mock.calls[0]?.[0].method).toBe("task.start");
+  });
 });
