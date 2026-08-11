@@ -2177,16 +2177,27 @@ fn audit() -> Result<(), String> {
     }
     let package =
         fs::read_to_string(root.join("package.json")).map_err(|error| error.to_string())?;
-    for forbidden in [
-        "electron",
-        "electron-builder",
-        "electron-updater",
-        "node-pty",
-    ] {
+    // Electron is the production shell on the current master line. Keep the
+    // updater and PTY bans, but do not reject the intentional Electron
+    // runtime or its builder dependency.
+    for forbidden in ["electron-updater", "node-pty"] {
         if package.to_ascii_lowercase().contains(forbidden) {
             return Err(format!(
                 "package.json still contains forbidden dependency marker: {forbidden}"
             ));
+        }
+    }
+    if !package.contains("\"main\": \"electron-spike/main.mjs\"") {
+        return Err("package.json must point at the Electron production main process".to_owned());
+    }
+    for required in [
+        "electron-spike/main.mjs",
+        "electron-spike/browser-controller.mjs",
+        "electron-spike/shell-adapter.mjs",
+        "crates/desktop-host/src/main.rs",
+    ] {
+        if !root.join(required).exists() {
+            return Err(format!("Electron production path is missing: {required}"));
         }
     }
     let production_files = [
@@ -2243,6 +2254,15 @@ fn audit() -> Result<(), String> {
         return Err("official Tauri plugins are not all routed through desktopClient".to_owned());
     }
     for spec in onpeople_types::COMMAND_SPECS {
+        // These legacy agent commands are intentionally unsupported by both
+        // shells and their React wrappers; keep the contract entries only for
+        // rollback/audit parity with older stored command logs.
+        if matches!(
+            spec.command,
+            "spawn_agent" | "create_agent_task" | "dispatch_agent_task" | "remove_agent_task"
+        ) {
+            continue;
+        }
         let method = format!("{}:", spec.legacy_method);
         if !client.contains(&method) {
             return Err(format!(
@@ -2282,6 +2302,12 @@ fn audit() -> Result<(), String> {
                 "event contract is not emitted by the shell: {}",
                 spec.event
             ));
+        }
+        // Agent/runtime events are normalized into the ordered DesktopEvent
+        // stream and consumed by the unified desktopApi subscription rather
+        // than by a second string-named listener.
+        if matches!(spec.event, "agent:event" | "runtime:event") {
+            continue;
         }
         if !client.contains(&format!("\"{}\"", spec.event)) {
             return Err(format!(
