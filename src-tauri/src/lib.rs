@@ -18,16 +18,19 @@ use onpeople_browser_host::{
     BrowserCommand, BrowserHostEvent, BrowserHostState, BrowserIpcClient, IpcConfig,
 };
 use onpeople_core_runtime::CoreRuntime;
-use onpeople_desktop_api::{DesktopDispatcher, DesktopEvent, DesktopRequest, DesktopResponse};
+use onpeople_desktop_api::{
+    DesktopDispatcher, DesktopEvent, DesktopRecoveryRequired, DesktopRequest, DesktopResponse,
+    should_forward_desktop_event,
+};
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
     AgentStatus, AppError, AppUpdateState, BrowserAnnotation, BrowserBoundsRequest, BrowserFrame,
-    BrowserState, GitCommitRequest, GitDiff, GitFileRequest, GitMutationRequest, GitPushRequest,
-    GitRequest, GitState, Goal, GoalRequest, GoalUpdateRequest, LiveStatus, PreferencePatchRequest,
-    Preferences, PromptSubmission, ProviderRequest, ProviderSettings, RuntimeDiagnostics,
-    RuntimeSnapshot, ScheduledTask, SchedulerSnapshot, SendPromptRequest, StreamEnvelope,
-    StreamKind, TerminalIdRequest, TerminalResizeRequest, TerminalSession, TerminalStartRequest,
-    TerminalWriteRequest, ThreadFilters, ThreadList, WorktreeRequest,
+    BrowserState, EventEnvelope, GitCommitRequest, GitDiff, GitFileRequest, GitMutationRequest,
+    GitPushRequest, GitRequest, GitState, Goal, GoalRequest, GoalUpdateRequest, LiveStatus,
+    PreferencePatchRequest, Preferences, PromptSubmission, ProviderRequest, ProviderSettings,
+    RuntimeDiagnostics, RuntimeSnapshot, ScheduledTask, SchedulerSnapshot, SendPromptRequest,
+    StreamEnvelope, StreamKind, TerminalIdRequest, TerminalResizeRequest, TerminalSession,
+    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList, WorktreeRequest,
 };
 use serde_json::{Value, json};
 use sha2::Digest;
@@ -3456,32 +3459,137 @@ fn install_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     Ok(())
 }
 
-fn should_forward_runtime_event(event: &onpeople_types::EventEnvelope) -> bool {
-    if !matches!(event.kind, onpeople_types::EventKind::Agent) {
-        return true;
+fn forward_runtime_event<R: Runtime>(app: &AppHandle<R>, event: &EventEnvelope) {
+    if !should_forward_desktop_event(event) {
+        return;
     }
-    let method = event
-        .payload
-        .get("method")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("type").and_then(Value::as_str));
-    let Some(method) = method else {
-        return true;
-    };
+    let desktop_event = DesktopEvent::from(event.clone());
+    let _ = app.emit("desktop:event", &desktop_event);
+    let _ = app.emit("runtime:event", event);
+    match event.kind {
+        onpeople_types::EventKind::Preferences => {
+            let _ = app.emit("preferences:changed", &event.payload);
+        }
+        onpeople_types::EventKind::CloudAccount => {
+            let _ = app.emit("cloud:account:updated", &event.payload);
+        }
+        onpeople_types::EventKind::AppUpdate => {
+            let _ = app.emit("app-update:state", &event.payload);
+        }
+        onpeople_types::EventKind::CommandPalette => {
+            let _ = app.emit("app:command-palette", &event.payload);
+        }
+        onpeople_types::EventKind::TerminalMenu => {
+            let _ = app.emit("terminal:menu-action", &event.payload);
+        }
+        onpeople_types::EventKind::Agent => {
+            let _ = app.emit("agent:event", &event.payload);
+        }
+        onpeople_types::EventKind::Runtime => {
+            let _ = app.emit("runtime:updated", &event.payload);
+        }
+        onpeople_types::EventKind::BrowserNavigation => {
+            let _ = app.emit("browser:agent-navigation", &event.payload);
+        }
+        onpeople_types::EventKind::BrowserPreview => {
+            let _ = app.emit("browser:preview-updated", &event.payload);
+        }
+        onpeople_types::EventKind::BrowserNewTab => {
+            let _ = app.emit("browser:new-tab-requested", &event.payload);
+        }
+        onpeople_types::EventKind::Scheduler => {
+            let _ = app.emit("scheduler:updated", &event.payload);
+        }
+        onpeople_types::EventKind::SchedulerOpen => {
+            let _ = app.emit("scheduler:open", &event.payload);
+        }
+        onpeople_types::EventKind::DeepLink => {
+            let _ = app.emit("app:deep-link", &event.payload);
+        }
+        onpeople_types::EventKind::BrowserState => {
+            let _ = app.emit("browser:state", &event.payload);
+        }
+    }
+}
 
-    // Codex emits a large amount of startup bookkeeping. The runtime keeps
-    // processing every notification, but the WebView only needs the protocol
-    // events that can change the visible conversation or its controls.
-    if method == "fs/changed"
-        || method == "skills/changed"
-        || method.starts_with("mcpServer/")
-        || method.starts_with("account/rateLimits/")
-        || method.starts_with("remoteControl/")
-        || method.starts_with("externalAgentConfig/")
-    {
-        return false;
+fn emit_desktop_recovery_required<R: Runtime>(
+    app: &AppHandle<R>,
+    reason: &str,
+    after_sequence: u64,
+    oldest_available_sequence: Option<u64>,
+    latest_sequence: u64,
+) {
+    let _ = app.emit(
+        "desktop:event-recovery-required",
+        DesktopRecoveryRequired {
+            reason: reason.to_owned(),
+            after_sequence,
+            oldest_available_sequence,
+            latest_sequence,
+        },
+    );
+}
+
+async fn replay_runtime_events<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &CoreRuntime,
+    last_sequence: &mut u64,
+    stop_before: Option<u64>,
+) {
+    const MAX_PAGES_PER_PASS: usize = 8;
+    for _ in 0..MAX_PAGES_PER_PASS {
+        let window = runtime.event_replay_window(*last_sequence, 1_024);
+        let Some(first) = window.events.first() else {
+            return;
+        };
+        if first.sequence > last_sequence.saturating_add(1) {
+            eprintln!(
+                "OnPeople runtime event history expired before sequence {}; resuming at {}",
+                last_sequence.saturating_add(1),
+                first.sequence
+            );
+            emit_desktop_recovery_required(
+                app,
+                "history-expired",
+                *last_sequence,
+                window.oldest_sequence,
+                window.newest_sequence.unwrap_or(0),
+            );
+        }
+        for event in window.events {
+            if stop_before.is_some_and(|sequence| event.sequence >= sequence) {
+                return;
+            }
+            if event.sequence <= *last_sequence {
+                continue;
+            }
+            if event.payload.get("type").and_then(Value::as_str) == Some("event-history-truncated")
+            {
+                emit_desktop_recovery_required(
+                    app,
+                    "event-truncated",
+                    *last_sequence,
+                    window.oldest_sequence,
+                    window.newest_sequence.unwrap_or(event.sequence),
+                );
+            } else {
+                forward_runtime_event(app, &event);
+            }
+            *last_sequence = event.sequence;
+        }
+        if !window.has_more {
+            return;
+        }
+        tokio::task::yield_now().await;
     }
-    true
+    let bounds = runtime.event_history_bounds();
+    emit_desktop_recovery_required(
+        app,
+        "replay-backlog",
+        *last_sequence,
+        bounds.map(|(oldest, _)| oldest),
+        bounds.map_or(0, |(_, newest)| newest),
+    );
 }
 
 pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
@@ -3503,66 +3611,37 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     let event_state = state.runtime.clone();
     let event_app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let mut last_sequence = event_state.event_cursor();
         let mut events = event_state.subscribe();
+        // Close the cursor/subscription race before entering the live loop.
+        replay_runtime_events(&event_app, &event_state, &mut last_sequence, None).await;
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     eprintln!("OnPeople runtime event bridge lagged; skipped {skipped} events");
+                    replay_runtime_events(&event_app, &event_state, &mut last_sequence, None).await;
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             };
-            if !should_forward_runtime_event(&event) {
+            if event.sequence <= last_sequence {
                 continue;
             }
-            let desktop_event = DesktopEvent::from(event.clone());
-            let _ = event_app.emit("desktop:event", &desktop_event);
-            let _ = event_app.emit("runtime:event", &event);
-            match event.kind {
-                onpeople_types::EventKind::Preferences => {
-                    let _ = event_app.emit("preferences:changed", &event.payload);
-                }
-                onpeople_types::EventKind::CloudAccount => {
-                    let _ = event_app.emit("cloud:account:updated", &event.payload);
-                }
-                onpeople_types::EventKind::AppUpdate => {
-                    let _ = event_app.emit("app-update:state", &event.payload);
-                }
-                onpeople_types::EventKind::CommandPalette => {
-                    let _ = event_app.emit("app:command-palette", &event.payload);
-                }
-                onpeople_types::EventKind::TerminalMenu => {
-                    let _ = event_app.emit("terminal:menu-action", &event.payload);
-                }
-                onpeople_types::EventKind::Agent => {
-                    let _ = event_app.emit("agent:event", &event.payload);
-                }
-                onpeople_types::EventKind::Runtime => {
-                    let _ = event_app.emit("runtime:updated", &event.payload);
-                }
-                onpeople_types::EventKind::BrowserNavigation => {
-                    let _ = event_app.emit("browser:agent-navigation", &event.payload);
-                }
-                onpeople_types::EventKind::BrowserPreview => {
-                    let _ = event_app.emit("browser:preview-updated", &event.payload);
-                }
-                onpeople_types::EventKind::BrowserNewTab => {
-                    let _ = event_app.emit("browser:new-tab-requested", &event.payload);
-                }
-                onpeople_types::EventKind::Scheduler => {
-                    let _ = event_app.emit("scheduler:updated", &event.payload);
-                }
-                onpeople_types::EventKind::SchedulerOpen => {
-                    let _ = event_app.emit("scheduler:open", &event.payload);
-                }
-                onpeople_types::EventKind::DeepLink => {
-                    let _ = event_app.emit("app:deep-link", &event.payload);
-                }
-                onpeople_types::EventKind::BrowserState => {
-                    let _ = event_app.emit("browser:state", &event.payload);
+            if event.sequence > last_sequence.saturating_add(1) {
+                replay_runtime_events(
+                    &event_app,
+                    &event_state,
+                    &mut last_sequence,
+                    Some(event.sequence),
+                )
+                .await;
+                if event.sequence <= last_sequence {
+                    continue;
                 }
             }
+            forward_runtime_event(&event_app, &event);
+            last_sequence = event.sequence;
         }
     });
     let live_runtime = state.runtime.clone();

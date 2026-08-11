@@ -113,6 +113,8 @@ interface WorkbenchStore {
 let subscriptionsStarted = false;
 let initializationStarted = false;
 let runtimeStartPromise: Promise<void> | null = null;
+let eventRecoveryPromise: Promise<void> | null = null;
+let eventRecoveryPending = false;
 let threadSelectionRequest = 0;
 const autoNamingThreadIds = new Set<string>();
 
@@ -1917,6 +1919,60 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
             }
           })
           .catch((error) => set({ error: errorMessage(error) }));
+        if (
+          typeof desktopClient.onDesktopEventRecoveryRequired === "function"
+        ) {
+          await desktopClient
+            .onDesktopEventRecoveryRequired(() => {
+              eventRecoveryPending = true;
+              if (eventRecoveryPromise) return;
+              eventRecoveryPromise = (async () => {
+                try {
+                  while (eventRecoveryPending) {
+                    eventRecoveryPending = false;
+                    try {
+                      const selectedThreadId = get().selectedThreadId;
+                      const [status, runtime, threadList, resumed] =
+                        await Promise.all([
+                          desktopClient.agentStatus(),
+                          desktopClient.runtimeSnapshot(selectedThreadId),
+                          desktopClient.listThreads({
+                            query: get().search,
+                            archived: get().showingArchived,
+                          }),
+                          selectedThreadId
+                            ? desktopClient.resumeThread(selectedThreadId)
+                            : Promise.resolve(null),
+                        ]);
+                      set((state) => ({
+                        status,
+                        runtime:
+                          state.selectedThreadId === selectedThreadId
+                            ? runtime
+                            : state.runtime,
+                        threadList,
+                        timeline:
+                          selectedThreadId &&
+                          resumed &&
+                          state.selectedThreadId === selectedThreadId
+                            ? reconcileRecoveredTimeline(
+                                state.timeline,
+                                historyFromResume(resumed),
+                              )
+                            : state.timeline,
+                        error: null,
+                      }));
+                    } catch (error) {
+                      set({ error: errorMessage(error) });
+                    }
+                  }
+                } finally {
+                  eventRecoveryPromise = null;
+                }
+              })();
+            })
+            .catch((error) => set({ error: errorMessage(error) }));
+        }
         await desktopClient
           .onSchedulerUpdated((value) => set({ scheduler: value }))
           .catch((error) => set({ error: errorMessage(error) }));

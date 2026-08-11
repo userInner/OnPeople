@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
-use onpeople_core_runtime::CoreRuntime;
+use onpeople_core_runtime::{CoreRuntime, MAX_EVENT_REPLAY_LIMIT};
 use onpeople_types::{AppError, ErrorCode, PreferencePatchRequest, ThreadFilters};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopMethod, DesktopRequest, DesktopResponse,
-    RuntimeSnapshotRequest, TaskCancelRequest, TaskCancellation, TaskHandle, TaskRecovery,
-    TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState,
+    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopMethod, DesktopRequest,
+    DesktopResponse, EventReplay, EventReplayRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
+    TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
+    TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
+    TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
+    TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
+    TaskSteerRequest, should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -66,6 +70,38 @@ impl DesktopDispatcher {
                 to_value(self.runtime.runtime_snapshot(request.thread_id.as_deref()))
             }
             DesktopMethod::RuntimeDiagnostics => to_value(self.runtime.runtime_diagnostics()),
+            DesktopMethod::EventReplay => {
+                let request: EventReplayRequest = parse_params(params)?;
+                let limit = request
+                    .limit
+                    .map_or(256, |value| value as usize)
+                    .min(MAX_EVENT_REPLAY_LIMIT);
+                if limit == 0 {
+                    return Err(AppError::invalid("event.replay limit 必须大于 0"));
+                }
+                let window = self
+                    .runtime
+                    .event_replay_window(request.after_sequence, limit);
+                let events = window
+                    .events
+                    .into_iter()
+                    .filter(should_forward_desktop_event)
+                    .map(DesktopEvent::from)
+                    .collect::<Vec<_>>();
+                let latest_sequence = window.newest_sequence.unwrap_or(0);
+                let oldest_available_sequence = window.oldest_sequence;
+                let requires_snapshot = window.contains_truncated
+                    || oldest_available_sequence
+                        .is_some_and(|oldest| request.after_sequence.saturating_add(1) < oldest);
+                to_value(EventReplay {
+                    events,
+                    oldest_available_sequence,
+                    latest_sequence,
+                    next_sequence: window.scanned_cursor,
+                    requires_snapshot,
+                    has_more: window.has_more,
+                })
+            }
             DesktopMethod::PreferencesGet => to_value(self.runtime.preferences()?),
             DesktopMethod::PreferencesSave => {
                 let request: PreferencePatchRequest = parse_params(params)?;
@@ -159,8 +195,98 @@ impl DesktopDispatcher {
                     timeline,
                 })
             }
+            DesktopMethod::TaskQueue => {
+                let request: TaskQueueRequest = parse_params(params)?;
+                let queued = self
+                    .runtime
+                    .queue_message(request.thread_id.as_deref(), &request.text)?;
+                let queued: QueuedTaskMessage = parse_result(queued)?;
+                to_value(queued)
+            }
+            DesktopMethod::TaskQueueDelete => {
+                let request: TaskQueueItemRequest = parse_params(params)?;
+                let deleted = self
+                    .runtime
+                    .delete_queued_message(request.thread_id.as_deref(), &request.queue_id)?;
+                let deleted: TaskQueueDeletion = parse_result(deleted)?;
+                to_value(deleted)
+            }
+            DesktopMethod::TaskSteer => {
+                let request: TaskSteerRequest = parse_params(params)?;
+                let thread_id = resolve_interaction_thread(&self.runtime, request.thread_id)?;
+                let result = self
+                    .runtime
+                    .steer_turn(Some(&thread_id), &request.text)
+                    .await?;
+                to_value(TaskSteerReceipt {
+                    accepted: true,
+                    task_id: active_task_id(&self.runtime, &thread_id),
+                    thread_id,
+                    last_sequence: self.runtime.event_cursor(),
+                    result,
+                })
+            }
+            DesktopMethod::TaskQueueSteer => {
+                let request: TaskQueueItemRequest = parse_params(params)?;
+                let thread_id = resolve_interaction_thread(&self.runtime, request.thread_id)?;
+                let result = self
+                    .runtime
+                    .steer_queued_message(Some(&thread_id), &request.queue_id)
+                    .await?;
+                let inner_result = result.get("result").cloned().unwrap_or(Value::Null);
+                to_value(TaskQueueSteerReceipt {
+                    accepted: true,
+                    steered: result
+                        .get("steered")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                    id: request.queue_id,
+                    task_id: active_task_id(&self.runtime, &thread_id),
+                    thread_id,
+                    last_sequence: self.runtime.event_cursor(),
+                    result: inner_result,
+                })
+            }
+            DesktopMethod::TaskApprovalResolve => {
+                let request: TaskApprovalResolveRequest = parse_params(params)?;
+                self.runtime
+                    .resolve_approval(&request.request_id, request.decision.as_runtime_value())
+                    .await?;
+                to_value(TaskApprovalResolution {
+                    request_id: request.request_id,
+                    decision: request.decision,
+                })
+            }
+            DesktopMethod::TaskInputResolve => {
+                let request: TaskInputResolveRequest = parse_params(params)?;
+                self.runtime
+                    .resolve_user_input(&request.request_id, to_value(&request.answers)?)
+                    .await?;
+                to_value(TaskInputResolution {
+                    request_id: request.request_id,
+                    answered: true,
+                })
+            }
         }
     }
+}
+
+fn resolve_interaction_thread(
+    runtime: &CoreRuntime,
+    requested: Option<String>,
+) -> Result<String, AppError> {
+    requested
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| runtime.runtime_snapshot(None).thread_id)
+        .ok_or_else(|| AppError::invalid("没有正在运行的任务"))
+}
+
+fn active_task_id(runtime: &CoreRuntime, thread_id: &str) -> Option<String> {
+    let snapshot = runtime.runtime_snapshot(None);
+    (snapshot.thread_id.as_deref() == Some(thread_id))
+        .then_some(snapshot.turn_id)
+        .flatten()
 }
 
 fn task_snapshot(
@@ -213,6 +339,11 @@ fn task_state(runtime_state: &str) -> TaskState {
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, AppError> {
     serde_json::from_value(params)
         .map_err(|error| AppError::invalid("桌面 API 参数无效").context("cause", error))
+}
+
+fn parse_result<T: DeserializeOwned>(result: Value) -> Result<T, AppError> {
+    serde_json::from_value(result)
+        .map_err(|error| AppError::internal("CoreRuntime 返回了无效结果").context("cause", error))
 }
 
 fn to_value(value: impl Serialize) -> Result<Value, AppError> {
@@ -294,6 +425,96 @@ mod tests {
                 .and_then(|value| value.get("state"))
                 .and_then(Value::as_str),
             Some("ready")
+        );
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn event_replay_rejects_zero_limit_and_reports_an_empty_window() {
+        let temporary = tempfile::tempdir().expect("temporary data root");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let rejected = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "replay-zero".to_owned(),
+                method: DesktopMethod::EventReplay,
+                params: json!({ "afterSequence": 0, "limit": 0 }),
+            })
+            .await;
+        assert!(!rejected.ok);
+        assert_eq!(
+            rejected.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let response = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "replay-empty".to_owned(),
+                method: DesktopMethod::EventReplay,
+                params: json!({ "afterSequence": 0, "limit": null }),
+            })
+            .await;
+        assert!(response.ok, "unexpected response: {response:?}");
+        let replay: EventReplay = serde_json::from_value(response.result.expect("replay result"))
+            .expect("typed replay result");
+        assert!(replay.events.is_empty());
+        assert_eq!(replay.latest_sequence, 0);
+        assert_eq!(replay.next_sequence, 0);
+        assert!(!replay.requires_snapshot);
+        assert!(!replay.has_more);
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn task_queue_and_delete_use_typed_contracts() {
+        let temporary = tempfile::tempdir().expect("temporary data root");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let queued = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "task-queue-1".to_owned(),
+                method: DesktopMethod::TaskQueue,
+                params: json!({ "threadId": "thread-1", "text": "继续检查" }),
+            })
+            .await;
+        assert!(queued.ok, "unexpected response: {queued:?}");
+        let queued: QueuedTaskMessage =
+            serde_json::from_value(queued.result.expect("queue result"))
+                .expect("typed queue result");
+        assert_eq!(queued.thread_id, "thread-1");
+        assert_eq!(queued.text, "继续检查");
+
+        let deleted = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "task-queue-delete-1".to_owned(),
+                method: DesktopMethod::TaskQueueDelete,
+                params: json!({ "threadId": "thread-1", "queueId": queued.id }),
+            })
+            .await;
+        assert!(deleted.ok, "unexpected response: {deleted:?}");
+        assert_eq!(
+            deleted
+                .result
+                .as_ref()
+                .and_then(|value| value.get("deleted"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
         runtime.stop().await;
     }

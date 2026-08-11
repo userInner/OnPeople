@@ -3,8 +3,11 @@ mod protocol;
 
 pub use dispatcher::DesktopDispatcher;
 pub use protocol::{
-    DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopMethod, DesktopRequest,
-    DesktopResponse, RuntimeSnapshotRequest, TaskCancelRequest, TaskCancellation, TaskHandle,
-    TaskRecovery, TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest,
-    TaskState, export_types,
+    ApprovalDecision, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopMethod,
+    DesktopRecoveryRequired, DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest,
+    QueuedTaskMessage, RuntimeSnapshotRequest, TaskApprovalResolution, TaskApprovalResolveRequest,
+    TaskCancelRequest, TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest,
+    TaskQueueDeletion, TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery,
+    TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState,
+    TaskSteerReceipt, TaskSteerRequest, export_types, should_forward_desktop_event,
 };

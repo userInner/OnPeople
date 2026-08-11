@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createDesktopApiClient, DESKTOP_PROTOCOL_VERSION } from "./desktopApi";
+import {
+  createDesktopApiClient,
+  DESKTOP_PROTOCOL_VERSION,
+  legacyQueuedSteerResult,
+  legacySteerResult,
+} from "./desktopApi";
 
 describe("DesktopApiClient", () => {
   it("sends a versioned request with a stable method name", async () => {
@@ -89,6 +94,34 @@ describe("DesktopApiClient", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("requests an exclusive bounded event replay after reconnecting", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {
+        events: [],
+        oldestAvailableSequence: null,
+        latestSequence: 41,
+        requiresSnapshot: false,
+        hasMore: false,
+      },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-replay");
+
+    await client.request("event.replay", {
+      afterSequence: 41,
+      limit: 256,
+    });
+
+    expect(transport).toHaveBeenCalledWith({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: "request-replay",
+      method: "event.replay",
+      params: { afterSequence: 41, limit: 256 },
+    });
+  });
+
   it("uses the task domain instead of a shell-specific prompt command", async () => {
     const transport = vi.fn(async (request) => ({
       protocolVersion: DESKTOP_PROTOCOL_VERSION,
@@ -120,5 +153,69 @@ describe("DesktopApiClient", () => {
 
     expect(task.taskId).toBe("turn-1");
     expect(transport.mock.calls[0]?.[0].method).toBe("task.start");
+  });
+
+  it("uses typed task interaction methods instead of legacy shell commands", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result:
+        request.method === "task.queue"
+          ? {
+              id: "queue-1",
+              threadId: "thread-1",
+              text: "继续检查",
+              queuedAt: "2026-08-11T00:00:00Z",
+            }
+          : {
+              requestId: "approval-1",
+              decision: "acceptForSession",
+            },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-6");
+
+    const queued = await client.request("task.queue", {
+      threadId: "thread-1",
+      text: "继续检查",
+    });
+    const approval = await client.request("task.approval.resolve", {
+      requestId: "approval-1",
+      decision: "acceptForSession",
+    });
+
+    expect(queued.id).toBe("queue-1");
+    expect(approval.decision).toBe("acceptForSession");
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "task.queue",
+      "task.approval.resolve",
+    ]);
+  });
+
+  it("preserves legacy steering response shapes", () => {
+    expect(
+      legacySteerResult({
+        accepted: true,
+        threadId: "thread-1",
+        taskId: "turn-1",
+        lastSequence: 8,
+        result: { turn: { id: "turn-1" } },
+      }),
+    ).toEqual({ turn: { id: "turn-1" } });
+    expect(
+      legacyQueuedSteerResult({
+        accepted: true,
+        steered: true,
+        id: "queue-1",
+        threadId: "thread-1",
+        taskId: "turn-1",
+        lastSequence: 9,
+        result: { turn: { id: "turn-1" } },
+      }),
+    ).toEqual({
+      steered: true,
+      id: "queue-1",
+      result: { turn: { id: "turn-1" } },
+    });
   });
 });

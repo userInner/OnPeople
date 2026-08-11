@@ -8,6 +8,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 
 import type {
+  ApprovalDecision,
   AppError,
   AppUpdateState,
   BrowserAnnotation,
@@ -15,6 +16,8 @@ import type {
   BrowserState,
   CloudAccountState,
   DesktopEvent,
+  DesktopRecoveryRequired,
+  EventReplay,
   EventEnvelope,
   FileEntry,
   FileSearchResult,
@@ -31,10 +34,20 @@ import type {
   SchedulerSnapshot,
   StreamEnvelope,
   TaskStartRequest,
+  TaskApprovalResolution,
+  TaskInputResolution,
+  TaskQueueDeletion,
+  TaskQueueSteerReceipt,
+  TaskSteerReceipt,
+  QueuedTaskMessage,
   TerminalExit,
   TerminalSession,
 } from "../types";
-import { createDesktopApiClient } from "./desktopApi";
+import {
+  createDesktopApiClient,
+  legacyQueuedSteerResult,
+  legacySteerResult,
+} from "./desktopApi";
 
 export type BrowserCommand =
   | {
@@ -250,6 +263,70 @@ function taskStartRequest(request: StartTaskInput): TaskStartRequest {
   };
 }
 
+function taskQueue(
+  text: string,
+  threadId?: string | null,
+): Promise<QueuedTaskMessage> {
+  return desktopApi.request("task.queue", {
+    text,
+    threadId: threadId ?? null,
+  });
+}
+
+function taskQueueDelete(
+  queueId: string,
+  threadId?: string | null,
+): Promise<TaskQueueDeletion> {
+  return desktopApi.request("task.queue.delete", {
+    queueId,
+    threadId: threadId ?? null,
+  });
+}
+
+function taskSteer(
+  text: string,
+  threadId?: string | null,
+): Promise<TaskSteerReceipt> {
+  return desktopApi.request("task.steer", {
+    text,
+    threadId: threadId ?? null,
+  });
+}
+
+function taskQueueSteer(
+  queueId: string,
+  threadId?: string | null,
+): Promise<TaskQueueSteerReceipt> {
+  return desktopApi.request("task.queue.steer", {
+    queueId,
+    threadId: threadId ?? null,
+  });
+}
+
+function taskApprovalResolve(
+  requestId: string,
+  decision: ApprovalDecision,
+): Promise<TaskApprovalResolution> {
+  return desktopApi.request("task.approval.resolve", {
+    requestId,
+    decision,
+  });
+}
+
+function taskInputResolve(
+  requestId: string,
+  answers: Record<string, string[]>,
+): Promise<TaskInputResolution> {
+  return desktopApi.request("task.input.resolve", { requestId, answers });
+}
+
+function replayEvents(
+  afterSequence: number,
+  limit = 256,
+): Promise<EventReplay> {
+  return desktopApi.request("event.replay", { afterSequence, limit });
+}
+
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
   activateDeepLinks: () => call<string[]>("activate_deep_links"),
@@ -284,6 +361,7 @@ export const desktopClient = {
     desktopApi.request("runtime.snapshot", { threadId: threadId ?? null }),
   runtimeDiagnostics: () => desktopApi.request("runtime.diagnostics", {}),
   getRuntimeDiagnostics: () => desktopApi.request("runtime.diagnostics", {}),
+  replayEvents,
   startRuntime: () => desktopApi.request("runtime.start", {}),
   stopRuntime: () => desktopApi.request("runtime.stop", {}),
   startTask: (request: StartTaskInput) =>
@@ -736,22 +814,37 @@ export const desktopClient = {
     call<Record<string, unknown>>("recalibrate_context", {
       request: { threadId: threadId ?? null },
     }),
-  steerTurn: (text: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("steer_turn", {
-      request: { text, threadId: threadId ?? null },
-    }),
-  queueMessage: (text: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("queue_message", {
-      request: { text, threadId: threadId ?? null },
-    }),
-  deleteQueuedMessage: (queueId: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("delete_queued_message", {
-      request: { queueId, threadId: threadId ?? null },
-    }),
-  steerQueuedMessage: (queueId: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("steer_queued_message", {
-      request: { queueId, threadId: threadId ?? null },
-    }),
+  taskSteer,
+  steerTurn: async (
+    text: string,
+    threadId?: string | null,
+  ): Promise<Record<string, unknown>> => {
+    const receipt = await taskSteer(text, threadId);
+    return legacySteerResult(receipt);
+  },
+  taskQueue,
+  queueMessage: async (
+    text: string,
+    threadId?: string | null,
+  ): Promise<Record<string, unknown>> =>
+    (await taskQueue(text, threadId)) as unknown as Record<string, unknown>,
+  taskQueueDelete,
+  deleteQueuedMessage: async (
+    queueId: string,
+    threadId?: string | null,
+  ): Promise<Record<string, unknown>> =>
+    (await taskQueueDelete(queueId, threadId)) as unknown as Record<
+      string,
+      unknown
+    >,
+  taskQueueSteer,
+  steerQueuedMessage: async (
+    queueId: string,
+    threadId?: string | null,
+  ): Promise<Record<string, unknown>> => {
+    const receipt = await taskQueueSteer(queueId, threadId);
+    return legacyQueuedSteerResult(receipt);
+  },
   getPolicy: () => call<Record<string, unknown>>("get_policy", { request: {} }),
   savePolicy: (threadId: string, policy: unknown) =>
     call<Record<string, unknown>>("save_policy", {
@@ -829,14 +922,24 @@ export const desktopClient = {
     });
     return { interrupted: true, task };
   },
-  resolveApproval: (requestId: string, decision: string) =>
-    call<Record<string, unknown>>("resolve_approval", {
-      request: { requestId, decision },
-    }),
-  resolveUserInput: (requestId: string, answers: Record<string, string[]>) =>
-    call<Record<string, unknown>>("resolve_user_input", {
-      request: { requestId, answers },
-    }),
+  taskApprovalResolve,
+  resolveApproval: async (
+    requestId: string,
+    decision: string,
+  ): Promise<Record<string, unknown>> =>
+    (await taskApprovalResolve(
+      requestId,
+      decision as ApprovalDecision,
+    )) as unknown as Record<string, unknown>,
+  taskInputResolve,
+  resolveUserInput: async (
+    requestId: string,
+    answers: Record<string, string[]>,
+  ): Promise<Record<string, unknown>> =>
+    (await taskInputResolve(requestId, answers)) as unknown as Record<
+      string,
+      unknown
+    >,
   navigate: (url: string, routeId: string) =>
     call<Record<string, unknown>>("browser_navigate", {
       request: { url, routeId },
@@ -930,6 +1033,9 @@ export const desktopClient = {
     }),
   onDesktopEvent: (handler: (event: DesktopEvent) => void) =>
     desktopApi.subscribe(handler),
+  onDesktopEventRecoveryRequired: (
+    handler: (event: DesktopRecoveryRequired) => void,
+  ) => subscribe("desktop:event-recovery-required", handler),
   onRuntimeEvent: (handler: (event: EventEnvelope) => void) =>
     desktopApi.subscribe((event) => handler(legacyEventEnvelope(event))),
   onAgentEvent: (handler: (event: EventEnvelope) => void) =>

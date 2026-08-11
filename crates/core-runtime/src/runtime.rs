@@ -31,6 +31,7 @@ use onpeople_workspace::{
 };
 use parking_lot::{Mutex, RwLock};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Digest;
 use tokio::{
@@ -51,6 +52,15 @@ use crate::{
 };
 
 const DEFAULT_WORKSPACE: &str = "Documents/OnPeople";
+/// Maximum number of recent runtime events kept for reconnect and lag recovery.
+pub const EVENT_HISTORY_CAPACITY: usize = 4_096;
+/// Maximum serialized size retained across the runtime event history.
+pub const EVENT_HISTORY_BYTE_CAPACITY: usize = 32 * 1024 * 1024;
+/// Maximum serialized size retained for one event history entry.
+pub const EVENT_HISTORY_MAX_EVENT_BYTES: usize = 1024 * 1024;
+/// Maximum number of events returned by a single replay request.
+pub const MAX_EVENT_REPLAY_LIMIT: usize = 1_024;
+const EVENT_HISTORY_METHOD_CHAR_LIMIT: usize = 256;
 const CONNECTOR_OAUTH_REDIRECT_URI: &str = "onpeople://oauth/callback";
 const CONNECTOR_OAUTH_TTL_SECONDS: i64 = 10 * 60;
 const DEFAULT_ONPEOPLE_MODEL_ID: &str = "gpt-5.6-luna";
@@ -203,8 +213,7 @@ pub struct CoreRuntime {
     live_events: broadcast::Sender<Value>,
     focused_terminal: Arc<RwLock<Option<String>>>,
     queued_messages: Arc<RwLock<Vec<Value>>>,
-    events: broadcast::Sender<EventEnvelope>,
-    event_sequence: Arc<AtomicU64>,
+    event_bus: EventBus,
     state: Arc<RwLock<RuntimeInner>>,
     supervisor: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
@@ -221,6 +230,264 @@ struct RuntimeInner {
     goals: BTreeMap<String, Goal>,
     context_usage: BTreeMap<String, Value>,
     started_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+struct EventHistory {
+    capacity: usize,
+    byte_capacity: usize,
+    max_event_bytes: usize,
+    retained_bytes: usize,
+    events: VecDeque<RetainedEvent>,
+}
+
+#[derive(Debug)]
+struct RetainedEvent {
+    envelope: EventEnvelope,
+    serialized_bytes: usize,
+}
+
+/// One internally consistent view of the retained runtime event history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventReplayWindow {
+    pub events: Vec<EventEnvelope>,
+    pub oldest_sequence: Option<u64>,
+    pub newest_sequence: Option<u64>,
+    /// Last returned sequence, or the requested sequence when no event was scanned.
+    pub scanned_cursor: u64,
+    pub has_more: bool,
+    pub contains_truncated: bool,
+}
+
+#[derive(Clone)]
+struct EventBus {
+    sender: broadcast::Sender<EventEnvelope>,
+    sequence: Arc<AtomicU64>,
+    history: Arc<Mutex<EventHistory>>,
+}
+
+impl EventBus {
+    fn new(sender: broadcast::Sender<EventEnvelope>, history_capacity: usize) -> Self {
+        Self {
+            sender,
+            sequence: Arc::new(AtomicU64::new(1)),
+            history: Arc::new(Mutex::new(EventHistory::new(history_capacity))),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_history_limits(
+        sender: broadcast::Sender<EventEnvelope>,
+        history_capacity: usize,
+        history_byte_capacity: usize,
+        max_event_bytes: usize,
+    ) -> Self {
+        Self {
+            sender,
+            sequence: Arc::new(AtomicU64::new(1)),
+            history: Arc::new(Mutex::new(EventHistory::with_limits(
+                history_capacity,
+                history_byte_capacity,
+                max_event_bytes,
+            ))),
+        }
+    }
+
+    fn publish(&self, kind: EventKind, thread_id: Option<String>, payload: Value) {
+        self.publish_at(kind, thread_id, payload, Utc::now());
+    }
+
+    fn publish_at(
+        &self,
+        kind: EventKind,
+        thread_id: Option<String>,
+        payload: Value,
+        emitted_at: chrono::DateTime<Utc>,
+    ) {
+        // Sequence assignment, retention and broadcast are serialized so both
+        // live subscribers and replay consumers observe the same total order.
+        let mut history = self.history.lock();
+        let event = EventEnvelope {
+            sequence: self.sequence.fetch_add(1, Ordering::AcqRel),
+            kind,
+            emitted_at,
+            window_label: Some("main".to_owned()),
+            thread_id,
+            payload,
+        };
+        // History owns a bounded copy. Live subscribers receive the original,
+        // even when its retained payload needs to be summarized.
+        history.push(event.clone());
+        let _ = self.sender.send(event);
+    }
+}
+
+impl EventHistory {
+    fn new(capacity: usize) -> Self {
+        Self::with_limits(
+            capacity,
+            EVENT_HISTORY_BYTE_CAPACITY,
+            EVENT_HISTORY_MAX_EVENT_BYTES,
+        )
+    }
+
+    fn with_limits(capacity: usize, byte_capacity: usize, max_event_bytes: usize) -> Self {
+        assert!(
+            max_event_bytes <= byte_capacity,
+            "single event retention limit must fit within the history byte budget"
+        );
+        Self {
+            capacity,
+            byte_capacity,
+            max_event_bytes,
+            retained_bytes: 0,
+            events: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    fn push(&mut self, event: EventEnvelope) {
+        if self.capacity == 0 {
+            return;
+        }
+        let Some(retained) = self.retained_event(event) else {
+            return;
+        };
+        while self.events.len() == self.capacity
+            || self
+                .retained_bytes
+                .saturating_add(retained.serialized_bytes)
+                > self.byte_capacity
+        {
+            let Some(evicted) = self.events.pop_front() else {
+                break;
+            };
+            self.retained_bytes = self.retained_bytes.saturating_sub(evicted.serialized_bytes);
+        }
+        debug_assert!(retained.serialized_bytes <= self.max_event_bytes);
+        debug_assert!(retained.serialized_bytes <= self.byte_capacity);
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_add(retained.serialized_bytes);
+        self.events.push_back(retained);
+    }
+
+    fn events_after(&self, sequence: u64, limit: usize) -> Vec<EventEnvelope> {
+        self.replay_window(sequence, limit).events
+    }
+
+    fn replay_window(&self, sequence: u64, limit: usize) -> EventReplayWindow {
+        let limit = limit.min(MAX_EVENT_REPLAY_LIMIT);
+        let mut candidates = self
+            .events
+            .iter()
+            .map(|entry| &entry.envelope)
+            .filter(|event| event.sequence > sequence);
+        let events = candidates.by_ref().take(limit).cloned().collect::<Vec<_>>();
+        let has_more = candidates.next().is_some();
+        let scanned_cursor = events.last().map_or(sequence, |event| event.sequence);
+        let contains_truncated = events.iter().any(event_is_history_truncated);
+        EventReplayWindow {
+            events,
+            oldest_sequence: self.events.front().map(|entry| entry.envelope.sequence),
+            newest_sequence: self.events.back().map(|entry| entry.envelope.sequence),
+            scanned_cursor,
+            has_more,
+            contains_truncated,
+        }
+    }
+
+    fn retained_event(&self, event: EventEnvelope) -> Option<RetainedEvent> {
+        let original_serialized_bytes = serialized_event_size(&event);
+        if original_serialized_bytes <= self.max_event_bytes
+            && original_serialized_bytes <= self.byte_capacity
+        {
+            return Some(RetainedEvent {
+                envelope: event,
+                serialized_bytes: original_serialized_bytes,
+            });
+        }
+
+        let original_method = event
+            .payload
+            .get("method")
+            .and_then(Value::as_str)
+            .or_else(|| event.payload.get("type").and_then(Value::as_str))
+            .map(|method| {
+                method
+                    .chars()
+                    .take(EVENT_HISTORY_METHOD_CHAR_LIMIT)
+                    .collect::<String>()
+            });
+        let summary = |payload| EventEnvelope {
+            sequence: event.sequence,
+            kind: event.kind,
+            emitted_at: event.emitted_at,
+            window_label: event.window_label.clone(),
+            thread_id: event.thread_id.clone(),
+            payload,
+        };
+
+        let detailed = summary(json!({
+            "type": "event-history-truncated",
+            "truncated": true,
+            "originalSerializedBytes": original_serialized_bytes,
+            "maxRetainedEventBytes": self.max_event_bytes,
+            "originalMethod": original_method,
+        }));
+        if let Some(retained) = self.retain_if_within_budget(detailed) {
+            return Some(retained);
+        }
+
+        self.retain_if_within_budget(summary(json!({
+            "type": "event-history-truncated",
+            "truncated": true,
+        })))
+    }
+
+    fn retain_if_within_budget(&self, envelope: EventEnvelope) -> Option<RetainedEvent> {
+        let serialized_bytes = serialized_event_size(&envelope);
+        (serialized_bytes <= self.max_event_bytes && serialized_bytes <= self.byte_capacity)
+            .then_some(RetainedEvent {
+                envelope,
+                serialized_bytes,
+            })
+    }
+
+    fn bounds(&self) -> Option<(u64, u64)> {
+        Some((
+            self.events.front()?.envelope.sequence,
+            self.events.back()?.envelope.sequence,
+        ))
+    }
+}
+
+#[derive(Default)]
+struct SerializedByteCounter {
+    bytes: usize,
+}
+
+impl std::io::Write for SerializedByteCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_event_size(event: &EventEnvelope) -> usize {
+    let mut counter = SerializedByteCounter::default();
+    if serde_json::to_writer(&mut counter, event).is_err() {
+        return usize::MAX;
+    }
+    counter.bytes
+}
+
+fn event_is_history_truncated(event: &EventEnvelope) -> bool {
+    event.payload.get("type").and_then(Value::as_str) == Some("event-history-truncated")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -333,8 +600,7 @@ impl CoreRuntime {
             live_events,
             focused_terminal: Arc::new(RwLock::new(None)),
             queued_messages: Arc::new(RwLock::new(queued_messages)),
-            events,
-            event_sequence: Arc::new(AtomicU64::new(1)),
+            event_bus: EventBus::new(events, EVENT_HISTORY_CAPACITY),
             state: Arc::new(RwLock::new(RuntimeInner {
                 runtime_state: "stopped".to_owned(),
                 last_error: None,
@@ -1089,14 +1355,43 @@ impl CoreRuntime {
 
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope> {
-        self.events.subscribe()
+        self.event_bus.sender.subscribe()
     }
 
     #[must_use]
     pub fn event_cursor(&self) -> u64 {
-        self.event_sequence
-            .load(Ordering::Acquire)
-            .saturating_sub(1)
+        self.event_bus
+            .history
+            .lock()
+            .bounds()
+            .map_or(0, |(_, newest)| newest)
+    }
+
+    /// Returns retained events whose sequence is strictly greater than `sequence`.
+    ///
+    /// Results are always ordered by ascending sequence. `limit` is capped at
+    /// [`MAX_EVENT_REPLAY_LIMIT`] so a reconnecting client cannot create an
+    /// unbounded allocation. If the first returned sequence is greater than
+    /// `sequence + 1`, older events have expired and the caller should refresh
+    /// its snapshot before applying the replay batch.
+    #[must_use]
+    pub fn events_after(&self, sequence: u64, limit: usize) -> Vec<EventEnvelope> {
+        self.event_bus.history.lock().events_after(sequence, limit)
+    }
+
+    /// Atomically captures replay events, retained bounds and pagination state.
+    ///
+    /// Callers should prefer this over separate `events_after` and
+    /// `event_history_bounds` calls when recovering from broadcast lag.
+    #[must_use]
+    pub fn event_replay_window(&self, sequence: u64, limit: usize) -> EventReplayWindow {
+        self.event_bus.history.lock().replay_window(sequence, limit)
+    }
+
+    /// Returns the oldest and newest sequence currently available for replay.
+    #[must_use]
+    pub fn event_history_bounds(&self) -> Option<(u64, u64)> {
+        self.event_bus.history.lock().bounds()
     }
 
     pub async fn start(&self) -> Result<(), AppError> {
@@ -4240,20 +4535,11 @@ impl CoreRuntime {
     }
 
     fn emit(&self, kind: EventKind, thread_id: Option<String>, payload: Value) {
-        let event = EventEnvelope {
-            sequence: self.event_sequence.fetch_add(1, Ordering::Relaxed),
-            kind,
-            emitted_at: Utc::now(),
-            window_label: Some("main".to_owned()),
-            thread_id,
-            payload,
-        };
-        let _ = self.events.send(event);
+        self.event_bus.publish(kind, thread_id, payload);
     }
 
     fn forward_events(&self) {
-        let events = self.events.clone();
-        let sequence = Arc::clone(&self.event_sequence);
+        let event_bus = self.event_bus.clone();
         let app_server = Arc::clone(&self.app_server);
         let scheduler = self.scheduler.clone();
         let storage = self.storage.clone();
@@ -4261,8 +4547,7 @@ impl CoreRuntime {
         let state = Arc::clone(&self.state);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(Self::forward_events_task(
-                events,
-                sequence,
+                event_bus,
                 app_server,
                 scheduler,
                 storage,
@@ -4282,8 +4567,7 @@ impl CoreRuntime {
                     return;
                 };
                 runtime.block_on(Self::forward_events_task(
-                    events,
-                    sequence,
+                    event_bus,
                     app_server,
                     scheduler,
                     storage,
@@ -4294,8 +4578,7 @@ impl CoreRuntime {
     }
 
     async fn forward_events_task(
-        events: broadcast::Sender<EventEnvelope>,
-        sequence: Arc<AtomicU64>,
+        event_bus: EventBus,
         app_server: Arc<AppServerClient>,
         scheduler: SchedulerService,
         storage: Storage,
@@ -4352,14 +4635,12 @@ impl CoreRuntime {
                     }
                 });
             }
-            let _ = events.send(EventEnvelope {
-                sequence: sequence.fetch_add(1, Ordering::Relaxed),
-                kind: EventKind::Agent,
+            event_bus.publish_at(
+                EventKind::Agent,
+                event_thread_id(&payload),
+                payload.clone(),
                 emitted_at,
-                window_label: Some("main".to_owned()),
-                thread_id: event_thread_id(&payload),
-                payload: payload.clone(),
-            });
+            );
             if payload.get("method").and_then(Value::as_str) == Some("turn/completed") {
                 if let Some(thread_id) = event_thread_id(&payload) {
                     start_next_queued_message(
@@ -4368,8 +4649,7 @@ impl CoreRuntime {
                         &state,
                         &storage,
                         &app_server,
-                        &events,
-                        &sequence,
+                        &event_bus,
                     )
                     .await;
                 }
@@ -4618,8 +4898,7 @@ async fn start_next_queued_message(
     state: &Arc<RwLock<RuntimeInner>>,
     storage: &Storage,
     app_server: &Arc<AppServerClient>,
-    events: &broadcast::Sender<EventEnvelope>,
-    sequence: &Arc<AtomicU64>,
+    event_bus: &EventBus,
 ) {
     let next = {
         let mut queue = queued_messages.write();
@@ -4680,37 +4959,31 @@ async fn start_next_queued_message(
                 current.current_turn_id = turn_id.clone();
                 current.runtime_state = "working".to_owned();
             }
-            let _ = events.send(EventEnvelope {
-                sequence: sequence.fetch_add(1, Ordering::Relaxed),
-                kind: EventKind::Agent,
-                emitted_at: Utc::now(),
-                window_label: Some("main".to_owned()),
-                thread_id: Some(thread_id.to_owned()),
-                payload: json!({
+            event_bus.publish(
+                EventKind::Agent,
+                Some(thread_id.to_owned()),
+                json!({
                     "type": "queued-message-started",
                     "message": message,
                     "turnId": turn_id,
                     "queuedMessages": queued_messages.read().len(),
                 }),
-            });
+            );
         }
         Err(error) => {
             queued_messages.write().insert(queue_index, message.clone());
             if let Err(persist_error) = persist_queue(queued_messages) {
                 warn!("failed to restore runtime queue after dispatch failure: {persist_error}");
             }
-            let _ = events.send(EventEnvelope {
-                sequence: sequence.fetch_add(1, Ordering::Relaxed),
-                kind: EventKind::Agent,
-                emitted_at: Utc::now(),
-                window_label: Some("main".to_owned()),
-                thread_id: Some(thread_id.to_owned()),
-                payload: json!({
+            event_bus.publish(
+                EventKind::Agent,
+                Some(thread_id.to_owned()),
+                json!({
                     "type": "context-error",
                     "message": error.message,
                     "queueId": message.get("id"),
                 }),
-            });
+            );
         }
     }
 }
@@ -5984,17 +6257,260 @@ fn rollout_message_item(payload: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use onpeople_storage::Storage;
+    use onpeople_types::{EventEnvelope, EventKind};
     use serde_json::json;
     use tempfile::tempdir;
+    use tokio::sync::broadcast;
 
     use super::{
-        CoreRuntime, apply_turn_policy, bundled_connector_catalog, format_review_prompt,
-        github_compare_url, goal_from_app_server, legacy_exec_items_from_rollout,
-        native_agent_summary, normalize_policy, parse_diff_hunks, persist_timeline_item_from_event,
-        plugin_catalog, policy_request_fields, read_industry_plugin_instructions,
-        rollout_message_item, task_capability_instructions, timeline_items_from_rollout,
-        update_agent_task_from_event, validate_external_https_url, validate_remote_catalog_entries,
+        CoreRuntime, EventBus, EventHistory, MAX_EVENT_REPLAY_LIMIT, apply_turn_policy,
+        bundled_connector_catalog, format_review_prompt, github_compare_url, goal_from_app_server,
+        legacy_exec_items_from_rollout, native_agent_summary, normalize_policy, parse_diff_hunks,
+        persist_timeline_item_from_event, plugin_catalog, policy_request_fields,
+        read_industry_plugin_instructions, rollout_message_item, serialized_event_size,
+        task_capability_instructions, timeline_items_from_rollout, update_agent_task_from_event,
+        validate_external_https_url, validate_remote_catalog_entries,
     };
+
+    fn event(sequence: u64) -> EventEnvelope {
+        EventEnvelope {
+            sequence,
+            kind: EventKind::Agent,
+            emitted_at: chrono::Utc::now(),
+            window_label: Some("main".to_owned()),
+            thread_id: Some("thread-1".to_owned()),
+            payload: json!({ "sequence": sequence }),
+        }
+    }
+
+    #[test]
+    fn event_history_keeps_capacity_and_returns_exclusive_ordered_ranges() {
+        let mut history = EventHistory::new(3);
+        for sequence in 1..=5 {
+            history.push(event(sequence));
+        }
+
+        assert_eq!(history.bounds(), Some((3, 5)));
+        assert_eq!(
+            history
+                .events_after(0, 10)
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert_eq!(
+            history
+                .events_after(3, 1)
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+        assert!(history.events_after(5, 10).is_empty());
+        assert!(history.events_after(0, 0).is_empty());
+    }
+
+    #[test]
+    fn event_history_clamps_replay_limit() {
+        let mut history = EventHistory::new(MAX_EVENT_REPLAY_LIMIT + 10);
+        for sequence in 1..=(MAX_EVENT_REPLAY_LIMIT as u64 + 10) {
+            history.push(event(sequence));
+        }
+
+        let replay = history.events_after(0, usize::MAX);
+        assert_eq!(replay.len(), MAX_EVENT_REPLAY_LIMIT);
+        assert_eq!(replay.first().map(|event| event.sequence), Some(1));
+        assert_eq!(
+            replay.last().map(|event| event.sequence),
+            Some(MAX_EVENT_REPLAY_LIMIT as u64)
+        );
+    }
+
+    #[test]
+    fn replay_window_captures_bounds_cursor_and_pagination_atomically() {
+        let mut history = EventHistory::new(8);
+        for sequence in 1..=4 {
+            history.push(event(sequence));
+        }
+
+        let first = history.replay_window(1, 2);
+        assert_eq!(first.oldest_sequence, Some(1));
+        assert_eq!(first.newest_sequence, Some(4));
+        assert_eq!(first.scanned_cursor, 3);
+        assert!(first.has_more);
+        assert!(!first.contains_truncated);
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+
+        let second = history.replay_window(first.scanned_cursor, 2);
+        assert_eq!(second.scanned_cursor, 4);
+        assert!(!second.has_more);
+        assert_eq!(
+            second
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+
+        let zero_limit = history.replay_window(1, 0);
+        assert_eq!(zero_limit.scanned_cursor, 1);
+        assert!(zero_limit.events.is_empty());
+        assert!(zero_limit.has_more);
+        assert_eq!(zero_limit.oldest_sequence, Some(1));
+        assert_eq!(zero_limit.newest_sequence, Some(4));
+        assert!(!zero_limit.contains_truncated);
+    }
+
+    #[test]
+    fn event_history_evicts_oldest_entries_to_meet_the_byte_budget() {
+        let mut first = event(1);
+        first.payload = json!({ "text": "x".repeat(256) });
+        let mut second = first.clone();
+        second.sequence = 2;
+        let mut third = first.clone();
+        third.sequence = 3;
+        let entry_size = serialized_event_size(&first);
+        let byte_budget = entry_size * 2;
+        let mut history = EventHistory::with_limits(10, byte_budget, byte_budget);
+
+        history.push(first);
+        history.push(second);
+        history.push(third);
+
+        let window = history.replay_window(0, 10);
+        assert_eq!(window.oldest_sequence, Some(2));
+        assert_eq!(window.newest_sequence, Some(3));
+        assert_eq!(history.retained_bytes, byte_budget);
+        assert!(history.retained_bytes <= history.byte_capacity);
+        assert_eq!(
+            window
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_event_is_summarized_only_in_history_without_a_sequence_gap() {
+        let (events, _) = broadcast::channel(4);
+        let mut receiver = events.subscribe();
+        let event_bus = EventBus::with_history_limits(events, 4, 4_096, 512);
+        let payload = json!({ "content": "large-payload".repeat(1_000) });
+
+        event_bus.publish(
+            EventKind::Agent,
+            Some("thread-large".to_owned()),
+            payload.clone(),
+        );
+
+        let live = receiver.recv().await.expect("live oversized event");
+        assert_eq!(live.sequence, 1);
+        assert_eq!(live.payload, payload);
+
+        let window = event_bus.history.lock().replay_window(0, 10);
+        assert_eq!(window.oldest_sequence, Some(1));
+        assert_eq!(window.newest_sequence, Some(1));
+        assert_eq!(window.scanned_cursor, 1);
+        assert!(!window.has_more);
+        assert!(window.contains_truncated);
+        assert_eq!(window.events.len(), 1);
+        let retained = &window.events[0];
+        assert_eq!(retained.sequence, live.sequence);
+        assert_eq!(retained.thread_id, live.thread_id);
+        assert_eq!(retained.emitted_at, live.emitted_at);
+        assert!(matches!(retained.kind, EventKind::Agent));
+        assert_eq!(retained.payload["type"], "event-history-truncated");
+        assert_eq!(retained.payload["truncated"], true);
+        assert!(
+            retained.payload["originalSerializedBytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 512)
+        );
+        assert!(serialized_event_size(retained) <= 512);
+    }
+
+    #[test]
+    fn malicious_method_is_unicode_bounded_and_summary_respects_tiny_budgets() {
+        let mut oversized = event(1);
+        oversized.thread_id = Some("thread-malicious".to_owned());
+        oversized.payload = json!({
+            "method": "界🚀".repeat(2_000),
+            "content": "x".repeat(8_000),
+        });
+
+        let mut detailed_history = EventHistory::with_limits(4, 4_096, 4_096);
+        detailed_history.push(oversized.clone());
+        let detailed = detailed_history.replay_window(0, 4);
+        assert!(detailed.contains_truncated);
+        assert_eq!(detailed.events.len(), 1);
+        let original_method = detailed.events[0].payload["originalMethod"]
+            .as_str()
+            .expect("bounded original method");
+        assert_eq!(original_method.chars().count(), 256);
+        assert!(serialized_event_size(&detailed.events[0]) <= 4_096);
+        assert!(detailed_history.retained_bytes <= detailed_history.byte_capacity);
+
+        let fixed_summary = EventEnvelope {
+            sequence: oversized.sequence,
+            kind: oversized.kind,
+            emitted_at: oversized.emitted_at,
+            window_label: oversized.window_label.clone(),
+            thread_id: oversized.thread_id.clone(),
+            payload: json!({
+                "type": "event-history-truncated",
+                "truncated": true,
+            }),
+        };
+        let tiny_budget = serialized_event_size(&fixed_summary);
+        let mut tiny_history = EventHistory::with_limits(4, tiny_budget, tiny_budget);
+        tiny_history.push(oversized);
+        let tiny = tiny_history.replay_window(0, 4);
+        assert!(tiny.contains_truncated);
+        assert_eq!(tiny.events.len(), 1);
+        assert!(tiny.events[0].payload.get("originalMethod").is_none());
+        assert_eq!(serialized_event_size(&tiny.events[0]), tiny_budget);
+        assert_eq!(tiny_history.retained_bytes, tiny_budget);
+        assert!(tiny_history.retained_bytes <= tiny_history.max_event_bytes);
+        assert!(tiny_history.retained_bytes <= tiny_history.byte_capacity);
+    }
+
+    #[tokio::test]
+    async fn publisher_retains_runtime_and_forwarded_agent_events_in_one_order() {
+        let (events, _) = broadcast::channel(8);
+        let mut receiver = events.subscribe();
+        let event_bus = EventBus::new(events, 8);
+
+        event_bus.publish(EventKind::Runtime, None, json!({ "type": "runtime-ready" }));
+        event_bus.publish(
+            EventKind::Agent,
+            Some("thread-1".to_owned()),
+            json!({ "method": "turn/started" }),
+        );
+
+        assert_eq!(receiver.recv().await.expect("runtime event").sequence, 1);
+        assert_eq!(receiver.recv().await.expect("agent event").sequence, 2);
+        let replay = event_bus.history.lock().events_after(0, 8);
+        assert_eq!(
+            replay
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(matches!(replay[0].kind, EventKind::Runtime));
+        assert!(matches!(replay[1].kind, EventKind::Agent));
+    }
 
     #[test]
     fn excludes_internal_goal_and_interruption_messages_from_rollout_history() {

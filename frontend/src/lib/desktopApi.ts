@@ -1,9 +1,12 @@
 import type { AgentStatus } from "../bindings/AgentStatus";
+import type { QueuedTaskMessage } from "../bindings/QueuedTaskMessage";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
 import type { DesktopEvent } from "../bindings/DesktopEvent";
 import type { DesktopMethod } from "../bindings/DesktopMethod";
 import type { DesktopRequest } from "../bindings/DesktopRequest";
 import type { DesktopResponse } from "../bindings/DesktopResponse";
+import type { EventReplay } from "../bindings/EventReplay";
+import type { EventReplayRequest } from "../bindings/EventReplayRequest";
 import type { Preferences } from "../bindings/Preferences";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
@@ -13,12 +16,22 @@ import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
 import type { TaskCancelRequest } from "../bindings/TaskCancelRequest";
 import type { TaskCancellation } from "../bindings/TaskCancellation";
+import type { TaskApprovalResolution } from "../bindings/TaskApprovalResolution";
+import type { TaskApprovalResolveRequest } from "../bindings/TaskApprovalResolveRequest";
 import type { TaskHandle } from "../bindings/TaskHandle";
+import type { TaskInputResolution } from "../bindings/TaskInputResolution";
+import type { TaskInputResolveRequest } from "../bindings/TaskInputResolveRequest";
+import type { TaskQueueDeletion } from "../bindings/TaskQueueDeletion";
+import type { TaskQueueItemRequest } from "../bindings/TaskQueueItemRequest";
+import type { TaskQueueRequest } from "../bindings/TaskQueueRequest";
+import type { TaskQueueSteerReceipt } from "../bindings/TaskQueueSteerReceipt";
 import type { TaskRecovery } from "../bindings/TaskRecovery";
 import type { TaskResumeRequest } from "../bindings/TaskResumeRequest";
 import type { TaskSnapshot } from "../bindings/TaskSnapshot";
 import type { TaskSnapshotRequest } from "../bindings/TaskSnapshotRequest";
 import type { TaskStartRequest } from "../bindings/TaskStartRequest";
+import type { TaskSteerReceipt } from "../bindings/TaskSteerReceipt";
+import type { TaskSteerRequest } from "../bindings/TaskSteerRequest";
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
@@ -46,6 +59,10 @@ export interface DesktopMethodMap {
   "runtime.diagnostics": {
     params: Record<string, never>;
     result: RuntimeDiagnostics;
+  };
+  "event.replay": {
+    params: EventReplayRequest;
+    result: EventReplay;
   };
   "preferences.get": {
     params: Record<string, never>;
@@ -78,6 +95,30 @@ export interface DesktopMethodMap {
   "task.resume": {
     params: TaskResumeRequest;
     result: TaskRecovery;
+  };
+  "task.queue": {
+    params: TaskQueueRequest;
+    result: QueuedTaskMessage;
+  };
+  "task.queue.delete": {
+    params: TaskQueueItemRequest;
+    result: TaskQueueDeletion;
+  };
+  "task.steer": {
+    params: TaskSteerRequest;
+    result: TaskSteerReceipt;
+  };
+  "task.queue.steer": {
+    params: TaskQueueItemRequest;
+    result: TaskQueueSteerReceipt;
+  };
+  "task.approval.resolve": {
+    params: TaskApprovalResolveRequest;
+    result: TaskApprovalResolution;
+  };
+  "task.input.resolve": {
+    params: TaskInputResolveRequest;
+    result: TaskInputResolution;
   };
 }
 
@@ -157,5 +198,21 @@ export function createDesktopApiClient(
       }
       return eventTransport(handler);
     },
+  };
+}
+
+export function legacySteerResult(
+  receipt: TaskSteerReceipt,
+): Record<string, unknown> {
+  return receipt.result as Record<string, unknown>;
+}
+
+export function legacyQueuedSteerResult(
+  receipt: TaskQueueSteerReceipt,
+): Record<string, unknown> {
+  return {
+    steered: receipt.steered,
+    id: receipt.id,
+    result: receipt.result,
   };
 }
