@@ -1,8 +1,9 @@
-use std::{env, path::PathBuf, process::ExitCode, sync::Arc};
+use std::{env, future::Future, path::PathBuf, pin::Pin, process::ExitCode, sync::Arc};
 
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
-    DesktopDispatcher, DesktopEvent, DesktopRequest, DesktopResponse, should_forward_desktop_event,
+    BrowserHostOperation, DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRequest,
+    DesktopResponse, ShellHostOperation, should_forward_desktop_event,
 };
 use onpeople_storage::Storage;
 use onpeople_types::AppError;
@@ -31,6 +32,39 @@ enum Transport {
 enum HostMessage {
     Response(DesktopResponse),
     Event(DesktopEvent),
+}
+
+/// Electron owns browser and OS-shell methods in its main-process adapter.
+/// Supplying this port keeps capability discovery complete while preserving a
+/// hard failure if a host-owned request is accidentally forwarded to Rust.
+struct ExternalDesktopHost;
+
+impl DesktopHost for ExternalDesktopHost {
+    fn browser<'a>(
+        &'a self,
+        _operation: BrowserHostOperation,
+        _params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(AppError::new(
+                onpeople_types::ErrorCode::Unsupported,
+                "浏览器方法必须由 Electron Desktop adapter 处理",
+            ))
+        })
+    }
+
+    fn shell<'a>(
+        &'a self,
+        _operation: ShellHostOperation,
+        _params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(AppError::new(
+                onpeople_types::ErrorCode::Unsupported,
+                "系统壳方法必须由 Electron Desktop adapter 处理",
+            ))
+        })
+    }
 }
 
 // A single-thread executor keeps the sidecar's idle footprint small. The
@@ -101,6 +135,7 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let dispatcher = DesktopDispatcher::new(runtime.clone());
+    let external_host = Arc::new(ExternalDesktopHost);
     let (outgoing, mut messages) = mpsc::unbounded_channel::<HostMessage>();
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
@@ -135,27 +170,56 @@ where
         }
     });
 
+    let mut request_tasks = tokio::task::JoinSet::new();
     let mut lines = BufReader::new(reader).lines();
     while let Some(line) = lines.next_line().await.map_err(AppError::internal)? {
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<DesktopRequest>(&line) {
-            Ok(request) => dispatcher.dispatch(request).await,
-            Err(error) => DesktopResponse::failure(
+        let parsed = match serde_json::from_str::<DesktopRequest>(&line) {
+            Ok(request) => DesktopResponseOrRequest::Request(request),
+            Err(error) => DesktopResponseOrRequest::Response(DesktopResponse::failure(
                 extract_request_id(&line),
                 AppError::invalid(format!("无效的 DesktopRequest: {error}")),
-            ),
+            )),
         };
-        if outgoing.send(HostMessage::Response(response)).is_err() {
-            break;
+        let request = match parsed {
+            DesktopResponseOrRequest::Response(response) => {
+                if outgoing.send(HostMessage::Response(response)).is_err() {
+                    break;
+                }
+                continue;
+            }
+            DesktopResponseOrRequest::Request(request) => request,
+        };
+        let request_dispatcher = dispatcher.clone();
+        let request_host = external_host.clone();
+        let request_output = outgoing.clone();
+        request_tasks.spawn(async move {
+            let response = request_dispatcher
+                .dispatch_with_host(request, request_host.as_ref())
+                .await;
+            let _ = request_output.send(HostMessage::Response(response));
+        });
+        // Bound bookkeeping without serializing ordinary requests. A request
+        // may legitimately remain active for hours while status, queue, and
+        // approval calls continue over the same transport.
+        if request_tasks.len() >= 256 {
+            request_tasks.join_next().await;
         }
     }
+
+    while request_tasks.join_next().await.is_some() {}
 
     event_task.abort();
     drop(outgoing);
     writer_task.await.map_err(AppError::internal)??;
     Ok(())
+}
+
+enum DesktopResponseOrRequest {
+    Response(DesktopResponse),
+    Request(DesktopRequest),
 }
 
 fn extract_request_id(line: &str) -> String {

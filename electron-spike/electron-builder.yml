@@ -1,13 +1,15 @@
-appId: com.userinner.onpeople.electron-spike
-productName: OnPeople Electron Spike
-artifactName: onpeople-electron-spike-${version}-${arch}.${ext}
+appId: com.userinner.onpeople
+productName: OnPeople
+artifactName: onpeople-${version}-${arch}.${ext}
 directories:
-  output: dist-electron-spike
+  output: dist-electron
 files:
   - dist/**/*
   - electron-spike/main.mjs
   - electron-spike/preload.cjs
   - electron-spike/rust-bridge.mjs
+  - electron-spike/browser-controller.mjs
+  - electron-spike/shell-adapter.mjs
   - package.json
 extraResources:
   - from: electron-spike/runtime

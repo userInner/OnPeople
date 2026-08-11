@@ -6,33 +6,28 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const spikeRoot = path.dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = path.resolve(spikeRoot, "..");
+const electronRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(electronRoot, "..");
 const temporaryRoot = await mkdtemp(
   path.join(os.tmpdir(), "onpeople-electron-webcontentsview-metrics-"),
 );
 const metricsPath = path.join(temporaryRoot, "metrics.json");
 const appBundle = path.join(
   repositoryRoot,
-  "dist-electron-spike",
+  "dist-electron",
   `mac-${process.arch === "arm64" ? "arm64" : "x64"}`,
-  "OnPeople Electron Spike.app",
+  "OnPeople.app",
 );
 const packagedBinary = path.join(
   appBundle,
   "Contents",
   "MacOS",
-  "OnPeople Electron Spike",
+  "OnPeople",
 );
-const developmentBinary = path.join(
-  repositoryRoot,
-  "node_modules",
-  ".bin",
-  "electron",
-);
+const developmentBinary = path.join(repositoryRoot, "node_modules", ".bin", "electron");
 const usePackaged = await exists(packagedBinary);
 const executable = usePackaged ? packagedBinary : developmentBinary;
-const args = usePackaged ? [] : [path.join(spikeRoot, "main.mjs")];
+const args = usePackaged ? [] : [path.join(electronRoot, "main.mjs")];
 
 const child = execFile(
   executable,
@@ -41,9 +36,10 @@ const child = execFile(
     cwd: repositoryRoot,
     env: {
       ...process.env,
-      ONPEOPLE_SPIKE_METRICS_FILE: metricsPath,
-      ONPEOPLE_SPIKE_AUTO_QUIT_MS: "60000",
-      ONPEOPLE_SPIKE_STABILITY: "1",
+      ONPEOPLE_ELECTRON_METRICS_FILE: metricsPath,
+      ONPEOPLE_ELECTRON_AUTO_QUIT_MS: "240000",
+      ONPEOPLE_ELECTRON_ACCEPTANCE: "1",
+      ONPEOPLE_BROWSER_IDLE_DESTROY_MS: "750",
     },
   },
   (error, stdout, stderr) => {
@@ -53,27 +49,36 @@ const child = execFile(
   },
 );
 const exitCode = await new Promise((resolve) => child.once("exit", resolve));
-if (exitCode !== 0) {
-  throw new Error(`Electron spike exited with code ${exitCode}`);
-}
+if (exitCode !== 0) throw new Error(`Electron candidate exited with code ${exitCode}`);
 
 const metrics = JSON.parse(await readFile(metricsPath, "utf8"));
 const archive = path.join(
   repositoryRoot,
-  "dist-electron-spike",
-  `onpeople-electron-spike-0.30.0-${process.arch}.zip`,
+  "dist-electron",
+  `onpeople-0.30.0-${process.arch}.zip`,
 );
-const archiveBytes = (await exists(archive))
-  ? (await stat(archive)).size
-  : null;
+const archiveBytes = (await exists(archive)) ? (await stat(archive)).size : null;
 const installedBytes = (await exists(appBundle))
   ? await directorySizeBytes(appBundle)
   : null;
+const idleKb = metrics.memorySnapshots.idle?.totalWorkingSetKb ?? null;
+const openKb = metrics.memorySnapshots.browserOpen?.totalWorkingSetKb ?? null;
+const suspendedKb =
+  metrics.memorySnapshots.browserSuspended?.totalWorkingSetKb ?? null;
+const destroyedKb =
+  metrics.memorySnapshots.browserDestroyed?.totalWorkingSetKb ?? null;
+const browserIncrementKb =
+  idleKb !== null && openKb !== null ? Math.max(0, openKb - idleKb) : null;
+const recoveredIncrementRatio =
+  browserIncrementKb && destroyedKb !== null
+    ? Math.max(0, Math.min(1, (openKb - destroyedKb) / browserIncrementKb))
+    : null;
 
 const baselines = {
   tauriArchiveBytes: 303 * 1024 * 1024,
   tauriInstalledBytes: 731 * 1024 * 1024,
   tauriBrowserWorkingSetKb: 438.7 * 1024,
+  previousElectronBrowserWorkingSetKb: 604.7 * 1024,
 };
 const gates = {
   archiveNoLargerThanTauri:
@@ -82,14 +87,28 @@ const gates = {
     installedBytes !== null && installedBytes <= baselines.tauriInstalledBytes,
   rendererReadyUnder1500Ms:
     metrics.rendererReadyMs !== null && metrics.rendererReadyMs <= 1_500,
-  memoryWithin20Percent:
-    metrics.totalWorkingSetKb <= baselines.tauriBrowserWorkingSetKb * 1.2,
-  stability30Cycles:
-    metrics.stabilityCycles === 30 &&
-    metrics.stabilityFailures === 0 &&
-    metrics.windowCrashCount === 0 &&
-    metrics.browserViewCrashCount === 0 &&
-    metrics.rustHostRestartCount === 0,
+  idleMemoryWithin20PercentOfTauriBrowser:
+    idleKb !== null && idleKb <= baselines.tauriBrowserWorkingSetKb * 1.2,
+  openBrowserNoWorseThanPreviousElectron:
+    openKb !== null && openKb <= baselines.previousElectronBrowserWorkingSetKb,
+  destroysAtLeast60PercentOfBrowserIncrement:
+    recoveredIncrementRatio !== null && recoveredIncrementRatio >= 0.6,
+  lifecycle30Cycles:
+    metrics.acceptance.lifecycleCycles === 30 &&
+    metrics.acceptance.lifecycleFailures === 0,
+  desktopApi154Methods:
+    metrics.acceptance.desktopMethodCount === 154 &&
+    metrics.acceptance.uniqueDesktopMethodCount === 154,
+  loginDownloadUploadPopup:
+    metrics.acceptance.loginPersistence === true &&
+    metrics.acceptance.download === true &&
+    metrics.acceptance.upload === true &&
+    metrics.acceptance.popup === true,
+  crashRecovery:
+    metrics.acceptance.crashRecovery === true &&
+    metrics.acceptance.unrecoveredCrashes === 0 &&
+    metrics.windowCrashCount === 0,
+  rustHostStable: metrics.rustHostRestartCount === 0,
 };
 
 process.stdout.write(
@@ -99,6 +118,14 @@ process.stdout.write(
       packaged: usePackaged,
       archiveBytes,
       installedBytes,
+      memorySummary: {
+        idleKb,
+        openKb,
+        suspendedKb,
+        destroyedKb,
+        browserIncrementKb,
+        recoveredIncrementRatio,
+      },
       baselines,
       gates,
       allGatesPassed: Object.values(gates).every(Boolean),

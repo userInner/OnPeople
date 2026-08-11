@@ -97,7 +97,11 @@ export class RustBridge {
     this.#clearPending();
   }
 
-  request(request, timeoutMs = 20_000) {
+  request(
+    request,
+    timeoutMs = Number(process.env.ONPEOPLE_DESKTOP_REQUEST_TIMEOUT_MS) ||
+      5 * 60 * 60 * 1_000,
+  ) {
     if (!this.#child || !this.#stream) {
       return Promise.reject(new Error("Rust 桌面宿主尚未启动"));
     }

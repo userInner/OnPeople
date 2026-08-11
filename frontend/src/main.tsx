@@ -31,13 +31,6 @@ declare global {
   }
 }
 
-if (
-  window.onpeopleElectron?.isElectron &&
-  new URLSearchParams(window.location.search).has("electronSpikeBrowser")
-) {
-  useWorkbenchStore.setState({ utilityOpen: true, toolView: "browser" });
-}
-
 if (import.meta.env.DEV) {
   window.__ONPEOPLE_DEV__ = {
     setWorkbenchState: useWorkbenchStore.setState,

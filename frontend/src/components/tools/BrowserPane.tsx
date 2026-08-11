@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { desktopClient, isElectronRuntime } from "../../lib/desktopClient";
+import { desktopClient } from "../../lib/desktopClient";
 import { constrainedBrowserSurfaceBounds } from "../../lib/browserSurfaceBounds";
 import { errorMessage } from "../../lib/errors";
 import { useWorkbenchStore } from "../../store/workbenchStore";
@@ -30,7 +30,6 @@ import type {
 } from "../../types";
 import { IconButton } from "../IconButton";
 import { LocalArtifactBrowserPreview } from "./LocalArtifactBrowserPreview";
-import { ElectronBrowserPane } from "./ElectronBrowserPane";
 
 function normalizeAddress(value: string): string {
   const trimmed = value.trim();
@@ -47,11 +46,10 @@ function tabDisplayTitle(tab: { title: string; url: string }): string {
 }
 
 export function BrowserPane() {
-  if (isElectronRuntime()) return <ElectronBrowserPane />;
-  return <TauriBrowserPane />;
+  return <DesktopBrowserPane />;
 }
 
-function TauriBrowserPane() {
+function DesktopBrowserPane() {
   const browser = useWorkbenchStore((state) => state.browser);
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
   const localArtifactPreview = useWorkbenchStore(

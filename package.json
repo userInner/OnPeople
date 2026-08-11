@@ -2,17 +2,18 @@
   "name": "onpeople-desktop",
   "version": "0.30.0",
   "private": true,
-  "description": "OnPeople local agent workbench powered by Tauri and Rust.",
+  "description": "OnPeople local agent workbench with an Electron shell and Rust core.",
   "type": "module",
   "main": "electron-spike/main.mjs",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "start": "npm run electron:dev",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "npm run bindings:check && tsc -b && vite build",
     "tauri": "tauri",
+    "tauri:start": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "npm run runtime:prepare && tauri build",
     "bindings": "cargo run -p xtask -- bindings",

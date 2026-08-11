@@ -17,6 +17,7 @@ release/
 release-*/
 output/
 dist-electron-spike*/
+dist-electron*/
 electron-spike/runtime/
 services/cloud/.env
 services/cloud/data/
