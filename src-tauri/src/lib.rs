@@ -1854,27 +1854,13 @@ impl AppState {
             "snapshot_worktree" => {
                 let path = required_string(&payload, "worktreePath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                let output = payload
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(&path).join(".onpeople.snapshot.patch"));
-                let root = onpeople_workspace::canonical_workspace(std::path::Path::new(&path))?;
-                let output = if output.is_absolute() {
-                    output
-                } else {
-                    root.join(output)
-                };
-                let value =
-                    onpeople_workspace::WorktreeService::default().snapshot(&root, &output)?;
-                Ok(json!({ "path": value }))
+                self.runtime
+                    .snapshot_worktree(&path, payload.get("output").and_then(Value::as_str))
             }
             "handoff_worktree" => {
                 let path = required_string(&payload, "worktreePath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                onpeople_workspace::WorktreeService::default()
-                    .handoff(std::path::Path::new(&path))?;
-                Ok(json!({ "handedOff": true, "path": path }))
+                self.runtime.handoff_worktree(&path)
             }
             "remove_worktree" => {
                 let root = required_string(&payload, "root")
@@ -1967,17 +1953,15 @@ impl AppState {
             "list_agent_profiles" => Ok(json!({ "profiles": self.runtime.list_agent_profiles()? })),
             "save_agent_profile" => {
                 let profile = payload.get("profile").unwrap_or(&payload);
-                let saved = self.runtime.save_agent_profile(profile)?;
-                self.runtime.reload_agent_configuration().await?;
-                Ok(json!({ "profile": saved, "profiles": self.runtime.list_agent_profiles()? }))
+                self.runtime.save_agent_profile_and_reload(profile).await
             }
             "delete_agent_profile" => {
-                let deleted = self.runtime.delete_agent_profile(
-                    &required_string(&payload, "profileId")
-                        .or_else(|_| required_string(&payload, "id"))?,
-                )?;
-                self.runtime.reload_agent_configuration().await?;
-                Ok(deleted)
+                self.runtime
+                    .delete_agent_profile_and_reload(
+                        &required_string(&payload, "profileId")
+                            .or_else(|_| required_string(&payload, "id"))?,
+                    )
+                    .await
             }
             "list_secrets" => Ok(json!({ "secrets": self.runtime.list_secrets()? })),
             "save_secret" => {
@@ -2064,14 +2048,7 @@ impl AppState {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned);
-                match cwd {
-                    Some(cwd) => self.runtime.start_thread(&cwd).await,
-                    None => Ok(json!({
-                        "pending": true,
-                        "workspaceMode": "isolated",
-                        "cwd": null,
-                    })),
-                }
+                self.runtime.new_task(cwd.as_deref()).await
             }
             "resume_thread" | "fork_thread" | "archive_thread" | "unarchive_thread"
             | "pin_thread" | "mark_thread_unread" | "rename_thread" => {
@@ -2100,7 +2077,6 @@ impl AppState {
                     .or_else(|_| required_string(&payload, "path"))?;
                 let action = required_string(&payload, "action")?;
                 self.runtime
-                    .storage()
                     .update_project(&path, &action, payload.get("value"))
             }
             "reveal_project" => {
@@ -2112,20 +2088,7 @@ impl AppState {
             "archive_project_tasks" => {
                 let path = required_string(&payload, "projectPath")
                     .or_else(|_| required_string(&payload, "path"))?;
-                let threads = self.runtime.storage().list_threads(&ThreadFilters {
-                    archived: false,
-                    query: String::new(),
-                    project_path: Some(path.clone()),
-                    limit: 1_000,
-                })?;
-                let mut archived = 0_u32;
-                for thread in threads.threads {
-                    self.runtime
-                        .thread_command("archive_thread", &json!({ "threadId": thread.id }))
-                        .await?;
-                    archived = archived.saturating_add(1);
-                }
-                Ok(json!({ "projectPath": path, "archived": archived }))
+                self.runtime.archive_project_tasks(&path).await
             }
             "ready_terminal" => {
                 let process_id = required_string(&payload, "processId")?;
@@ -2149,38 +2112,18 @@ impl AppState {
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| self.runtime.default_cwd().to_string_lossy().into_owned());
-                let route_id = payload.get("routeId").and_then(Value::as_str);
-                let mut suggestions = self
-                    .runtime
-                    .project_actions(&cwd)?
-                    .into_iter()
-                    .map(|action| serde_json::to_value(action).unwrap_or(Value::Null))
-                    .collect::<Vec<_>>();
                 let query = payload
                     .get("query")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim();
-                let files = if query.is_empty() {
-                    self.runtime.files_list(&cwd, "")?
-                } else {
-                    self.runtime.files_search(&cwd, query)?.entries
-                };
-                suggestions.extend(
-                    files
-                        .into_iter()
-                        .filter(|entry| entry.kind == "file")
-                        .take(20)
-                        .map(|entry| {
-                            json!({
-                                "kind": "file",
-                                "routeId": route_id,
-                                "path": entry.path,
-                                "label": entry.name,
-                            })
-                        }),
-                );
-                Ok(Value::Array(suggestions))
+                self.runtime
+                    .quick_launcher_suggestions(
+                        &cwd,
+                        payload.get("routeId").and_then(Value::as_str),
+                        query,
+                    )
+                    .map(Value::Array)
             }
             "list_project_files" => {
                 let cwd = required_string(&payload, "cwd")?;
@@ -2408,11 +2351,8 @@ impl AppState {
             "get_app_update_state" => {
                 serde_json::to_value(self.update_state()).map_err(AppError::internal)
             }
-            "restart_runtime" => {
-                self.runtime.stop().await;
-                self.runtime.start().await?;
-                serde_json::to_value(self.runtime.runtime_diagnostics()).map_err(AppError::internal)
-            }
+            "restart_runtime" => serde_json::to_value(self.runtime.restart_runtime().await?)
+                .map_err(AppError::internal),
             "interrupt" => self.runtime.interrupt(&payload).await,
             "resolve_approval" => {
                 self.runtime
@@ -4051,7 +3991,7 @@ fn get_thread_timeline(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Vec<Value>, AppError> {
-    state.runtime.storage().timeline_items(&thread_id)
+    state.runtime.thread_timeline(&thread_id)
 }
 
 #[tauri::command]

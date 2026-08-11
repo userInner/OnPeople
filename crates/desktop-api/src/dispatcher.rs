@@ -3,27 +3,31 @@ use std::sync::Arc;
 use onpeople_core_runtime::{CoreRuntime, MAX_EVENT_REPLAY_LIMIT};
 use onpeople_types::{
     AppError, ErrorCode, GitCommitRequest, GitFileRequest, GitMutationRequest, GitPushRequest,
-    GitRequest, PreferencePatchRequest, TerminalIdRequest, TerminalResizeRequest,
-    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, WorktreeRequest,
+    GitRequest, GoalRequest, GoalUpdateRequest, PreferencePatchRequest, ReasoningRequest,
+    TerminalIdRequest, TerminalResizeRequest, TerminalStartRequest, TerminalWriteRequest,
+    ThreadFilters, ThreadMutationRequest, ThreadRequest, WorktreeRequest,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    AuthorizedProjectAction, BrowserActionRequest, BrowserAnnotationDeleteRequest,
-    BrowserCommandRequest, BrowserHostOperation, BrowserRouteRequest,
-    ConnectorOauthCompleteRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent,
-    DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest,
-    FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest, GeneratedImage,
-    GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest, GitReviewSubmitRequest,
-    LocalArtifactRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
-    ProjectActionAuthorizeRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
-    TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
-    TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
+    AgentIdRequest, AgentListRequest, AgentMessageRequest, AgentProfileIdRequest,
+    AgentProfileSaveRequest, AuthorizedProjectAction, BrowserActionRequest,
+    BrowserAnnotationDeleteRequest, BrowserCommandRequest, BrowserHostOperation,
+    BrowserRouteRequest, ConnectorOauthCompleteRequest, ContextRequest, DESKTOP_PROTOCOL_VERSION,
+    DesktopCapabilities, DesktopEvent, DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse,
+    EventReplay, EventReplayRequest, FileListRequest, FilePreview, FilePreviewRequest,
+    FileSearchRequest, GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest,
+    GitReviewStartRequest, GitReviewSubmitRequest, LocalArtifactRequest, NewTaskRequest,
+    PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest, ProjectActionAuthorizeRequest,
+    ProjectPathRequest, ProjectUpdateRequest, QueuedTaskMessage, QuickLauncherRequest,
+    RuntimeSnapshotRequest, TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest,
+    TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
     TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
     TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
     TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest,
-    TerminalFocusState, TerminalReadyState, should_forward_desktop_event,
+    TerminalFocusState, TerminalReadyState, ThreadAutoNameRequest, WorktreePathRequest,
+    should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -111,6 +115,7 @@ impl DesktopDispatcher {
                 to_value(self.runtime.runtime_snapshot(request.thread_id.as_deref()))
             }
             DesktopMethod::RuntimeDiagnostics => to_value(self.runtime.runtime_diagnostics()),
+            DesktopMethod::RuntimeRestart => to_value(self.runtime.restart_runtime().await?),
             DesktopMethod::EventReplay => {
                 let request: EventReplayRequest = parse_params(params)?;
                 let limit = request
@@ -151,6 +156,169 @@ impl DesktopDispatcher {
             DesktopMethod::ThreadList => {
                 let filters: ThreadFilters = parse_params(params)?;
                 to_value(self.runtime.list_threads(filters).await?)
+            }
+            DesktopMethod::ThreadTimeline => {
+                let request: ThreadRequest = parse_params(params)?;
+                to_value(self.runtime.thread_timeline(&request.thread_id)?)
+            }
+            DesktopMethod::ThreadNew => {
+                let request: NewTaskRequest = parse_params(params)?;
+                self.runtime.new_task(request.cwd.as_deref()).await
+            }
+            DesktopMethod::ThreadFork => {
+                let request: ThreadRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command("fork_thread", &json!({ "threadId": request.thread_id }))
+                    .await
+            }
+            DesktopMethod::ThreadArchive => {
+                let request: ThreadRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command("archive_thread", &json!({ "threadId": request.thread_id }))
+                    .await
+            }
+            DesktopMethod::ThreadUnarchive => {
+                let request: ThreadRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command(
+                        "unarchive_thread",
+                        &json!({ "threadId": request.thread_id }),
+                    )
+                    .await
+            }
+            DesktopMethod::ThreadPin => {
+                let request: ThreadMutationRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command(
+                        "pin_thread",
+                        &json!({ "threadId": request.thread_id, "value": request.value }),
+                    )
+                    .await
+            }
+            DesktopMethod::ThreadUnread => {
+                let request: ThreadMutationRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command(
+                        "mark_thread_unread",
+                        &json!({ "threadId": request.thread_id, "value": request.value }),
+                    )
+                    .await
+            }
+            DesktopMethod::ThreadRename => {
+                let request: ThreadMutationRequest = parse_params(params)?;
+                self.runtime
+                    .thread_command(
+                        "rename_thread",
+                        &json!({ "threadId": request.thread_id, "value": request.value }),
+                    )
+                    .await
+            }
+            DesktopMethod::ThreadAutoName => {
+                let request: ThreadAutoNameRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                self.runtime.auto_name_thread(&payload).await
+            }
+            DesktopMethod::ThreadReasoning => {
+                let request: ReasoningRequest = parse_params(params)?;
+                self.runtime
+                    .set_thread_reasoning(
+                        &request.thread_id,
+                        &request.effort,
+                        request.model.as_deref(),
+                    )
+                    .await
+            }
+            DesktopMethod::GoalSet => {
+                let request: GoalRequest = parse_params(params)?;
+                to_value(self.runtime.set_goal(request).await?)
+            }
+            DesktopMethod::GoalUpdate => {
+                let request: GoalUpdateRequest = parse_params(params)?;
+                to_value(self.runtime.update_goal(request).await?)
+            }
+            DesktopMethod::ContextState => {
+                let request: ContextRequest = parse_params(params)?;
+                self.runtime.context_state(request.thread_id.as_deref())
+            }
+            DesktopMethod::ContextCompact => {
+                let request: ContextRequest = parse_params(params)?;
+                self.runtime
+                    .compact_context(request.thread_id.as_deref())
+                    .await
+            }
+            DesktopMethod::ContextRecalibrate => {
+                let request: ContextRequest = parse_params(params)?;
+                self.runtime
+                    .recalibrate_context(request.thread_id.as_deref())
+                    .await
+            }
+            DesktopMethod::ProjectUpdate => {
+                let request: ProjectUpdateRequest = parse_params(params)?;
+                self.runtime.update_project(
+                    &request.project_path,
+                    &request.action,
+                    request.value.as_ref(),
+                )
+            }
+            DesktopMethod::ProjectArchiveTasks => {
+                let request: ProjectPathRequest = parse_params(params)?;
+                self.runtime
+                    .archive_project_tasks(&request.project_path)
+                    .await
+            }
+            DesktopMethod::ProjectQuickLauncher => {
+                let request: QuickLauncherRequest = parse_params(params)?;
+                to_value(self.runtime.quick_launcher_suggestions(
+                    &request.cwd,
+                    request.route_id.as_deref(),
+                    &request.query,
+                )?)
+            }
+            DesktopMethod::AgentList => {
+                let request: AgentListRequest = parse_params(params)?;
+                Ok(json!({
+                    "agents": self
+                        .runtime
+                        .list_agent_tasks(request.parent_thread_id.as_deref())
+                        .await?,
+                }))
+            }
+            DesktopMethod::AgentProfileList => {
+                Ok(json!({ "profiles": self.runtime.list_agent_profiles()? }))
+            }
+            DesktopMethod::AgentProfileSave => {
+                let request: AgentProfileSaveRequest = parse_params(params)?;
+                let profile = Value::Object(request.profile.into_iter().collect());
+                self.runtime.save_agent_profile_and_reload(&profile).await
+            }
+            DesktopMethod::AgentProfileDelete => {
+                let request: AgentProfileIdRequest = parse_params(params)?;
+                self.runtime
+                    .delete_agent_profile_and_reload(&request.profile_id)
+                    .await
+            }
+            DesktopMethod::AgentMessage => {
+                let request: AgentMessageRequest = parse_params(params)?;
+                self.runtime
+                    .message_agent(&request.agent_id, &request.text)
+                    .await
+            }
+            DesktopMethod::AgentStop => {
+                let request: AgentIdRequest = parse_params(params)?;
+                self.runtime.stop_agent(&request.agent_id).await
+            }
+            DesktopMethod::AgentRead => {
+                let request: AgentIdRequest = parse_params(params)?;
+                self.runtime.read_agent(&request.agent_id).await
+            }
+            DesktopMethod::WorktreeSnapshot => {
+                let request: WorktreePathRequest = parse_params(params)?;
+                self.runtime
+                    .snapshot_worktree(&request.worktree_path, request.output.as_deref())
+            }
+            DesktopMethod::WorktreeHandoff => {
+                let request: WorktreePathRequest = parse_params(params)?;
+                self.runtime.handoff_worktree(&request.worktree_path)
             }
             DesktopMethod::SchedulerGet => to_value(self.runtime.scheduler_snapshot()),
             DesktopMethod::TaskStart => {
@@ -997,6 +1165,91 @@ mod tests {
             })
             .await;
         assert!(state.ok, "unexpected response: {state:?}");
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatches_conversation_project_and_agent_domains_without_shell_commands() {
+        let temporary = tempfile::tempdir().expect("temporary workspace");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let pending = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "thread-new-pending".to_owned(),
+                method: DesktopMethod::ThreadNew,
+                params: json!({ "cwd": null }),
+            })
+            .await;
+        assert!(pending.ok, "unexpected response: {pending:?}");
+        assert_eq!(
+            pending
+                .result
+                .as_ref()
+                .and_then(|value| value["pending"].as_bool()),
+            Some(true)
+        );
+
+        let project = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "project-update".to_owned(),
+                method: DesktopMethod::ProjectUpdate,
+                params: json!({
+                    "projectPath": temporary.path(),
+                    "action": "pin",
+                    "value": true,
+                }),
+            })
+            .await;
+        assert!(project.ok, "unexpected response: {project:?}");
+        assert_eq!(
+            project
+                .result
+                .as_ref()
+                .and_then(|value| value["pinned"].as_bool()),
+            Some(true)
+        );
+
+        let agents = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "agent-list".to_owned(),
+                method: DesktopMethod::AgentList,
+                params: json!({ "parentThreadId": null }),
+            })
+            .await;
+        assert!(agents.ok, "unexpected response: {agents:?}");
+        assert_eq!(
+            agents
+                .result
+                .as_ref()
+                .and_then(|value| value["agents"].as_array())
+                .map(Vec::len),
+            Some(0)
+        );
+
+        let context = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "context-state".to_owned(),
+                method: DesktopMethod::ContextState,
+                params: json!({ "threadId": null }),
+            })
+            .await;
+        assert!(context.ok, "unexpected response: {context:?}");
+        assert!(
+            context
+                .result
+                .as_ref()
+                .is_some_and(|value| value.get("snapshot").is_some())
+        );
         runtime.stop().await;
     }
 

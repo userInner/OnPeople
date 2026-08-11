@@ -1592,6 +1592,12 @@ impl CoreRuntime {
         }
     }
 
+    pub async fn restart_runtime(&self) -> Result<RuntimeDiagnostics, AppError> {
+        self.stop().await;
+        self.start().await?;
+        Ok(self.runtime_diagnostics())
+    }
+
     pub fn preferences(&self) -> Result<Preferences, AppError> {
         self.storage.get_preferences()
     }
@@ -1649,6 +1655,21 @@ impl CoreRuntime {
             }
         }
         self.storage.list_threads(&filters)
+    }
+
+    pub fn thread_timeline(&self, thread_id: &str) -> Result<Vec<Value>, AppError> {
+        self.storage.timeline_items(thread_id)
+    }
+
+    pub async fn new_task(&self, cwd: Option<&str>) -> Result<Value, AppError> {
+        match cwd.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(cwd) => self.start_thread(cwd).await,
+            None => Ok(json!({
+                "pending": true,
+                "workspaceMode": "isolated",
+                "cwd": null,
+            })),
+        }
     }
 
     pub async fn start_thread(&self, cwd: &str) -> Result<Value, AppError> {
@@ -3485,6 +3506,65 @@ impl CoreRuntime {
         discover_project_actions(Path::new(cwd))
     }
 
+    pub fn update_project(
+        &self,
+        project_path: &str,
+        action: &str,
+        value: Option<&Value>,
+    ) -> Result<Value, AppError> {
+        self.storage.update_project(project_path, action, value)
+    }
+
+    pub async fn archive_project_tasks(&self, project_path: &str) -> Result<Value, AppError> {
+        let threads = self.storage.list_threads(&ThreadFilters {
+            archived: false,
+            query: String::new(),
+            project_path: Some(project_path.to_owned()),
+            limit: 1_000,
+        })?;
+        let mut archived = 0_u32;
+        for thread in threads.threads {
+            self.thread_command("archive_thread", &json!({ "threadId": thread.id }))
+                .await?;
+            archived = archived.saturating_add(1);
+        }
+        Ok(json!({ "projectPath": project_path, "archived": archived }))
+    }
+
+    pub fn quick_launcher_suggestions(
+        &self,
+        cwd: &str,
+        route_id: Option<&str>,
+        query: &str,
+    ) -> Result<Vec<Value>, AppError> {
+        let mut suggestions = self
+            .project_actions(cwd)?
+            .into_iter()
+            .map(|action| serde_json::to_value(action).map_err(AppError::internal))
+            .collect::<Result<Vec<_>, _>>()?;
+        let query = query.trim();
+        let files = if query.is_empty() {
+            self.files_list(cwd, "")?
+        } else {
+            self.files_search(cwd, query)?.entries
+        };
+        suggestions.extend(
+            files
+                .into_iter()
+                .filter(|entry| entry.kind == "file")
+                .take(20)
+                .map(|entry| {
+                    json!({
+                        "kind": "file",
+                        "routeId": route_id,
+                        "path": entry.path,
+                        "label": entry.name,
+                    })
+                }),
+        );
+        Ok(suggestions)
+    }
+
     pub fn new_thread(&self, cwd: &str) -> Result<Value, AppError> {
         let id = Uuid::now_v7().to_string();
         let now = Utc::now();
@@ -3668,6 +3748,21 @@ impl CoreRuntime {
             std::fs::remove_file(&path).map_err(AppError::storage)?;
         }
         Ok(json!({ "deleted": deleted, "id": id }))
+    }
+
+    pub async fn save_agent_profile_and_reload(&self, profile: &Value) -> Result<Value, AppError> {
+        let saved = self.save_agent_profile(profile)?;
+        self.reload_agent_configuration().await?;
+        Ok(json!({
+            "profile": saved,
+            "profiles": self.list_agent_profiles()?,
+        }))
+    }
+
+    pub async fn delete_agent_profile_and_reload(&self, id: &str) -> Result<Value, AppError> {
+        let deleted = self.delete_agent_profile(id)?;
+        self.reload_agent_configuration().await?;
+        Ok(deleted)
     }
 
     pub async fn reload_agent_configuration(&self) -> Result<(), AppError> {
@@ -4034,6 +4129,29 @@ impl CoreRuntime {
             )?)
             .map_err(AppError::internal)?),
         }
+    }
+
+    pub fn snapshot_worktree(
+        &self,
+        worktree_path: &str,
+        output: Option<&str>,
+    ) -> Result<Value, AppError> {
+        let root = onpeople_workspace::canonical_workspace(Path::new(worktree_path))?;
+        let output = output
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join(".onpeople.snapshot.patch"));
+        let output = if output.is_absolute() {
+            output
+        } else {
+            root.join(output)
+        };
+        let path = self.worktrees.snapshot(&root, &output)?;
+        Ok(json!({ "path": path }))
+    }
+
+    pub fn handoff_worktree(&self, worktree_path: &str) -> Result<Value, AppError> {
+        self.worktrees.handoff(Path::new(worktree_path))?;
+        Ok(json!({ "handedOff": true, "path": worktree_path }))
     }
 
     pub fn scheduler_snapshot(&self) -> SchedulerSnapshot {

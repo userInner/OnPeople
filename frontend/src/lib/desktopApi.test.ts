@@ -217,6 +217,38 @@ describe("DesktopApiClient", () => {
     ]);
   });
 
+  it("routes conversation, project, agent and worktree capabilities through stable methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {},
+    }));
+    const client = createDesktopApiClient(transport, () => "request-workbench");
+
+    await client.request("thread.timeline", { threadId: "thread-1" });
+    await client.request("project.update", {
+      projectPath: "/workspace",
+      action: "pin",
+      value: true,
+    });
+    await client.request("agent.message", {
+      agentId: "agent-1",
+      text: "继续",
+    });
+    await client.request("worktree.snapshot", {
+      worktreePath: "/workspace",
+      output: null,
+    });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread.timeline",
+      "project.update",
+      "agent.message",
+      "worktree.snapshot",
+    ]);
+  });
+
   it("preserves legacy steering response shapes", () => {
     expect(
       legacySteerResult({

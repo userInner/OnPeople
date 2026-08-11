@@ -56,4 +56,59 @@ describe("desktopClient native domain compatibility", () => {
       ),
     ).toEqual(["terminal.start", "file.list", "git.hunks"]);
   });
+
+  it("keeps conversation and agent helpers on the stable request boundary", async () => {
+    const invoke = vi.fn(async (command: string, args: unknown) => {
+      expect(command).toBe("desktop_request");
+      const request = (
+        args as { request: { requestId: string; method: string } }
+      ).request;
+      const result =
+        request.method === "thread.new"
+          ? { pending: true, workspaceMode: "isolated", cwd: null }
+          : request.method === "agent.list"
+            ? { agents: [] }
+            : request.method === "context.state"
+              ? { snapshot: { state: "ready" } }
+              : request.method === "worktree.snapshot"
+                ? { path: "/workspace/.onpeople.snapshot.patch" }
+                : {};
+      return {
+        protocolVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        result,
+      };
+    });
+    window.__ONPEOPLE_DEV__ = {
+      setWorkbenchState: vi.fn() as never,
+      invoke,
+    };
+
+    await expect(desktopClient.newTask()).resolves.toMatchObject({
+      pending: true,
+    });
+    await expect(desktopClient.listAgents()).resolves.toEqual({ agents: [] });
+    await expect(desktopClient.getContextState()).resolves.toMatchObject({
+      snapshot: { state: "ready" },
+    });
+    await expect(desktopClient.snapshotWorktree("/workspace")).resolves.toEqual(
+      { path: "/workspace/.onpeople.snapshot.patch" },
+    );
+
+    expect(
+      invoke.mock.calls.map(([, args]) =>
+        String((args as { request: { method: string } }).request.method),
+      ),
+    ).toEqual([
+      "thread.new",
+      "agent.list",
+      "context.state",
+      "worktree.snapshot",
+    ]);
+    expect("spawnAgent" in desktopClient).toBe(false);
+    expect("createAgentTask" in desktopClient).toBe(false);
+    expect("dispatchAgentTask" in desktopClient).toBe(false);
+    expect("removeAgentTask" in desktopClient).toBe(false);
+  });
 });

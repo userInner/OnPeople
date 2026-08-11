@@ -1,4 +1,9 @@
 import type { AgentStatus } from "../bindings/AgentStatus";
+import type { AgentIdRequest } from "../bindings/AgentIdRequest";
+import type { AgentListRequest } from "../bindings/AgentListRequest";
+import type { AgentMessageRequest } from "../bindings/AgentMessageRequest";
+import type { AgentProfileIdRequest } from "../bindings/AgentProfileIdRequest";
+import type { AgentProfileSaveRequest } from "../bindings/AgentProfileSaveRequest";
 import type { BrowserActionRequest } from "../bindings/BrowserActionRequest";
 import type { BrowserAnnotation } from "../bindings/BrowserAnnotation";
 import type { BrowserAnnotationDeleteRequest } from "../bindings/BrowserAnnotationDeleteRequest";
@@ -15,6 +20,8 @@ import type { DesktopRequest } from "../bindings/DesktopRequest";
 import type { DesktopResponse } from "../bindings/DesktopResponse";
 import type { EventReplay } from "../bindings/EventReplay";
 import type { EventReplayRequest } from "../bindings/EventReplayRequest";
+import type { Goal } from "../bindings/Goal";
+import type { GoalUpdateRequest } from "../bindings/GoalUpdateRequest";
 import type { AuthorizedProjectAction } from "../bindings/AuthorizedProjectAction";
 import type { FileListRequest } from "../bindings/FileListRequest";
 import type { FilePreview } from "../bindings/FilePreview";
@@ -26,6 +33,11 @@ import type { GitPullRequestRequest } from "../bindings/GitPullRequestRequest";
 import type { GitReviewStartRequest } from "../bindings/GitReviewStartRequest";
 import type { GitReviewSubmitRequest } from "../bindings/GitReviewSubmitRequest";
 import type { LocalArtifactRequest } from "../bindings/LocalArtifactRequest";
+import type { ContextRequest } from "../bindings/ContextRequest";
+import type { NewTaskRequest } from "../bindings/NewTaskRequest";
+import type { ProjectPathRequest } from "../bindings/ProjectPathRequest";
+import type { ProjectUpdateRequest } from "../bindings/ProjectUpdateRequest";
+import type { QuickLauncherRequest } from "../bindings/QuickLauncherRequest";
 import type { ProjectActionAuthorizeRequest } from "../bindings/ProjectActionAuthorizeRequest";
 import type { TerminalFocusRequest } from "../bindings/TerminalFocusRequest";
 import type { TerminalFocusState } from "../bindings/TerminalFocusState";
@@ -48,10 +60,15 @@ import type { PluginIdRequest } from "../bindings/PluginIdRequest";
 import type { PluginPayloadRequest } from "../bindings/PluginPayloadRequest";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
+import type { ReasoningRequest } from "../bindings/ReasoningRequest";
 import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
+import type { ThreadAutoNameRequest } from "../bindings/ThreadAutoNameRequest";
+import type { ThreadMutationRequest } from "../bindings/ThreadMutationRequest";
+import type { ThreadRequest } from "../bindings/ThreadRequest";
+import type { WorktreePathRequest } from "../bindings/WorktreePathRequest";
 import type { TaskCancelRequest } from "../bindings/TaskCancelRequest";
 import type { TaskCancellation } from "../bindings/TaskCancellation";
 import type { TaskApprovalResolution } from "../bindings/TaskApprovalResolution";
@@ -106,6 +123,10 @@ export interface DesktopMethodMap {
     params: Record<string, never>;
     result: RuntimeDiagnostics;
   };
+  "runtime.restart": {
+    params: Record<string, never>;
+    result: RuntimeDiagnostics;
+  };
   "event.replay": {
     params: EventReplayRequest;
     result: EventReplay;
@@ -122,6 +143,55 @@ export interface DesktopMethodMap {
     params: ThreadFilters;
     result: ThreadList;
   };
+  "thread.timeline": { params: ThreadRequest; result: JsonValue[] };
+  "thread.new": { params: NewTaskRequest; result: JsonValue };
+  "thread.fork": { params: ThreadRequest; result: JsonValue };
+  "thread.archive": { params: ThreadRequest; result: JsonValue };
+  "thread.unarchive": { params: ThreadRequest; result: JsonValue };
+  "thread.pin": { params: ThreadMutationRequest; result: JsonValue };
+  "thread.unread": { params: ThreadMutationRequest; result: JsonValue };
+  "thread.rename": { params: ThreadMutationRequest; result: JsonValue };
+  "thread.auto-name": { params: ThreadAutoNameRequest; result: JsonValue };
+  "thread.reasoning": { params: ReasoningRequest; result: JsonValue };
+  "goal.set": {
+    params: {
+      objective: string;
+      tokenBudget: number | null;
+      threadId: string | null;
+    };
+    result: Goal;
+  };
+  "goal.update": { params: GoalUpdateRequest; result: Goal | null };
+  "context.state": { params: ContextRequest; result: JsonValue };
+  "context.compact": { params: ContextRequest; result: JsonValue };
+  "context.recalibrate": { params: ContextRequest; result: JsonValue };
+  "project.update": { params: ProjectUpdateRequest; result: JsonValue };
+  "project.archive-tasks": {
+    params: ProjectPathRequest;
+    result: JsonValue;
+  };
+  "project.quick-launcher": {
+    params: QuickLauncherRequest;
+    result: JsonValue[];
+  };
+  "agent.list": { params: AgentListRequest; result: JsonValue };
+  "agent.profile.list": {
+    params: Record<string, never>;
+    result: JsonValue;
+  };
+  "agent.profile.save": {
+    params: AgentProfileSaveRequest;
+    result: JsonValue;
+  };
+  "agent.profile.delete": {
+    params: AgentProfileIdRequest;
+    result: JsonValue;
+  };
+  "agent.message": { params: AgentMessageRequest; result: JsonValue };
+  "agent.stop": { params: AgentIdRequest; result: JsonValue };
+  "agent.read": { params: AgentIdRequest; result: JsonValue };
+  "worktree.snapshot": { params: WorktreePathRequest; result: JsonValue };
+  "worktree.handoff": { params: WorktreePathRequest; result: JsonValue };
   "scheduler.get": {
     params: Record<string, never>;
     result: SchedulerSnapshot;

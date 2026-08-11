@@ -34,10 +34,20 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `runtime.stop`
 - `runtime.snapshot`
 - `runtime.diagnostics`
+- `runtime.restart`
 - `event.replay`
 - `preferences.get`
 - `preferences.save`
 - `thread.list`
+- `thread.timeline`, `thread.new`, `thread.fork`
+- `thread.archive`, `thread.unarchive`, `thread.pin`, `thread.unread`
+- `thread.rename`, `thread.auto-name`, `thread.reasoning`
+- `goal.set`, `goal.update`
+- `context.state`, `context.compact`, `context.recalibrate`
+- `project.update`, `project.archive-tasks`, `project.quick-launcher`
+- `agent.list`, `agent.profile.list`, `agent.profile.save`, `agent.profile.delete`
+- `agent.message`, `agent.stop`, `agent.read`
+- `worktree.snapshot`, `worktree.handoff`
 - `scheduler.get`
 - `task.start`
 - `task.cancel`
@@ -142,11 +152,31 @@ not falsely exposed as CoreRuntime methods:
 - opening/revealing a file or generated image in the operating system;
 - copying image bytes to the native clipboard;
 - picking files/directories through a native dialog;
-- worktree snapshot/handoff paths that invoke shell-specific workflows;
 - terminal output/exit streams and native menu event delivery.
 
 Tauri retains these commands during migration. Electron must implement the
 same adapter effects without changing the Desktop API protocol.
+
+## Conversation, projects, agents, and worktrees
+
+Goal changes, thread lifecycle and metadata, timeline reads, context
+maintenance, reasoning settings, and runtime restart now use stable domain
+methods. Their compatibility helpers retain the previous argument and result
+shapes, but no longer call Tauri command names directly.
+
+Project metadata, bulk task archival, and quick-launcher composition are owned
+by `CoreRuntime`. The quick launcher combines project actions with a bounded
+file search without requiring the desktop shell. Agent discovery, profile
+CRUD, messaging, stopping, and reading likewise dispatch through the runtime;
+profile mutations reload the Codex agent configuration inside one runtime
+facade. The four obsolete `spawn/create/dispatch/remove` agent wrappers were
+removed from React because Tauri already rejected them and no consumer used
+them.
+
+Worktree snapshot and handoff are filesystem/runtime operations rather than
+native UI effects. They now live behind `CoreRuntime` and are available to any
+Desktop API transport. Legacy Tauri commands stay registered as rollback
+aliases and delegate to the same facades.
 
 ## Browser and extension host boundaries
 

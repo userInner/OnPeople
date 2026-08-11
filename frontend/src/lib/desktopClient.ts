@@ -20,13 +20,11 @@ import type {
   DesktopRecoveryRequired,
   EventReplay,
   EventEnvelope,
-  Goal,
   LiveStatus,
   Preferences,
   PromptSubmission,
   ProviderKind,
   ProviderSettings,
-  RuntimeDiagnostics,
   SchedulerSnapshot,
   StreamEnvelope,
   TaskStartRequest,
@@ -278,9 +276,9 @@ export const desktopClient = {
   activateDeepLinks: () => call<string[]>("activate_deep_links"),
   frontendReady: () => call<void>("frontend_ready"),
   listAgents: (parentThreadId?: string | null) =>
-    call<{ agents?: Array<Record<string, unknown>> }>("list_agents", {
-      request: { parentThreadId: parentThreadId ?? null },
-    }),
+    desktopApi.request("agent.list", {
+      parentThreadId: parentThreadId ?? null,
+    }) as Promise<{ agents?: Array<Record<string, unknown>> }>,
   agentStatus: () => desktopApi.request("runtime.status", {}),
   getPreferences: () => desktopApi.request("preferences.get", {}),
   savePreferences: (preferences: Preferences) =>
@@ -300,7 +298,9 @@ export const desktopClient = {
       limit: filters.limit ?? 200,
     }),
   threadTimeline: (threadId: string) =>
-    call<Array<Record<string, unknown>>>("get_thread_timeline", { threadId }),
+    desktopApi.request("thread.timeline", { threadId }) as Promise<
+      Array<Record<string, unknown>>
+    >,
   runtimeSnapshot: (threadId?: string | null) =>
     desktopApi.request("runtime.snapshot", { threadId: threadId ?? null }),
   getRuntimeSnapshot: (threadId?: string | null) =>
@@ -328,20 +328,20 @@ export const desktopClient = {
     tokenBudget?: number | null;
     threadId?: string | null;
   }) =>
-    call<Goal>("set_goal", {
-      request: {
-        objective: request.objective,
-        tokenBudget: request.tokenBudget ?? null,
-        threadId: request.threadId ?? null,
-      },
+    desktopApi.request("goal.set", {
+      objective: request.objective,
+      tokenBudget: request.tokenBudget ?? null,
+      threadId: request.threadId ?? null,
     }),
   updateGoal: (request: {
     threadId: string;
     action: string;
     value?: unknown;
   }) =>
-    call<Goal | null>("update_goal", {
-      request: { ...request, value: request.value ?? null },
+    desktopApi.request("goal.update", {
+      threadId: request.threadId,
+      action: request.action,
+      value: (request.value ?? null) as JsonValue,
     }),
   getProvider: (kind: ProviderKind, threadId?: string | null) =>
     call<ProviderSettings>("get_provider", {
@@ -536,9 +536,9 @@ export const desktopClient = {
       threadId: threadId ?? null,
     }) as Promise<Record<string, unknown>>,
   newTask: (cwd?: string) =>
-    call<Record<string, unknown>>("new_task", {
-      request: { cwd: cwd ?? null },
-    }),
+    desktopApi.request("thread.new", { cwd: cwd ?? null }) as Promise<
+      Record<string, unknown>
+    >,
   getProviderSettings: (type: ProviderKind, threadId?: string | null) =>
     call<ProviderSettings>("get_provider_settings", {
       request: { type, threadId: threadId ?? null },
@@ -548,9 +548,11 @@ export const desktopClient = {
     effort: string,
     model?: string | null,
   ) =>
-    call<Record<string, unknown>>("set_thread_reasoning_effort", {
-      request: { threadId, effort, model: model ?? null },
-    }),
+    desktopApi.request("thread.reasoning", {
+      threadId,
+      effort,
+      model: model ?? null,
+    }) as Promise<Record<string, unknown>>,
   loginCloudAccount: (payload: Record<string, unknown>) =>
     call<Record<string, unknown>>("login_cloud_account", { request: payload }),
   sendCloudRegistrationCode: (payload: Record<string, unknown>) =>
@@ -596,29 +598,35 @@ export const desktopClient = {
     return recovery.resumePayload as Record<string, unknown>;
   },
   forkThread: (threadId: string) =>
-    call<Record<string, unknown>>("fork_thread", { request: { threadId } }),
+    desktopApi.request("thread.fork", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   archiveThread: (threadId: string) =>
-    call<Record<string, unknown>>("archive_thread", { request: { threadId } }),
+    desktopApi.request("thread.archive", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   unarchiveThread: (threadId: string) =>
-    call<Record<string, unknown>>("unarchive_thread", {
-      request: { threadId },
-    }),
+    desktopApi.request("thread.unarchive", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   pinThread: (threadId: string, pinned: boolean) =>
-    call<Record<string, unknown>>("pin_thread", {
-      request: { threadId, pinned },
-    }),
+    desktopApi.request("thread.pin", { threadId, value: pinned }) as Promise<
+      Record<string, unknown>
+    >,
   markThreadUnread: (threadId: string, unread: boolean) =>
-    call<Record<string, unknown>>("mark_thread_unread", {
-      request: { threadId, unread },
-    }),
+    desktopApi.request("thread.unread", { threadId, value: unread }) as Promise<
+      Record<string, unknown>
+    >,
   renameThread: (threadId: string, name: string) =>
-    call<Record<string, unknown>>("rename_thread", {
-      request: { threadId, name },
-    }),
+    desktopApi.request("thread.rename", { threadId, value: name }) as Promise<
+      Record<string, unknown>
+    >,
   autoNameThread: (threadId: string, text: string, model?: string | null) =>
-    call<Record<string, unknown>>("auto_name_thread", {
-      request: { threadId, text, model: model ?? null },
-    }),
+    desktopApi.request("thread.auto-name", {
+      threadId,
+      text,
+      model: model ?? null,
+    }) as Promise<Record<string, unknown>>,
   revealThread: (threadId: string) =>
     call<Record<string, unknown>>("reveal_thread", { request: { threadId } }),
   showTerminalContextMenu: (payload: Record<string, unknown>) =>
@@ -632,17 +640,19 @@ export const desktopClient = {
       processId: processId ?? null,
     }) as Promise<Record<string, unknown>>,
   updateProject: (projectPath: string, action: string, value?: unknown) =>
-    call<Record<string, unknown>>("update_project", {
-      request: { projectPath, action, value: value ?? null },
-    }),
+    desktopApi.request("project.update", {
+      projectPath,
+      action,
+      value: (value ?? null) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   revealProject: (projectPath: string) =>
     call<Record<string, unknown>>("reveal_project", {
       request: { projectPath },
     }),
   archiveProjectTasks: (projectPath: string) =>
-    call<Record<string, unknown>>("archive_project_tasks", {
-      request: { projectPath },
-    }),
+    desktopApi.request("project.archive-tasks", { projectPath }) as Promise<
+      Record<string, unknown>
+    >,
   readyTerminal: (processId: string) =>
     desktopApi.request("terminal.ready", { processId }) as Promise<
       Record<string, unknown>
@@ -685,8 +695,7 @@ export const desktopClient = {
     }) as Promise<Record<string, unknown>>,
   openEditor: (payload: Record<string, unknown>) =>
     call<Record<string, unknown>>("open_editor", { request: payload }),
-  restartRuntime: () =>
-    call<RuntimeDiagnostics>("restart_runtime", { request: {} }),
+  restartRuntime: () => desktopApi.request("runtime.restart", {}),
   listExtensions: (cwd?: string | null) =>
     call<Record<string, unknown>>("list_extensions", {
       request: { cwd: cwd ?? null },
@@ -740,33 +749,29 @@ export const desktopClient = {
       request: { providerType, modelId },
     }),
   listAgentProfiles: () =>
-    call<Record<string, unknown>>("list_agent_profiles", { request: {} }),
+    desktopApi.request("agent.profile.list", {}) as Promise<
+      Record<string, unknown>
+    >,
   saveAgentProfile: (profile: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_agent_profile", {
-      request: { profile },
-    }),
+    desktopApi.request("agent.profile.save", {
+      profile: jsonRecord(profile),
+    }) as Promise<Record<string, unknown>>,
   deleteAgentProfile: (profileId: string) =>
-    call<Record<string, unknown>>("delete_agent_profile", {
-      request: { profileId },
-    }),
-  spawnAgent: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("spawn_agent", { request: payload }),
-  createAgentTask: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_agent_task", { request: payload }),
-  dispatchAgentTask: (taskId: string) =>
-    call<Record<string, unknown>>("dispatch_agent_task", {
-      request: { taskId },
-    }),
-  removeAgentTask: (taskId: string) =>
-    call<Record<string, unknown>>("remove_agent_task", { request: { taskId } }),
+    desktopApi.request("agent.profile.delete", { profileId }) as Promise<
+      Record<string, unknown>
+    >,
   messageAgent: (agentId: string, text: string) =>
-    call<Record<string, unknown>>("message_agent", {
-      request: { agentId, text },
-    }),
+    desktopApi.request("agent.message", { agentId, text }) as Promise<
+      Record<string, unknown>
+    >,
   stopAgent: (agentId: string) =>
-    call<Record<string, unknown>>("stop_agent", { request: { agentId } }),
+    desktopApi.request("agent.stop", { agentId }) as Promise<
+      Record<string, unknown>
+    >,
   readAgent: (agentId: string) =>
-    call<Record<string, unknown>>("read_agent", { request: { agentId } }),
+    desktopApi.request("agent.read", { agentId }) as Promise<
+      Record<string, unknown>
+    >,
   listWorktrees: (cwd: string) =>
     desktopApi.request("git.worktree", {
       root: cwd,
@@ -784,13 +789,15 @@ export const desktopClient = {
       removeBranch: false,
     }) as Promise<Record<string, unknown>>,
   handoffWorktree: (worktreePath: string) =>
-    call<Record<string, unknown>>("handoff_worktree", {
-      request: { worktreePath },
-    }),
+    desktopApi.request("worktree.handoff", {
+      worktreePath,
+      output: null,
+    }) as Promise<Record<string, unknown>>,
   snapshotWorktree: (worktreePath: string) =>
-    call<Record<string, unknown>>("snapshot_worktree", {
-      request: { worktreePath },
-    }),
+    desktopApi.request("worktree.snapshot", {
+      worktreePath,
+      output: null,
+    }) as Promise<Record<string, unknown>>,
   removeWorktree: (worktreePath: string, root?: string | null) =>
     desktopApi.request("git.worktree", {
       root: root ?? "",
@@ -800,17 +807,17 @@ export const desktopClient = {
       removeBranch: true,
     }) as Promise<Record<string, unknown>>,
   getContextState: (threadId?: string | null) =>
-    call<Record<string, unknown>>("get_context_state", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.state", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   compactContext: (threadId?: string | null) =>
-    call<Record<string, unknown>>("compact_context", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.compact", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   recalibrateContext: (threadId?: string | null) =>
-    call<Record<string, unknown>>("recalibrate_context", {
-      request: { threadId: threadId ?? null },
-    }),
+    desktopApi.request("context.recalibrate", {
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   taskSteer,
   steerTurn: async (
     text: string,
@@ -944,9 +951,11 @@ export const desktopClient = {
     routeId?: string | null,
     query = "",
   ) =>
-    call<Array<Record<string, unknown>>>("get_quick_launcher_suggestions", {
-      request: { cwd, routeId: routeId ?? null, query },
-    }),
+    desktopApi.request("project.quick-launcher", {
+      cwd,
+      routeId: routeId ?? null,
+      query,
+    }) as Promise<Array<Record<string, unknown>>>,
   getProjectActions: (cwd: string) =>
     desktopApi.request("file.project-actions", { cwd }),
   authorizeProjectAction: (payload: Record<string, unknown>) =>

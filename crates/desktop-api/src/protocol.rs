@@ -23,6 +23,8 @@ pub enum DesktopMethod {
     RuntimeSnapshot,
     #[serde(rename = "runtime.diagnostics")]
     RuntimeDiagnostics,
+    #[serde(rename = "runtime.restart")]
+    RuntimeRestart,
     #[serde(rename = "event.replay")]
     EventReplay,
     #[serde(rename = "preferences.get")]
@@ -31,6 +33,60 @@ pub enum DesktopMethod {
     PreferencesSave,
     #[serde(rename = "thread.list")]
     ThreadList,
+    #[serde(rename = "thread.timeline")]
+    ThreadTimeline,
+    #[serde(rename = "thread.new")]
+    ThreadNew,
+    #[serde(rename = "thread.fork")]
+    ThreadFork,
+    #[serde(rename = "thread.archive")]
+    ThreadArchive,
+    #[serde(rename = "thread.unarchive")]
+    ThreadUnarchive,
+    #[serde(rename = "thread.pin")]
+    ThreadPin,
+    #[serde(rename = "thread.unread")]
+    ThreadUnread,
+    #[serde(rename = "thread.rename")]
+    ThreadRename,
+    #[serde(rename = "thread.auto-name")]
+    ThreadAutoName,
+    #[serde(rename = "thread.reasoning")]
+    ThreadReasoning,
+    #[serde(rename = "goal.set")]
+    GoalSet,
+    #[serde(rename = "goal.update")]
+    GoalUpdate,
+    #[serde(rename = "context.state")]
+    ContextState,
+    #[serde(rename = "context.compact")]
+    ContextCompact,
+    #[serde(rename = "context.recalibrate")]
+    ContextRecalibrate,
+    #[serde(rename = "project.update")]
+    ProjectUpdate,
+    #[serde(rename = "project.archive-tasks")]
+    ProjectArchiveTasks,
+    #[serde(rename = "project.quick-launcher")]
+    ProjectQuickLauncher,
+    #[serde(rename = "agent.list")]
+    AgentList,
+    #[serde(rename = "agent.profile.list")]
+    AgentProfileList,
+    #[serde(rename = "agent.profile.save")]
+    AgentProfileSave,
+    #[serde(rename = "agent.profile.delete")]
+    AgentProfileDelete,
+    #[serde(rename = "agent.message")]
+    AgentMessage,
+    #[serde(rename = "agent.stop")]
+    AgentStop,
+    #[serde(rename = "agent.read")]
+    AgentRead,
+    #[serde(rename = "worktree.snapshot")]
+    WorktreeSnapshot,
+    #[serde(rename = "worktree.handoff")]
+    WorktreeHandoff,
     #[serde(rename = "scheduler.get")]
     SchedulerGet,
     #[serde(rename = "task.start")]
@@ -142,17 +198,45 @@ pub enum DesktopMethod {
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 64] = [
+    pub const ALL: [Self; 92] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
         Self::RuntimeStop,
         Self::RuntimeSnapshot,
         Self::RuntimeDiagnostics,
+        Self::RuntimeRestart,
         Self::EventReplay,
         Self::PreferencesGet,
         Self::PreferencesSave,
         Self::ThreadList,
+        Self::ThreadTimeline,
+        Self::ThreadNew,
+        Self::ThreadFork,
+        Self::ThreadArchive,
+        Self::ThreadUnarchive,
+        Self::ThreadPin,
+        Self::ThreadUnread,
+        Self::ThreadRename,
+        Self::ThreadAutoName,
+        Self::ThreadReasoning,
+        Self::GoalSet,
+        Self::GoalUpdate,
+        Self::ContextState,
+        Self::ContextCompact,
+        Self::ContextRecalibrate,
+        Self::ProjectUpdate,
+        Self::ProjectArchiveTasks,
+        Self::ProjectQuickLauncher,
+        Self::AgentList,
+        Self::AgentProfileList,
+        Self::AgentProfileSave,
+        Self::AgentProfileDelete,
+        Self::AgentMessage,
+        Self::AgentStop,
+        Self::AgentRead,
+        Self::WorktreeSnapshot,
+        Self::WorktreeHandoff,
         Self::SchedulerGet,
         Self::TaskStart,
         Self::TaskCancel,
@@ -622,6 +706,106 @@ pub struct RuntimeSnapshotRequest {
     pub thread_id: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct NewTaskRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ContextRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ThreadAutoNameRequest {
+    pub thread_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectUpdateRequest {
+    pub project_path: String,
+    pub action: String,
+    #[serde(default)]
+    pub value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ProjectPathRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct QuickLauncherRequest {
+    pub cwd: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+    #[serde(default)]
+    pub query: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentListRequest {
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentProfileSaveRequest {
+    pub profile: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentProfileIdRequest {
+    pub profile_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentMessageRequest {
+    pub agent_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AgentIdRequest {
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct WorktreePathRequest {
+    pub worktree_path: String,
+    #[serde(default)]
+    pub output: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
@@ -1058,6 +1242,18 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         EventReplay,
         DesktopRecoveryRequired,
         RuntimeSnapshotRequest,
+        NewTaskRequest,
+        ContextRequest,
+        ThreadAutoNameRequest,
+        ProjectUpdateRequest,
+        ProjectPathRequest,
+        QuickLauncherRequest,
+        AgentListRequest,
+        AgentProfileSaveRequest,
+        AgentProfileIdRequest,
+        AgentMessageRequest,
+        AgentIdRequest,
+        WorktreePathRequest,
         TaskStartRequest,
         TaskCancelRequest,
         TaskSnapshotRequest,
@@ -1147,6 +1343,26 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DesktopMethod::GitReviewSubmit).expect("git method"),
             r#""git.review.submit""#
+        );
+    }
+
+    #[test]
+    fn serializes_conversation_project_agent_and_worktree_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::GoalSet).expect("goal method"),
+            r#""goal.set""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ProjectQuickLauncher).expect("project method"),
+            r#""project.quick-launcher""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::AgentProfileSave).expect("agent method"),
+            r#""agent.profile.save""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::WorktreeSnapshot).expect("worktree method"),
+            r#""worktree.snapshot""#
         );
     }
 
