@@ -8356,3 +8356,105 @@ button.activity-row:hover {
     flex: 0 0 6px;
   }
 }
+
+/* Browser session panel reference pass. Keep session state prominent and
+   prevent the legacy flex rule from turning the panel into empty whitespace. */
+.browser-detail-panel:has(.browser-session-tools) {
+  max-height: min(430px, 48vh);
+}
+
+.browser-session-tools {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 16px 28px 20px;
+  overflow: auto;
+}
+
+.browser-session-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 50px;
+  margin: 0;
+  padding: 0 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 11px;
+}
+
+.browser-session-status > div {
+  min-width: 0;
+}
+
+.browser-session-status > span,
+.browser-session-status > small {
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.browser-session-tools > label {
+  display: grid;
+  grid-template-columns: 96px minmax(220px, 420px);
+  gap: 14px;
+  align-items: center;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.browser-session-tools > label > span {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.browser-session-tools label input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.browser-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.browser-session-actions button {
+  min-height: 32px;
+  padding: 0 13px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  font-size: 11px;
+}
+
+.browser-session-actions button:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
+.browser-session-actions button.is-danger {
+  color: var(--danger);
+}
+
+@media (max-width: 700px) {
+  .browser-session-tools {
+    padding-inline: 14px;
+  }
+
+  .browser-session-status {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding-block: 10px;
+  }
+
+  .browser-session-tools > label {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}
