@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { copyFile, mkdir, readdir, rm, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_IDLE_DESTROY_MS = 60_000;
@@ -72,6 +74,64 @@ async function withTimeout(promise, milliseconds, message, onTimeout) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function mergeImportedTree(source, target, relative = "") {
+  const entries = await readdir(path.join(source, relative), {
+    withFileTypes: true,
+  });
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const childRelative = path.join(relative, entry.name);
+    if (
+      [
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "DawnGraphiteCache",
+        "DawnWebGPUCache",
+        "GrShaderCache",
+      ].includes(entry.name)
+    )
+      continue;
+    const destination = path.join(target, childRelative);
+    if (entry.isDirectory()) {
+      await mkdir(destination, { recursive: true });
+      await mergeImportedTree(source, target, childRelative);
+    } else if (entry.isFile()) {
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyFile(path.join(source, childRelative), destination);
+    }
+  }
+}
+
+export async function applyPendingBrowserImports(profilePath) {
+  const importRoot = path.join(
+    path.dirname(profilePath),
+    "onpeople-browser-imports",
+  );
+  let entries;
+  try {
+    entries = await readdir(importRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let applied = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const source = path.join(importRoot, entry.name);
+    try {
+      await mergeImportedTree(source, profilePath);
+      await rm(source, { recursive: true, force: true });
+      applied += 1;
+    } catch (error) {
+      console.error("Failed to apply pending browser import", {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return applied;
 }
 
 export class ElectronBrowserController {
@@ -379,9 +439,9 @@ export class ElectronBrowserController {
       case "fillSavedCredential":
         return { filled: false, routeId, reason: "credential-store-empty" };
       case "listImportProfiles":
-        return { profiles: [] };
+        return { profiles: await this.#listImportProfiles() };
       case "importProfile":
-        return { imported: false, routeId, reason: "profile-not-selected" };
+        return this.#importProfile(payload);
       case "attach":
         return { attached: false, routeId, reason: "native-view-owned" };
       case "activateTab": {
@@ -399,6 +459,205 @@ export class ElectronBrowserController {
       }
       default:
         throw new Error(`未知浏览器动作: ${action}`);
+    }
+  }
+
+  async #listImportProfiles() {
+    const roots = this.#browserProfileRoots();
+    const profiles = [];
+    for (const root of roots) {
+      let entries;
+      try {
+        entries = await readdir(root.path, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !this.#isProfileDirectory(entry.name)) {
+          continue;
+        }
+        const profilePath = path.join(root.path, entry.name);
+        let lastUsedAt = null;
+        try {
+          lastUsedAt = (await stat(profilePath)).mtime.toISOString();
+        } catch {
+          // A profile can disappear while Chrome is closing; omit its optional
+          // timestamp but keep the profile selectable.
+        }
+        profiles.push({
+          id: crypto.createHash("sha256").update(profilePath).digest("hex"),
+          name: entry.name,
+          browser: root.browser,
+          path: profilePath,
+          lastUsedAt,
+        });
+      }
+    }
+    return profiles.sort((left, right) =>
+      `${left.browser}/${left.name}`.localeCompare(
+        `${right.browser}/${right.name}`,
+      ),
+    );
+  }
+
+  async #importProfile(payload) {
+    const profiles = await this.#listImportProfiles();
+    const requestedId =
+      typeof payload.profileId === "string" ? payload.profileId : "";
+    const requestedPath = typeof payload.path === "string" ? payload.path : "";
+    const profile = profiles.find(
+      (candidate) =>
+        (requestedId && candidate.id === requestedId) ||
+        (requestedPath && candidate.path === requestedPath),
+    );
+    if (!profile) {
+      throw new Error("找不到可导入的浏览器 Profile；请刷新列表后重试");
+    }
+    const target = path.join(
+      path.dirname(this.#profilePath),
+      "onpeople-browser-imports",
+      profile.id,
+    );
+    try {
+      await stat(target);
+      throw new Error("这个浏览器 Profile 已经导入过了");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await mkdir(target, { recursive: true });
+    const report = { cookies: 0, storageFiles: 0, credentials: 0, skipped: 0 };
+    try {
+      await this.#copyProfileTree(
+        profile.path,
+        target,
+        {
+          includePasswords: payload.includePasswords === true,
+          includeCookies: payload.includeCookies !== false,
+          includeHistory: payload.includeHistory !== false,
+        },
+        report,
+      );
+    } catch (error) {
+      await rm(target, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    return {
+      imported: true,
+      profileId: profile.id,
+      browser: profile.browser,
+      source: profile.path,
+      target,
+      ...report,
+      // Electron keeps the current partition open. The imported files are
+      // staged safely and are merged before the next browser host starts.
+      requiresRestart: true,
+    };
+  }
+
+  #browserProfileRoots() {
+    const home = os.homedir();
+    if (process.platform === "darwin") {
+      const base = path.join(home, "Library", "Application Support");
+      return [
+        { browser: "Google Chrome", path: path.join(base, "Google", "Chrome") },
+        { browser: "Chromium", path: path.join(base, "Chromium") },
+        { browser: "Microsoft Edge", path: path.join(base, "Microsoft Edge") },
+      ];
+    }
+    if (process.platform === "win32") {
+      const local = process.env.LOCALAPPDATA;
+      if (!local) return [];
+      return [
+        {
+          browser: "Google Chrome",
+          path: path.join(local, "Google", "Chrome", "User Data"),
+        },
+        {
+          browser: "Microsoft Edge",
+          path: path.join(local, "Microsoft", "Edge", "User Data"),
+        },
+      ];
+    }
+    const config = process.env.XDG_CONFIG_HOME || path.join(home, ".config");
+    return [
+      { browser: "Google Chrome", path: path.join(config, "google-chrome") },
+      { browser: "Chromium", path: path.join(config, "chromium") },
+      { browser: "Microsoft Edge", path: path.join(config, "microsoft-edge") },
+    ];
+  }
+
+  #isProfileDirectory(name) {
+    return name === "Default" || /^Profile \\d+$/.test(name);
+  }
+
+  async #copyProfileTree(source, target, options, report, relative = "") {
+    const entries = await readdir(path.join(source, relative), {
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        report.skipped += 1;
+        continue;
+      }
+      const childRelative = path.join(relative, entry.name);
+      const basename = entry.name;
+      if (
+        [
+          "Cache",
+          "Code Cache",
+          "GPUCache",
+          "DawnGraphiteCache",
+          "DawnWebGPUCache",
+          "GrShaderCache",
+        ].includes(basename)
+      ) {
+        report.skipped += 1;
+        continue;
+      }
+      if (
+        !options.includePasswords &&
+        ["Login Data", "Login Data For Account", "Web Data"].includes(basename)
+      ) {
+        report.skipped += 1;
+        continue;
+      }
+      if (
+        !options.includeCookies &&
+        ["Cookies", "Network"].includes(basename)
+      ) {
+        report.skipped += 1;
+        continue;
+      }
+      if (
+        !options.includeHistory &&
+        ["History", "Visited Links"].includes(basename)
+      ) {
+        report.skipped += 1;
+        continue;
+      }
+      const destination = path.join(target, childRelative);
+      if (entry.isDirectory()) {
+        await mkdir(destination, { recursive: true });
+        await this.#copyProfileTree(
+          source,
+          target,
+          options,
+          report,
+          childRelative,
+        );
+      } else if (entry.isFile()) {
+        await mkdir(path.dirname(destination), { recursive: true });
+        await copyFile(path.join(source, childRelative), destination);
+        report.storageFiles += 1;
+        if (basename === "Cookies") report.cookies += 1;
+        if (
+          options.includePasswords &&
+          ["Login Data", "Login Data For Account", "Web Data"].includes(
+            basename,
+          )
+        )
+          report.credentials += 1;
+      }
     }
   }
 

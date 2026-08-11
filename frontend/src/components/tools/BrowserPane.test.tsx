@@ -18,6 +18,8 @@ vi.mock("../../lib/desktopClient", () => ({
     fillSavedBrowserCredential: vi.fn(),
     clearBrowserSession: vi.fn(),
     clearAllBrowserData: vi.fn(),
+    listBrowserImportProfiles: vi.fn(),
+    importBrowserProfile: vi.fn(),
     listBrowserAnnotations: vi.fn(),
     streamBrowser: vi.fn(),
   },
@@ -58,6 +60,20 @@ describe("BrowserPane", () => {
     vi.mocked(desktopClient.fillSavedBrowserCredential).mockResolvedValue({});
     vi.mocked(desktopClient.clearBrowserSession).mockResolvedValue({});
     vi.mocked(desktopClient.clearAllBrowserData).mockResolvedValue({});
+    vi.mocked(desktopClient.listBrowserImportProfiles).mockResolvedValue({
+      profiles: [
+        {
+          id: "chrome-default",
+          name: "Default",
+          browser: "Google Chrome",
+          path: "/tmp/Chrome/Default",
+        },
+      ],
+    });
+    vi.mocked(desktopClient.importBrowserProfile).mockResolvedValue({
+      imported: true,
+      requiresRestart: true,
+    });
     vi.mocked(desktopClient.listBrowserAnnotations).mockResolvedValue([]);
     vi.mocked(desktopClient.streamBrowser).mockResolvedValue(undefined);
     useWorkbenchStore.setState({
@@ -159,6 +175,36 @@ describe("BrowserPane", () => {
       "route-current",
     );
     expect(screen.getByText("持久化浏览器会话")).toBeVisible();
+  });
+
+  it("opens the Codex-style browser import dialog and preserves import choices", async () => {
+    render(<BrowserPane />);
+    fireEvent.click(screen.getByRole("button", { name: "更多浏览器工具" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /登录与浏览器数据/ }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "从浏览器导入" }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "从浏览器导入" }),
+    ).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "浏览器来源" })).toHaveValue(
+      "chrome-default",
+    );
+    expect(screen.getByRole("checkbox", { name: /Cookies/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: /保存的密码/ }));
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+    await waitFor(() =>
+      expect(desktopClient.importBrowserProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: "chrome-default",
+          includePasswords: true,
+          includeCookies: true,
+          includeHistory: true,
+        }),
+        "route-current",
+      ),
+    );
   });
 
   it("renders the browser home instead of a native black surface for about:blank", async () => {

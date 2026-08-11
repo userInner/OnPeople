@@ -30,6 +30,12 @@ legacy HTML field.
 temporarily hides the native surface while a React inspection panel is open.
 That prevents Electron child-view z-order from covering the panel controls.
 
+The session panel now also discovers local Chrome/Chromium/Edge Profiles and
+offers a Codex-style import dialog for passwords, cookies, and history. Imports
+are copied without following symlinks or cache directories, staged outside the
+active partition, and merged before the next OnPeople launch so the live
+partition is never modified while it is in use.
+
 The next parity slice is to expose typed locator/DOM-CUA operations, then
 download/filechooser/auth capabilities over the same host boundary. Those are
 not claimed to be complete until they have contract tests and a real GUI

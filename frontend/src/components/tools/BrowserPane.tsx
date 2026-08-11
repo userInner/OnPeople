@@ -26,6 +26,14 @@ import type { BrowserAnnotation, BrowserDeveloperState } from "../../types";
 import { IconButton } from "../IconButton";
 import { LocalArtifactBrowserPreview } from "./LocalArtifactBrowserPreview";
 
+type BrowserImportProfile = {
+  id: string;
+  name: string;
+  browser: string;
+  path: string;
+  lastUsedAt?: string | null;
+};
+
 function normalizeAddress(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "about:blank";
@@ -80,6 +88,18 @@ function DesktopBrowserPane() {
   const [annotationSelector, setAnnotationSelector] = useState("");
   const [providerId, setProviderId] = useState("onpeople");
   const [detailBusy, setDetailBusy] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importProfiles, setImportProfiles] = useState<BrowserImportProfile[]>(
+    [],
+  );
+  const [importProfileId, setImportProfileId] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importOptions, setImportOptions] = useState({
+    passwords: false,
+    cookies: true,
+    history: true,
+  });
   const [surfaceFocused, setSurfaceFocused] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const addressInput = useRef<HTMLInputElement>(null);
@@ -132,6 +152,55 @@ function DesktopBrowserPane() {
   const activeTabUrl = activeTab?.url ?? null;
   const activePhase = (activeTab as { phase?: string } | null)?.phase;
   const showBrowserHome = !activeTab || activeTab.url === "about:blank";
+
+  const openBrowserImport = () => {
+    setImportDialogOpen(true);
+    setImportError(null);
+    setImportBusy(true);
+    void withBrowserToolTimeout(
+      desktopClient.listBrowserImportProfiles(),
+      "浏览器资料读取超时，请关闭 Chrome 后重试",
+    )
+      .then((value) => {
+        const source = value as { profiles?: unknown };
+        const profiles = Array.isArray(source.profiles)
+          ? (source.profiles as BrowserImportProfile[])
+          : [];
+        setImportProfiles(profiles);
+        setImportProfileId((current) => current || profiles[0]?.id || "");
+      })
+      .catch((cause) => setImportError(errorMessage(cause)))
+      .finally(() => setImportBusy(false));
+  };
+
+  const importBrowserProfile = () => {
+    const profile = importProfiles.find((item) => item.id === importProfileId);
+    if (!profile) {
+      setImportError("请选择一个浏览器 Profile");
+      return;
+    }
+    setImportBusy(true);
+    setImportError(null);
+    void withBrowserToolTimeout(
+      desktopClient.importBrowserProfile(
+        {
+          profileId: profile.id,
+          path: profile.path,
+          includePasswords: importOptions.passwords,
+          includeCookies: importOptions.cookies,
+          includeHistory: importOptions.history,
+        },
+        routeId,
+      ),
+      "浏览器资料导入超时，请确认源浏览器已经完全退出",
+    )
+      .then((value) => {
+        setImportDialogOpen(false);
+        setDetailValue(value);
+      })
+      .catch((cause) => setImportError(errorMessage(cause)))
+      .finally(() => setImportBusy(false));
+  };
 
   useEffect(() => {
     if (!activeTab || activeTab.routeId === browser?.activeRouteId) return;
@@ -855,6 +924,19 @@ function DesktopBrowserPane() {
               .catch((cause) => setError(errorMessage(cause)))
               .finally(() => setDetailBusy(false));
           }}
+          importDialogOpen={importDialogOpen}
+          importProfiles={importProfiles}
+          importProfileId={importProfileId}
+          importBusy={importBusy}
+          importError={importError}
+          importOptions={importOptions}
+          onImportProfileId={setImportProfileId}
+          onImportOptions={setImportOptions}
+          onOpenImport={openBrowserImport}
+          onImport={importBrowserProfile}
+          onCloseImport={() => {
+            if (!importBusy) setImportDialogOpen(false);
+          }}
           onClose={() => {
             if (detailView === "annotations") {
               void desktopClient
@@ -1038,6 +1120,17 @@ function BrowserDetailPanel({
   onSignIn,
   onClearSession,
   onClearAll,
+  importDialogOpen,
+  importProfiles,
+  importProfileId,
+  importBusy,
+  importError,
+  importOptions,
+  onImportProfileId,
+  onImportOptions,
+  onOpenImport,
+  onImport,
+  onCloseImport,
   onClose,
 }: {
   view: "snapshot" | "developer" | "annotations" | "session";
@@ -1057,6 +1150,25 @@ function BrowserDetailPanel({
   onSignIn: () => void;
   onClearSession: () => void;
   onClearAll: () => void;
+  importDialogOpen: boolean;
+  importProfiles: BrowserImportProfile[];
+  importProfileId: string;
+  importBusy: boolean;
+  importError: string | null;
+  importOptions: {
+    passwords: boolean;
+    cookies: boolean;
+    history: boolean;
+  };
+  onImportProfileId: (value: string) => void;
+  onImportOptions: (value: {
+    passwords: boolean;
+    cookies: boolean;
+    history: boolean;
+  }) => void;
+  onOpenImport: () => void;
+  onImport: () => void;
+  onCloseImport: () => void;
   onClose: () => void;
 }) {
   const title = {
@@ -1141,12 +1253,15 @@ function BrowserDetailPanel({
               onChange={(event) => onProviderId(event.target.value)}
             />
           </label>
-          <div>
+          <div className="browser-session-actions">
             <button type="button" onClick={onSignIn}>
               打开登录页
             </button>
             <button type="button" onClick={onFillCredential}>
               自动填充凭据
+            </button>
+            <button type="button" onClick={onOpenImport}>
+              从浏览器导入
             </button>
             <button type="button" onClick={onClearSession}>
               清除当前会话
@@ -1155,9 +1270,149 @@ function BrowserDetailPanel({
               清除全部浏览器数据
             </button>
           </div>
+          {importDialogOpen ? (
+            <BrowserImportDialog
+              profiles={importProfiles}
+              selectedId={importProfileId}
+              busy={importBusy}
+              error={importError}
+              options={importOptions}
+              onSelected={onImportProfileId}
+              onOptions={onImportOptions}
+              onImport={onImport}
+              onClose={onCloseImport}
+            />
+          ) : null}
         </div>
       ) : null}
     </section>
+  );
+}
+
+function BrowserImportDialog({
+  profiles,
+  selectedId,
+  busy,
+  error,
+  options,
+  onSelected,
+  onOptions,
+  onImport,
+  onClose,
+}: {
+  profiles: BrowserImportProfile[];
+  selectedId: string;
+  busy: boolean;
+  error: string | null;
+  options: { passwords: boolean; cookies: boolean; history: boolean };
+  onSelected: (value: string) => void;
+  onOptions: (value: {
+    passwords: boolean;
+    cookies: boolean;
+    history: boolean;
+  }) => void;
+  onImport: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="browser-import-backdrop" role="presentation">
+      <section
+        className="browser-import-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="browser-import-title"
+      >
+        <header>
+          <div>
+            <strong id="browser-import-title">从浏览器导入</strong>
+            <p>选择要带入 OnPeople 内置浏览器的数据。</p>
+          </div>
+          <IconButton icon={X} label="关闭导入窗口" onClick={onClose} />
+        </header>
+        <label className="browser-import-source">
+          <span>来源</span>
+          <select
+            value={selectedId}
+            onChange={(event) => onSelected(event.target.value)}
+            disabled={busy || profiles.length === 0}
+            aria-label="浏览器来源"
+          >
+            {profiles.length === 0 ? (
+              <option value="">没有发现可导入的浏览器</option>
+            ) : (
+              profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.browser} · {profile.name}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        <p className="browser-import-hint">
+          导入前请完全退出来源浏览器；源 Profile 不会被修改。
+        </p>
+        <div className="browser-import-options">
+          <ImportToggle
+            label="保存的密码"
+            hint="需要系统钥匙串授权"
+            checked={options.passwords}
+            onChange={(checked) =>
+              onOptions({ ...options, passwords: checked })
+            }
+          />
+          <ImportToggle
+            label="Cookies"
+            checked={options.cookies}
+            onChange={(checked) => onOptions({ ...options, cookies: checked })}
+          />
+          <ImportToggle
+            label="浏览历史"
+            checked={options.history}
+            onChange={(checked) => onOptions({ ...options, history: checked })}
+          />
+        </div>
+        {error ? <p className="browser-import-error">{error}</p> : null}
+        <footer>
+          <button type="button" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button
+            className="is-primary"
+            type="button"
+            onClick={onImport}
+            disabled={busy || !selectedId || profiles.length === 0}
+          >
+            {busy ? "导入中…" : "导入"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ImportToggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="browser-import-toggle">
+      <span>
+        <strong>{label}</strong>
+        {hint ? <small>{hint}</small> : null}
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
   );
 }
 
@@ -1208,6 +1463,7 @@ function BrowserSessionStatus({ value }: { value: unknown }) {
   const persistent = source.persistent === true;
   const partition =
     typeof source.partition === "string" ? source.partition : "";
+  const imported = source.imported === true;
   return (
     <div className="browser-session-status" role="status">
       <div>
@@ -1220,6 +1476,12 @@ function BrowserSessionStatus({ value }: { value: unknown }) {
         {cookieCount === null ? "Cookie 数量未知" : `${cookieCount} 个 Cookie`}
       </span>
       {partition ? <small>{partition}</small> : null}
+      {imported ? (
+        <small>
+          浏览器资料已导入
+          {source.requiresRestart === true ? "，重启 OnPeople 后生效。" : "。"}
+        </small>
+      ) : null}
       {source.filled === false && source.reason === "credential-store-empty" ? (
         <small>未配置可自动填充的凭据，请在页面中手动登录。</small>
       ) : null}

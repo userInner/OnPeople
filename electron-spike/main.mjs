@@ -17,6 +17,7 @@ import {
 
 import {
   browserProfilePath,
+  applyPendingBrowserImports,
   ElectronBrowserController,
   isSafeBrowserUrl,
 } from "./browser-controller.mjs";
@@ -143,6 +144,8 @@ async function bootstrap() {
   rustBridge.onEvent((event) => emit("desktop:event", event));
 
   const partition = "persist:onpeople-browser";
+  const profilePath = browserProfilePath(app.getPath("userData"));
+  await applyPendingBrowserImports(profilePath);
   const browserSession = session.fromPartition(partition);
   browserSession.setPermissionRequestHandler(
     (_webContents, permission, callback) =>
@@ -236,7 +239,7 @@ async function bootstrap() {
       window: mainWindow,
       WebContentsView,
       partition,
-      profilePath: browserProfilePath(app.getPath("userData")),
+      profilePath,
       emit,
       idleDestroyMs:
         Number(process.env.ONPEOPLE_BROWSER_IDLE_DESTROY_MS) || 60_000,
