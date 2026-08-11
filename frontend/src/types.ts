@@ -101,11 +101,7 @@ export interface LocalArtifactPreview extends Record<string, unknown> {
   message?: string;
 }
 
-export type PrimaryView =
-  | "tasks"
-  | "pull-requests"
-  | "scheduled"
-  | "plugins";
+export type PrimaryView = "tasks" | "pull-requests" | "scheduled" | "plugins";
 
 export type SettingsRoute =
   | "general"

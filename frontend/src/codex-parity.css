@@ -1341,6 +1341,7 @@ summary:focus-visible {
   min-width: 0;
   border-left: 0;
   background: var(--surface);
+  container-type: inline-size;
 }
 
 .utility-tabs {
@@ -7833,6 +7834,65 @@ button.activity-row:hover {
 .utility-active-tab > button:hover {
   color: var(--ink);
   background: var(--surface-muted);
+}
+
+/* In the normal task side panel an inspector replaces the guest instead of
+   squeezing two browser surfaces into a width that cannot hold them. Expanded
+   mode restores the split inspection layout. */
+.utility-browser .browser-stage.has-inspector {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.utility-browser .browser-stage.has-inspector .browser-guest-stack {
+  display: none;
+}
+
+.utility-browser .browser-inspector {
+  border-left: 0;
+}
+
+.app-shell.utility-expanded .utility-browser .browser-stage.has-inspector {
+  grid-template-columns: minmax(360px, 1fr) minmax(300px, 34%);
+}
+
+.app-shell.utility-expanded
+  .utility-browser
+  .browser-stage.has-inspector
+  .browser-guest-stack {
+  display: block;
+}
+
+.app-shell.utility-expanded .utility-browser .browser-inspector {
+  border-left: 1px solid var(--line);
+}
+
+@container (max-width: 620px) {
+  .utility-browser .browser-tabs-bar {
+    padding-inline: 7px;
+  }
+
+  .utility-browser .browser-tab {
+    width: auto;
+    min-width: 96px;
+    flex-basis: 160px;
+  }
+
+  .utility-browser .browser-shared-pill {
+    width: 27px;
+    padding: 0;
+    justify-content: center;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .utility-browser .browser-navigation-bar {
+    padding-inline: 7px;
+  }
+
+  .utility-browser .browser-address {
+    min-width: 0;
+    margin-inline: 2px;
+  }
 }
 
 .utility-view-menu {
