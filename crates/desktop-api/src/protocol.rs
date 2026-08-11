@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
-use onpeople_types::{AppError, EventEnvelope, EventKind};
+use onpeople_types::{
+    AppError, EventEnvelope, EventKind, ModelDescriptor, Policy, Preferences, ProviderSettings,
+    SecretMetadata,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::{Config, TS};
@@ -139,10 +142,52 @@ pub enum DesktopMethod {
     ConnectorOauthComplete,
     #[serde(rename = "connector.disconnect")]
     ConnectorDisconnect,
+    #[serde(rename = "provider.get")]
+    ProviderGet,
+    #[serde(rename = "provider.save")]
+    ProviderSave,
+    #[serde(rename = "models.discover")]
+    ModelsDiscover,
+    #[serde(rename = "models.validate")]
+    ModelsValidate,
+    #[serde(rename = "extensions.list")]
+    ExtensionsList,
+    #[serde(rename = "extensions.skill.set-enabled")]
+    ExtensionsSkillSetEnabled,
+    #[serde(rename = "policy.get")]
+    PolicyGet,
+    #[serde(rename = "policy.save")]
+    PolicySave,
+    #[serde(rename = "config.effective")]
+    ConfigEffective,
+    #[serde(rename = "usage.get")]
+    UsageGet,
+    #[serde(rename = "usage.price.save")]
+    UsagePriceSave,
+    #[serde(rename = "memory.list")]
+    MemoryList,
+    #[serde(rename = "memory.save")]
+    MemorySave,
+    #[serde(rename = "memory.delete")]
+    MemoryDelete,
+    #[serde(rename = "memory.settings.save")]
+    MemorySettingsSave,
+    #[serde(rename = "secret.list")]
+    SecretList,
+    #[serde(rename = "secret.save")]
+    SecretSave,
+    #[serde(rename = "secret.delete")]
+    SecretDelete,
+    #[serde(rename = "hook.list")]
+    HookList,
+    #[serde(rename = "hook.local.list")]
+    HookLocalList,
+    #[serde(rename = "hook.create")]
+    HookCreate,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 64] = [
+    pub const ALL: [Self; 85] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -207,6 +252,27 @@ impl DesktopMethod {
         Self::ConnectorOauthStart,
         Self::ConnectorOauthComplete,
         Self::ConnectorDisconnect,
+        Self::ProviderGet,
+        Self::ProviderSave,
+        Self::ModelsDiscover,
+        Self::ModelsValidate,
+        Self::ExtensionsList,
+        Self::ExtensionsSkillSetEnabled,
+        Self::PolicyGet,
+        Self::PolicySave,
+        Self::ConfigEffective,
+        Self::UsageGet,
+        Self::UsagePriceSave,
+        Self::MemoryList,
+        Self::MemorySave,
+        Self::MemoryDelete,
+        Self::MemorySettingsSave,
+        Self::SecretList,
+        Self::SecretSave,
+        Self::SecretDelete,
+        Self::HookList,
+        Self::HookLocalList,
+        Self::HookCreate,
     ];
 
     #[must_use]
@@ -421,6 +487,258 @@ pub struct ConnectorOauthCompleteRequest {
     pub code: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ExtensionsListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SkillEnabledRequest {
+    pub skill_path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SkillEnabledState {
+    pub path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExtensionsSnapshot {
+    pub skills: Vec<Value>,
+    pub plugins: Vec<Value>,
+    pub catalog: Vec<Value>,
+    pub catalog_status: Value,
+    #[serde(default)]
+    pub active_industry_plugin: Option<Value>,
+    pub mcp_servers: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelCatalog {
+    pub models: Vec<ModelDescriptor>,
+    pub providers: Vec<String>,
+    pub errors: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ModelValidationRequest {
+    pub provider_type: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelValidation {
+    pub valid: bool,
+    pub model_id: String,
+    pub vision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PolicyState {
+    pub policy: Policy,
+    pub audit: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PolicySaveRequest {
+    pub thread_id: String,
+    pub policy: Policy,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct EffectiveConfigRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EffectiveConfig {
+    pub source: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub provider: ProviderSettings,
+    pub policy: Policy,
+    pub preferences: Preferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct UsagePriceRequest {
+    pub key: String,
+    pub price: f64,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryLifecycle {
+    #[ts(type = "number")]
+    pub dismissed_count: u64,
+    #[ts(type = "number")]
+    pub expired_count: u64,
+    #[ts(type = "number")]
+    pub superseded_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryState {
+    pub entries: Vec<Value>,
+    pub candidates: Vec<Value>,
+    pub lifecycle: MemoryLifecycle,
+    pub settings: Value,
+    pub chat_settings: Value,
+    pub effective_settings: Value,
+    pub last_recall: Value,
+    #[serde(default)]
+    pub scope_cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySaveRequest {
+    pub entry: Value,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemorySaveResult {
+    pub entry: Value,
+    pub state: MemoryState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryDeleteRequest {
+    pub memory_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySettingsRequest {
+    pub settings: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretList {
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretSaveRequest {
+    pub secret: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretSaveResult {
+    pub secret: Value,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretDeleteRequest {
+    pub secret_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretDeleteResult {
+    pub deleted: bool,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookListRequest {
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HookDefinition {
+    pub id: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub local: Option<bool>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    #[serde(default)]
+    pub command: Option<Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookCreateRequest {
+    pub cwd: String,
+    pub id: String,
+    pub event: String,
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1106,6 +1424,33 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         PluginIdRequest,
         PluginCatalogSyncRequest,
         ConnectorOauthCompleteRequest,
+        ExtensionsListRequest,
+        SkillEnabledRequest,
+        SkillEnabledState,
+        ExtensionsSnapshot,
+        ModelCatalog,
+        ModelValidationRequest,
+        ModelValidation,
+        PolicyState,
+        PolicySaveRequest,
+        EffectiveConfigRequest,
+        EffectiveConfig,
+        UsagePriceRequest,
+        MemoryListRequest,
+        MemoryLifecycle,
+        MemoryState,
+        MemorySaveRequest,
+        MemorySaveResult,
+        MemoryDeleteRequest,
+        MemorySettingsRequest,
+        SecretList,
+        SecretSaveRequest,
+        SecretSaveResult,
+        SecretDeleteRequest,
+        SecretDeleteResult,
+        HookListRequest,
+        HookDefinition,
+        HookCreateRequest,
     );
     Ok(())
 }
@@ -1165,6 +1510,22 @@ mod tests {
             serde_json::to_string(&BrowserAction::CaptureVisualSnapshot)
                 .expect("serialize browser action"),
             r#""captureVisualSnapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_config_and_data_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ProviderGet).expect("provider method"),
+            r#""provider.get""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::MemorySettingsSave).expect("memory method"),
+            r#""memory.settings.save""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::HookLocalList).expect("hook method"),
+            r#""hook.local.list""#
         );
     }
 

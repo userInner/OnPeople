@@ -1890,9 +1890,7 @@ impl AppState {
                 })?;
                 Ok(json!({ "removed": true, "path": path }))
             }
-            "get_policy" => Ok(
-                json!({ "policy": self.runtime.agent_status()?.policy, "audit": self.runtime.storage().metadata_prefix("audit.")?.into_iter().map(|(_, value)| value).collect::<Vec<_>>() }),
-            ),
+            "get_policy" => self.runtime.policy_state(),
             "save_policy" => {
                 let policy = payload
                     .get("policy")
@@ -1902,27 +1900,16 @@ impl AppState {
                     .map_err(AppError::internal)
             }
             "get_usage_ledger" => self.runtime.usage_snapshot(),
-            "save_usage_price" => {
-                let key = required_string(&payload, "key")?;
-                let price = payload
+            "save_usage_price" => self.runtime.save_usage_price(
+                &required_string(&payload, "key")?,
+                payload
                     .get("price")
                     .and_then(Value::as_f64)
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?;
-                let mut usage = self.runtime.usage_snapshot()?;
-                usage["prices"][key] = json!(price);
-                self.runtime
-                    .storage()
-                    .put_metadata("usage.snapshot", &usage)?;
-                Ok(usage)
-            }
-            "get_effective_config" => Ok(json!({
-                "source": "onpeople.db",
-                "cwd": payload.get("cwd"),
-                "provider": self.runtime.agent_status()?.provider,
-                "policy": self.runtime.agent_status()?.policy,
-                "preferences": self.runtime.preferences()?,
-            })),
+                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?,
+            ),
+            "get_effective_config" => self
+                .runtime
+                .effective_config(payload.get("cwd").and_then(Value::as_str)),
             "pick_download_directory" => {
                 let directory = payload
                     .get("path")
@@ -1949,20 +1936,17 @@ impl AppState {
                 payload.get("cwd").and_then(Value::as_str),
                 payload.get("threadId").and_then(Value::as_str),
             ),
-            "save_memory" => {
-                let entry = payload.get("entry").unwrap_or(&payload);
-                let saved = self.runtime.save_memory_from_payload(entry)?;
-                Ok(json!({
-                    "entry": saved,
-                    "state": self.runtime.memory_state(
-                        entry.get("cwd").and_then(Value::as_str),
-                        payload.get("threadId").and_then(Value::as_str),
-                    )?,
-                }))
-            }
-            "delete_memory" => self
-                .runtime
-                .delete_document_from_payload("memories", &payload),
+            "save_memory" => self.runtime.save_memory(
+                payload.get("entry").unwrap_or(&payload),
+                payload.get("threadId").and_then(Value::as_str),
+            ),
+            "delete_memory" => self.runtime.delete_memory(
+                payload
+                    .get("memoryId")
+                    .or_else(|| payload.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AppError::invalid("缺少 memoryId"))?,
+            ),
             "save_memory_settings" => self.runtime.save_memory_settings(&payload),
             "list_agent_profiles" => Ok(json!({ "profiles": self.runtime.list_agent_profiles()? })),
             "save_agent_profile" => {
@@ -1980,21 +1964,16 @@ impl AppState {
                 Ok(deleted)
             }
             "list_secrets" => Ok(json!({ "secrets": self.runtime.list_secrets()? })),
-            "save_secret" => {
-                let secret = payload.get("secret").unwrap_or(&payload);
-                let saved = self.runtime.save_secret_from_payload(secret)?;
-                Ok(json!({ "secret": saved, "secrets": self.runtime.list_secrets()? }))
-            }
-            "delete_secret" => {
-                let id = payload
+            "save_secret" => self
+                .runtime
+                .save_secret(payload.get("secret").unwrap_or(&payload)),
+            "delete_secret" => self.runtime.delete_secret(
+                payload
                     .get("id")
                     .or_else(|| payload.get("secretId"))
                     .and_then(Value::as_str)
-                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?;
-                Ok(
-                    json!({ "deleted": self.runtime.storage().delete_secret(id)?, "secrets": self.runtime.list_secrets()? }),
-                )
-            }
+                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?,
+            ),
             "list_hooks" | "list_local_hooks" => {
                 let cwd = payload
                     .get("cwd")

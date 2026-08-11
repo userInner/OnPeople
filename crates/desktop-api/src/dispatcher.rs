@@ -3,8 +3,9 @@ use std::sync::Arc;
 use onpeople_core_runtime::{CoreRuntime, MAX_EVENT_REPLAY_LIMIT};
 use onpeople_types::{
     AppError, ErrorCode, GitCommitRequest, GitFileRequest, GitMutationRequest, GitPushRequest,
-    GitRequest, PreferencePatchRequest, TerminalIdRequest, TerminalResizeRequest,
-    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, WorktreeRequest,
+    GitRequest, PreferencePatchRequest, ProviderRequest, SaveProviderRequest, TerminalIdRequest,
+    TerminalResizeRequest, TerminalStartRequest, TerminalWriteRequest, ThreadFilters,
+    UsageSnapshot, WorktreeRequest,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -13,17 +14,23 @@ use crate::{
     AuthorizedProjectAction, BrowserActionRequest, BrowserAnnotationDeleteRequest,
     BrowserCommandRequest, BrowserHostOperation, BrowserRouteRequest,
     ConnectorOauthCompleteRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent,
-    DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest,
-    FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest, GeneratedImage,
-    GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest, GitReviewSubmitRequest,
-    LocalArtifactRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
-    ProjectActionAuthorizeRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
-    TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
-    TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
-    TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
-    TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
-    TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest,
-    TerminalFocusState, TerminalReadyState, should_forward_desktop_event,
+    DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EffectiveConfig,
+    EffectiveConfigRequest, EventReplay, EventReplayRequest, ExtensionsListRequest,
+    ExtensionsSnapshot, FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest,
+    GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest,
+    GitReviewSubmitRequest, HookCreateRequest, HookDefinition, HookListRequest,
+    LocalArtifactRequest, MemoryDeleteRequest, MemoryListRequest, MemorySaveRequest,
+    MemorySaveResult, MemorySettingsRequest, MemoryState, ModelCatalog, ModelValidation,
+    ModelValidationRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
+    PolicySaveRequest, PolicyState, ProjectActionAuthorizeRequest, QueuedTaskMessage,
+    RuntimeSnapshotRequest, SecretDeleteRequest, SecretDeleteResult, SecretList, SecretSaveRequest,
+    SecretSaveResult, SkillEnabledRequest, SkillEnabledState, TaskApprovalResolution,
+    TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation, TaskHandle,
+    TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion, TaskQueueItemRequest,
+    TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest, TaskSnapshot,
+    TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt, TaskSteerRequest,
+    TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest, TerminalFocusState,
+    TerminalReadyState, UsagePriceRequest, should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -571,6 +578,121 @@ impl DesktopDispatcher {
                 self.runtime
                     .disconnect_connector(&json!({ "pluginId": request.plugin_id }))
             }
+            DesktopMethod::ProviderGet => {
+                let request: ProviderRequest = parse_params(params)?;
+                to_value(self.runtime.provider(request)?)
+            }
+            DesktopMethod::ProviderSave => {
+                let request: SaveProviderRequest = parse_params(params)?;
+                to_value(self.runtime.save_provider(request)?)
+            }
+            DesktopMethod::ModelsDiscover => {
+                parse_empty(params)?;
+                let catalog: ModelCatalog = parse_result(self.runtime.discover_models()?)?;
+                to_value(catalog)
+            }
+            DesktopMethod::ModelsValidate => {
+                let request: ModelValidationRequest = parse_params(params)?;
+                let result: ModelValidation =
+                    parse_result(self.runtime.validate_model(&to_value(request)?)?)?;
+                to_value(result)
+            }
+            DesktopMethod::ExtensionsList => {
+                let request: ExtensionsListRequest = parse_params(params)?;
+                let snapshot: ExtensionsSnapshot =
+                    parse_result(self.runtime.extensions(request.cwd.as_deref())?)?;
+                to_value(snapshot)
+            }
+            DesktopMethod::ExtensionsSkillSetEnabled => {
+                let request: SkillEnabledRequest = parse_params(params)?;
+                let state: SkillEnabledState =
+                    parse_result(self.runtime.set_skill_enabled(&to_value(request)?)?)?;
+                to_value(state)
+            }
+            DesktopMethod::PolicyGet => {
+                parse_empty(params)?;
+                let state: PolicyState = parse_result(self.runtime.policy_state()?)?;
+                to_value(state)
+            }
+            DesktopMethod::PolicySave => {
+                let PolicySaveRequest {
+                    thread_id: _,
+                    policy,
+                } = parse_params(params)?;
+                to_value(self.runtime.save_policy(to_value(policy)?).await?)
+            }
+            DesktopMethod::ConfigEffective => {
+                let request: EffectiveConfigRequest = parse_params(params)?;
+                let config: EffectiveConfig =
+                    parse_result(self.runtime.effective_config(request.cwd.as_deref())?)?;
+                to_value(config)
+            }
+            DesktopMethod::UsageGet => {
+                parse_empty(params)?;
+                let usage: UsageSnapshot = parse_result(self.runtime.usage_snapshot()?)?;
+                to_value(usage)
+            }
+            DesktopMethod::UsagePriceSave => {
+                let request: UsagePriceRequest = parse_params(params)?;
+                let usage: UsageSnapshot =
+                    parse_result(self.runtime.save_usage_price(&request.key, request.price)?)?;
+                to_value(usage)
+            }
+            DesktopMethod::MemoryList => {
+                let request: MemoryListRequest = parse_params(params)?;
+                let state: MemoryState = parse_result(
+                    self.runtime
+                        .memory_state(request.cwd.as_deref(), request.thread_id.as_deref())?,
+                )?;
+                to_value(state)
+            }
+            DesktopMethod::MemorySave => {
+                let request: MemorySaveRequest = parse_params(params)?;
+                let saved: MemorySaveResult = parse_result(
+                    self.runtime
+                        .save_memory(&request.entry, request.thread_id.as_deref())?,
+                )?;
+                to_value(saved)
+            }
+            DesktopMethod::MemoryDelete => {
+                let request: MemoryDeleteRequest = parse_params(params)?;
+                self.runtime.delete_memory(&request.memory_id)
+            }
+            DesktopMethod::MemorySettingsSave => {
+                let request: MemorySettingsRequest = parse_params(params)?;
+                self.runtime.save_memory_settings(&request.settings)
+            }
+            DesktopMethod::SecretList => {
+                parse_empty(params)?;
+                to_value(SecretList {
+                    secrets: self.runtime.list_secrets()?,
+                })
+            }
+            DesktopMethod::SecretSave => {
+                let request: SecretSaveRequest = parse_params(params)?;
+                let saved: SecretSaveResult =
+                    parse_result(self.runtime.save_secret(&request.secret)?)?;
+                to_value(saved)
+            }
+            DesktopMethod::SecretDelete => {
+                let request: SecretDeleteRequest = parse_params(params)?;
+                let deleted: SecretDeleteResult =
+                    parse_result(self.runtime.delete_secret(&request.secret_id)?)?;
+                to_value(deleted)
+            }
+            DesktopMethod::HookList | DesktopMethod::HookLocalList => {
+                let local = method == DesktopMethod::HookLocalList;
+                let request: HookListRequest = parse_params(params)?;
+                let hooks: Vec<HookDefinition> =
+                    parse_result(self.runtime.list_hooks(&request.cwd, local)?)?;
+                to_value(hooks)
+            }
+            DesktopMethod::HookCreate => {
+                let request: HookCreateRequest = parse_params(params)?;
+                let hook: HookDefinition =
+                    parse_result(self.runtime.create_hook(&to_value(request)?)?)?;
+                to_value(hook)
+            }
         }
     }
 }
@@ -997,6 +1119,87 @@ mod tests {
             })
             .await;
         assert!(state.ok, "unexpected response: {state:?}");
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatches_config_data_without_shell_or_storage_access() {
+        let temporary = tempfile::tempdir().expect("temporary workspace");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let policy = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "policy-get-1".to_owned(),
+                method: DesktopMethod::PolicyGet,
+                params: json!({}),
+            })
+            .await;
+        assert!(policy.ok, "unexpected response: {policy:?}");
+        assert_eq!(
+            policy
+                .result
+                .as_ref()
+                .and_then(|value| value["policy"]["sandbox"].as_str()),
+            Some("workspace-write")
+        );
+
+        let config = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "config-effective-1".to_owned(),
+                method: DesktopMethod::ConfigEffective,
+                params: json!({ "cwd": temporary.path() }),
+            })
+            .await;
+        assert!(config.ok, "unexpected response: {config:?}");
+        assert_eq!(
+            config
+                .result
+                .as_ref()
+                .and_then(|value| value["source"].as_str()),
+            Some("onpeople.db")
+        );
+
+        let usage = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "usage-price-1".to_owned(),
+                method: DesktopMethod::UsagePriceSave,
+                params: json!({ "key": "input", "price": 0.25 }),
+            })
+            .await;
+        assert!(usage.ok, "unexpected response: {usage:?}");
+        assert_eq!(
+            usage
+                .result
+                .as_ref()
+                .and_then(|value| value["prices"]["input"].as_f64()),
+            Some(0.25)
+        );
+
+        let hooks = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "hooks-list-1".to_owned(),
+                method: DesktopMethod::HookLocalList,
+                params: json!({ "cwd": temporary.path() }),
+            })
+            .await;
+        assert!(hooks.ok, "unexpected response: {hooks:?}");
+        assert!(
+            hooks
+                .result
+                .as_ref()
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
         runtime.stop().await;
     }
 

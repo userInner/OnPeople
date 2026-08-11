@@ -75,6 +75,14 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `connector.oauth.start`
 - `connector.oauth.complete`
 - `connector.disconnect`
+- `provider.get`, `provider.save`
+- `models.discover`, `models.validate`
+- `extensions.list`, `extensions.skill.set-enabled`
+- `policy.get`, `policy.save`, `config.effective`
+- `usage.get`, `usage.price.save`
+- `memory.list`, `memory.save`, `memory.delete`, `memory.settings.save`
+- `secret.list`, `secret.save`, `secret.delete`
+- `hook.list`, `hook.local.list`, `hook.create`
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
@@ -170,3 +178,24 @@ Plugins, industry plugins, MCP reload, remote catalog sync, and connector OAuth
 do not require a shell. Their stable methods dispatch directly to
 `CoreRuntime`, with typed plugin IDs, catalog URLs, and OAuth callback fields.
 Legacy Tauri commands stay registered for rollback and older renderers.
+
+## Configuration and data ownership
+
+Provider settings, model discovery, extensions, policy, effective
+configuration, usage, memory, secret metadata, and hooks are CoreRuntime-owned
+domains. The dispatcher only parses typed request DTOs and serializes typed
+results; it never reads metadata or storage directly.
+
+The facades for `policy.get`, `config.effective`, `usage.price.save`,
+`memory.save`, `memory.delete`, `secret.save`, and `secret.delete` also own the
+composition previously performed in the Tauri command router. Legacy commands
+delegate to those same facades, so rollback and stable Desktop API callers
+observe the same persisted state. Secret values never appear in list or delete
+responses; only `SecretMetadata` crosses the protocol boundary.
+
+`get_provider` and `get_provider_settings` intentionally converge on
+`provider.get`. Global and project hooks remain separate methods because they
+resolve different storage roots, but they share one generated request and
+result contract. Dynamic extension manifests and memory settings stay typed as
+bounded JSON fields inside otherwise strict DTOs; unknown top-level request
+fields are rejected.

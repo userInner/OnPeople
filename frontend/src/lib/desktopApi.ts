@@ -15,6 +15,10 @@ import type { DesktopRequest } from "../bindings/DesktopRequest";
 import type { DesktopResponse } from "../bindings/DesktopResponse";
 import type { EventReplay } from "../bindings/EventReplay";
 import type { EventReplayRequest } from "../bindings/EventReplayRequest";
+import type { EffectiveConfig } from "../bindings/EffectiveConfig";
+import type { EffectiveConfigRequest } from "../bindings/EffectiveConfigRequest";
+import type { ExtensionsListRequest } from "../bindings/ExtensionsListRequest";
+import type { ExtensionsSnapshot } from "../bindings/ExtensionsSnapshot";
 import type { AuthorizedProjectAction } from "../bindings/AuthorizedProjectAction";
 import type { FileListRequest } from "../bindings/FileListRequest";
 import type { FilePreview } from "../bindings/FilePreview";
@@ -26,7 +30,34 @@ import type { GitPullRequestRequest } from "../bindings/GitPullRequestRequest";
 import type { GitReviewStartRequest } from "../bindings/GitReviewStartRequest";
 import type { GitReviewSubmitRequest } from "../bindings/GitReviewSubmitRequest";
 import type { LocalArtifactRequest } from "../bindings/LocalArtifactRequest";
+import type { HookCreateRequest } from "../bindings/HookCreateRequest";
+import type { HookDefinition } from "../bindings/HookDefinition";
+import type { HookListRequest } from "../bindings/HookListRequest";
+import type { MemoryDeleteRequest } from "../bindings/MemoryDeleteRequest";
+import type { MemoryListRequest } from "../bindings/MemoryListRequest";
+import type { MemorySaveRequest } from "../bindings/MemorySaveRequest";
+import type { MemorySaveResult } from "../bindings/MemorySaveResult";
+import type { MemorySettingsRequest } from "../bindings/MemorySettingsRequest";
+import type { MemoryState } from "../bindings/MemoryState";
+import type { ModelCatalog } from "../bindings/ModelCatalog";
+import type { ModelValidation } from "../bindings/ModelValidation";
+import type { ModelValidationRequest } from "../bindings/ModelValidationRequest";
+import type { Policy } from "../bindings/Policy";
+import type { PolicySaveRequest } from "../bindings/PolicySaveRequest";
+import type { PolicyState } from "../bindings/PolicyState";
 import type { ProjectActionAuthorizeRequest } from "../bindings/ProjectActionAuthorizeRequest";
+import type { ProviderRequest } from "../bindings/ProviderRequest";
+import type { ProviderSettings } from "../bindings/ProviderSettings";
+import type { SaveProviderRequest } from "../bindings/SaveProviderRequest";
+import type { SecretDeleteRequest } from "../bindings/SecretDeleteRequest";
+import type { SecretDeleteResult } from "../bindings/SecretDeleteResult";
+import type { SecretList } from "../bindings/SecretList";
+import type { SecretSaveRequest } from "../bindings/SecretSaveRequest";
+import type { SecretSaveResult } from "../bindings/SecretSaveResult";
+import type { SkillEnabledRequest } from "../bindings/SkillEnabledRequest";
+import type { SkillEnabledState } from "../bindings/SkillEnabledState";
+import type { UsagePriceRequest } from "../bindings/UsagePriceRequest";
+import type { UsageSnapshot } from "../bindings/UsageSnapshot";
 import type { TerminalFocusRequest } from "../bindings/TerminalFocusRequest";
 import type { TerminalFocusState } from "../bindings/TerminalFocusState";
 import type { TerminalReadyState } from "../bindings/TerminalReadyState";
@@ -284,6 +315,54 @@ export interface DesktopMethodMap {
     params: PluginIdRequest;
     result: JsonValue;
   };
+  "provider.get": { params: ProviderRequest; result: ProviderSettings };
+  "provider.save": {
+    params: SaveProviderRequest;
+    result: ProviderSettings;
+  };
+  "models.discover": {
+    params: Record<string, never>;
+    result: ModelCatalog;
+  };
+  "models.validate": {
+    params: ModelValidationRequest;
+    result: ModelValidation;
+  };
+  "extensions.list": {
+    params: ExtensionsListRequest;
+    result: ExtensionsSnapshot;
+  };
+  "extensions.skill.set-enabled": {
+    params: SkillEnabledRequest;
+    result: SkillEnabledState;
+  };
+  "policy.get": { params: Record<string, never>; result: PolicyState };
+  "policy.save": { params: PolicySaveRequest; result: Policy };
+  "config.effective": {
+    params: EffectiveConfigRequest;
+    result: EffectiveConfig;
+  };
+  "usage.get": { params: Record<string, never>; result: UsageSnapshot };
+  "usage.price.save": {
+    params: UsagePriceRequest;
+    result: UsageSnapshot;
+  };
+  "memory.list": { params: MemoryListRequest; result: MemoryState };
+  "memory.save": { params: MemorySaveRequest; result: MemorySaveResult };
+  "memory.delete": { params: MemoryDeleteRequest; result: JsonValue };
+  "memory.settings.save": {
+    params: MemorySettingsRequest;
+    result: JsonValue;
+  };
+  "secret.list": { params: Record<string, never>; result: SecretList };
+  "secret.save": { params: SecretSaveRequest; result: SecretSaveResult };
+  "secret.delete": {
+    params: SecretDeleteRequest;
+    result: SecretDeleteResult;
+  };
+  "hook.list": { params: HookListRequest; result: HookDefinition[] };
+  "hook.local.list": { params: HookListRequest; result: HookDefinition[] };
+  "hook.create": { params: HookCreateRequest; result: HookDefinition };
 }
 
 type MethodName = keyof DesktopMethodMap & DesktopMethod;
