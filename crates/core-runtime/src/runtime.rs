@@ -1548,7 +1548,7 @@ impl CoreRuntime {
         capabilities.insert(
             "computer".to_owned(),
             CapabilityStatus {
-                available: self.runtime_paths.cua_driver().is_ok(),
+                available: self.runtime_paths.cua_driver_startup_path().is_ok(),
                 reason: Some("由独立 Cua Driver sidecar 提供".to_owned()),
             },
         );

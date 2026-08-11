@@ -64,6 +64,22 @@ impl RuntimePaths {
         )
     }
 
+    /// Resolves the Cua Driver path without hashing it. Capability discovery
+    /// runs during the first window render and must not read the whole driver
+    /// binary just to decide whether the feature is present. Callers that are
+    /// about to execute the driver must continue to use [`Self::cua_driver`].
+    pub fn cua_driver_startup_path(&self) -> Result<RuntimeComponent, AppError> {
+        self.resolve_unverified(
+            "cua-driver",
+            "CUA_DRIVER_PATH",
+            if cfg!(windows) {
+                "cua-driver.exe"
+            } else {
+                "cua-driver"
+            },
+        )
+    }
+
     pub fn browser_host(&self) -> Result<RuntimeComponent, AppError> {
         #[cfg(target_os = "macos")]
         {
