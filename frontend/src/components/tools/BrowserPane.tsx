@@ -236,7 +236,7 @@ function DesktopBrowserPane() {
       );
       const occluded =
         document.querySelector(
-          '[aria-modal="true"], [data-native-surface-occluder="true"], [data-browser-overflow-open="true"]',
+          '[aria-modal="true"], [data-native-surface-occluder="true"]',
         ) !== null;
       // A focused WebContentsView makes the React document report
       // `hasFocus() === false`. Visibility must follow the pane/route, not
