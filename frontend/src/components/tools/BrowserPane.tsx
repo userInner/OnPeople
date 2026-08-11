@@ -40,6 +40,23 @@ function normalizeAddress(value: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
+const BROWSER_TOOL_TIMEOUT_MS = 10_000;
+
+function withBrowserToolTimeout<T>(promise: Promise<T>, message: string) {
+  let timer: number | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timer = window.setTimeout(
+        () => reject(new Error(message)),
+        BROWSER_TOOL_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) window.clearTimeout(timer);
+  });
+}
+
 function tabDisplayTitle(tab: { title: string; url: string }): string {
   if (tab.url === "about:blank") return "新标签页";
   return tab.title || tab.url;
@@ -511,13 +528,22 @@ function DesktopBrowserPane() {
     try {
       const value =
         command === "dom"
-          ? await desktopClient.browserCommand({
-              command: "domSnapshot",
-              payload: { routeId },
-            })
+          ? await withBrowserToolTimeout(
+              desktopClient.browserCommand({
+                command: "domSnapshot",
+                payload: { routeId },
+              }),
+              "DOM 快照超时，请重新加载浏览器页面后重试",
+            )
           : command === "visual"
-            ? await desktopClient.captureBrowserVisualSnapshot(routeId)
-            : await desktopClient.inspectBrowserDeveloperState(routeId);
+            ? await withBrowserToolTimeout(
+                desktopClient.captureBrowserVisualSnapshot(routeId),
+                "视觉快照超时，请重新加载浏览器页面后重试",
+              )
+            : await withBrowserToolTimeout(
+                desktopClient.inspectBrowserDeveloperState(routeId),
+                "开发检查超时，请重新加载浏览器页面后重试",
+              );
       setDetailValue(value);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -756,8 +782,10 @@ function DesktopBrowserPane() {
                   setDetailView("session");
                   setDetailBusy(true);
                   setError(null);
-                  void desktopClient
-                    .getBrowserSessionStatus(routeId)
+                  void withBrowserToolTimeout(
+                    desktopClient.getBrowserSessionStatus(routeId),
+                    "浏览器数据读取超时，请重新加载浏览器页面后重试",
+                  )
                     .then((value) => setDetailValue(value))
                     .catch((cause) => setError(errorMessage(cause)))
                     .finally(() => setDetailBusy(false));
