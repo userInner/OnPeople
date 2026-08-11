@@ -3,9 +3,10 @@ use std::sync::Arc;
 use onpeople_core_runtime::{CoreRuntime, MAX_EVENT_REPLAY_LIMIT};
 use onpeople_types::{
     AppError, ErrorCode, GitCommitRequest, GitFileRequest, GitMutationRequest, GitPushRequest,
-    GitRequest, GoalRequest, GoalUpdateRequest, PreferencePatchRequest, ReasoningRequest,
-    TerminalIdRequest, TerminalResizeRequest, TerminalStartRequest, TerminalWriteRequest,
-    ThreadFilters, ThreadMutationRequest, ThreadRequest, WorktreeRequest,
+    GitRequest, GoalRequest, GoalUpdateRequest, IdRequest, PreferencePatchRequest,
+    ReasoningRequest, ScheduledTaskMutationRequest, ScheduledTaskRequest, TerminalIdRequest,
+    TerminalResizeRequest, TerminalStartRequest, TerminalWriteRequest, ThreadFilters,
+    ThreadMutationRequest, ThreadRequest, WorktreeRequest,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -14,20 +15,23 @@ use crate::{
     AgentIdRequest, AgentListRequest, AgentMessageRequest, AgentProfileIdRequest,
     AgentProfileSaveRequest, AuthorizedProjectAction, BrowserActionRequest,
     BrowserAnnotationDeleteRequest, BrowserCommandRequest, BrowserHostOperation,
-    BrowserRouteRequest, ConnectorOauthCompleteRequest, ContextRequest, DESKTOP_PROTOCOL_VERSION,
-    DesktopCapabilities, DesktopEvent, DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse,
-    EventReplay, EventReplayRequest, FileListRequest, FilePreview, FilePreviewRequest,
-    FileSearchRequest, GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest,
-    GitReviewStartRequest, GitReviewSubmitRequest, LocalArtifactRequest, NewTaskRequest,
-    PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest, ProjectActionAuthorizeRequest,
-    ProjectPathRequest, ProjectUpdateRequest, QueuedTaskMessage, QuickLauncherRequest,
-    RuntimeSnapshotRequest, TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest,
-    TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
-    TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
-    TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
-    TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest,
-    TerminalFocusState, TerminalReadyState, ThreadAutoNameRequest, WorktreePathRequest,
-    should_forward_desktop_event,
+    BrowserRouteRequest, CloudGroupSelectRequest, CloudLoginRequest, CloudPayloadRequest,
+    CloudRedeemRequest, CloudRegisterRequest, CloudRegistrationCodeRequest,
+    ConnectorOauthCompleteRequest, ContextRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities,
+    DesktopEvent, DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EventReplay,
+    EventReplayRequest, FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest,
+    GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest,
+    GitReviewSubmitRequest, LiveCloseRequest, LiveCreateRequest, LocalArtifactRequest,
+    NewTaskRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
+    ProjectActionAuthorizeRequest, ProjectPathRequest, ProjectUpdateRequest, QueuedTaskMessage,
+    QuickLauncherRequest, RuntimeSnapshotRequest, ScheduledTaskFromTextRequest,
+    SchedulerMarkReadRequest, TaskApprovalResolution, TaskApprovalResolveRequest,
+    TaskCancelRequest, TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest,
+    TaskQueueDeletion, TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery,
+    TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState,
+    TaskSteerReceipt, TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest,
+    TerminalFocusRequest, TerminalFocusState, TerminalReadyState, ThreadAutoNameRequest,
+    WorktreePathRequest, should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -321,6 +325,85 @@ impl DesktopDispatcher {
                 self.runtime.handoff_worktree(&request.worktree_path)
             }
             DesktopMethod::SchedulerGet => to_value(self.runtime.scheduler_snapshot()),
+            DesktopMethod::SchedulerCreate => {
+                let request: ScheduledTaskRequest = parse_params(params)?;
+                to_value(self.runtime.create_scheduled_task(request)?)
+            }
+            DesktopMethod::SchedulerCreateFromText => {
+                let request: ScheduledTaskFromTextRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                to_value(self.runtime.create_scheduled_task_from_text(&payload)?)
+            }
+            DesktopMethod::SchedulerUpdate => {
+                let request: ScheduledTaskMutationRequest = parse_params(params)?;
+                to_value(self.runtime.update_scheduled_task(request)?)
+            }
+            DesktopMethod::SchedulerDelete => {
+                let request: IdRequest = parse_params(params)?;
+                to_value(self.runtime.delete_scheduled_task(&request.id)?)
+            }
+            DesktopMethod::SchedulerRun => {
+                let request: IdRequest = parse_params(params)?;
+                self.runtime.run_scheduled_task(&request.id).await
+            }
+            DesktopMethod::SchedulerMarkRead => {
+                let request: SchedulerMarkReadRequest = parse_params(params)?;
+                to_value(
+                    self.runtime
+                        .mark_scheduled_notifications_read(request.run_id.as_deref())?,
+                )
+            }
+            DesktopMethod::CloudAccount => to_value(self.runtime.cloud_state()),
+            DesktopMethod::CloudLogin => {
+                let request: CloudLoginRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                to_value(self.runtime.cloud_login(&payload).await?)
+            }
+            DesktopMethod::CloudRegistrationCodeSend => {
+                let request: CloudRegistrationCodeRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                self.runtime.cloud_send_registration_code(&payload).await
+            }
+            DesktopMethod::CloudRegister => {
+                let request: CloudRegisterRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                to_value(self.runtime.cloud_register(&payload).await?)
+            }
+            DesktopMethod::CloudLogout => to_value(self.runtime.cloud_logout()?),
+            DesktopMethod::CloudRedeem => {
+                let request: CloudRedeemRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                self.runtime.cloud_redeem(&payload).await
+            }
+            DesktopMethod::CloudGroups => {
+                Ok(json!({ "groups": self.runtime.cloud_groups().await? }))
+            }
+            DesktopMethod::CloudGroupSelect => {
+                let request: CloudGroupSelectRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                to_value(self.runtime.cloud_select_group(&payload)?)
+            }
+            DesktopMethod::CloudUsage => {
+                let request: CloudPayloadRequest = parse_params(params)?;
+                let payload = Value::Object(request.payload.into_iter().collect());
+                self.runtime.cloud_usage(&payload).await
+            }
+            DesktopMethod::CloudLeaderboardSave => {
+                let request: CloudPayloadRequest = parse_params(params)?;
+                let payload = Value::Object(request.payload.into_iter().collect());
+                self.runtime.save_cloud_leaderboard_preference(&payload)
+            }
+            DesktopMethod::LiveStatus => to_value(self.runtime.live_status()),
+            DesktopMethod::LiveCreate => {
+                let request: LiveCreateRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                self.runtime.create_live_session(&payload).await
+            }
+            DesktopMethod::LiveClose => {
+                let request: LiveCloseRequest = parse_params(params)?;
+                let payload = to_value(request)?;
+                self.runtime.close_live_session(&payload).await
+            }
             DesktopMethod::TaskStart => {
                 let request: TaskStartRequest = parse_params(params)?;
                 let submission = self
@@ -1249,6 +1332,108 @@ mod tests {
                 .result
                 .as_ref()
                 .is_some_and(|value| value.get("snapshot").is_some())
+        );
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatches_scheduler_cloud_and_live_controls_without_a_shell_host() {
+        let temporary = tempfile::tempdir().expect("temporary workspace");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let created = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "scheduler-create".to_owned(),
+                method: DesktopMethod::SchedulerCreate,
+                params: json!({
+                    "name": "每日检查",
+                    "prompt": "检查状态",
+                    "cwd": temporary.path(),
+                    "schedule": { "kind": "interval", "seconds": 3600 },
+                    "runtime": null,
+                }),
+            })
+            .await;
+        assert!(created.ok, "unexpected response: {created:?}");
+        let task_id = created
+            .result
+            .as_ref()
+            .and_then(|value| value["id"].as_str())
+            .expect("created task id")
+            .to_owned();
+
+        let from_text = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "scheduler-create-from-text".to_owned(),
+                method: DesktopMethod::SchedulerCreateFromText,
+                params: json!({
+                    "name": null,
+                    "prompt": null,
+                    "text": "整理今天的工作",
+                    "cwd": temporary.path(),
+                    "schedule": null,
+                    "runtime": null,
+                }),
+            })
+            .await;
+        assert!(from_text.ok, "unexpected response: {from_text:?}");
+        assert_eq!(
+            from_text
+                .result
+                .as_ref()
+                .and_then(|value| value["schedule"]["kind"].as_str()),
+            Some("once")
+        );
+
+        let deleted = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "scheduler-delete".to_owned(),
+                method: DesktopMethod::SchedulerDelete,
+                params: json!({ "id": task_id }),
+            })
+            .await;
+        assert!(deleted.ok, "unexpected response: {deleted:?}");
+        assert_eq!(deleted.result.and_then(|value| value.as_bool()), Some(true));
+
+        let account = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "cloud-account".to_owned(),
+                method: DesktopMethod::CloudAccount,
+                params: json!({}),
+            })
+            .await;
+        assert!(account.ok, "unexpected response: {account:?}");
+        assert_eq!(
+            account
+                .result
+                .as_ref()
+                .and_then(|value| value["signedIn"].as_bool()),
+            Some(false)
+        );
+
+        let live = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "live-status".to_owned(),
+                method: DesktopMethod::LiveStatus,
+                params: json!({}),
+            })
+            .await;
+        assert!(live.ok, "unexpected response: {live:?}");
+        assert!(
+            live.result
+                .as_ref()
+                .is_some_and(|value| value.get("available").is_some())
         );
         runtime.stop().await;
     }

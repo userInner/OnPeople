@@ -249,6 +249,29 @@ describe("DesktopApiClient", () => {
     ]);
   });
 
+  it("routes scheduler, cloud and live controls through stable methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result: {},
+    }));
+    const client = createDesktopApiClient(transport, () => "request-services");
+
+    await client.request("scheduler.mark-read", { runId: null });
+    await client.request("cloud.login", {
+      email: "user@example.com",
+      password: "secret",
+    });
+    await client.request("live.close", { callId: "call-1" });
+
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "scheduler.mark-read",
+      "cloud.login",
+      "live.close",
+    ]);
+  });
+
   it("preserves legacy steering response shapes", () => {
     expect(
       legacySteerResult({

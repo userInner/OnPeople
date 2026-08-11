@@ -111,4 +111,59 @@ describe("desktopClient native domain compatibility", () => {
     expect("dispatchAgentTask" in desktopClient).toBe(false);
     expect("removeAgentTask" in desktopClient).toBe(false);
   });
+
+  it("keeps scheduler, cloud and live helpers on stable requests", async () => {
+    const invoke = vi.fn(async (command: string, args: unknown) => {
+      expect(command).toBe("desktop_request");
+      const request = (
+        args as { request: { requestId: string; method: string } }
+      ).request;
+      const result =
+        request.method === "scheduler.get"
+          ? { tasks: [], runs: [], unread: 0 }
+          : request.method === "cloud.account"
+            ? {
+                signedIn: false,
+                serviceUrl: "https://example.com",
+                account: null,
+                group: null,
+                models: [],
+              }
+            : request.method === "live.status"
+              ? {
+                  available: false,
+                  voice: "cove",
+                  activeCallId: null,
+                  message: "请先登录",
+                }
+              : {};
+      return {
+        protocolVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        result,
+      };
+    });
+    window.__ONPEOPLE_DEV__ = {
+      setWorkbenchState: vi.fn() as never,
+      invoke,
+    };
+
+    await desktopClient.listScheduledTasks();
+    await desktopClient.getCloudAccount();
+    await desktopClient.getLiveStatus();
+    await desktopClient.markScheduledNotificationsRead();
+
+    expect(
+      invoke.mock.calls.map(([, args]) =>
+        String((args as { request: { method: string } }).request.method),
+      ),
+    ).toEqual([
+      "scheduler.get",
+      "cloud.account",
+      "live.status",
+      "scheduler.mark-read",
+    ]);
+    expect("streamLive" in desktopClient).toBe(false);
+  });
 });

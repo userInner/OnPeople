@@ -89,6 +89,44 @@ pub enum DesktopMethod {
     WorktreeHandoff,
     #[serde(rename = "scheduler.get")]
     SchedulerGet,
+    #[serde(rename = "scheduler.create")]
+    SchedulerCreate,
+    #[serde(rename = "scheduler.create-from-text")]
+    SchedulerCreateFromText,
+    #[serde(rename = "scheduler.update")]
+    SchedulerUpdate,
+    #[serde(rename = "scheduler.delete")]
+    SchedulerDelete,
+    #[serde(rename = "scheduler.run")]
+    SchedulerRun,
+    #[serde(rename = "scheduler.mark-read")]
+    SchedulerMarkRead,
+    #[serde(rename = "cloud.account")]
+    CloudAccount,
+    #[serde(rename = "cloud.login")]
+    CloudLogin,
+    #[serde(rename = "cloud.registration-code.send")]
+    CloudRegistrationCodeSend,
+    #[serde(rename = "cloud.register")]
+    CloudRegister,
+    #[serde(rename = "cloud.logout")]
+    CloudLogout,
+    #[serde(rename = "cloud.redeem")]
+    CloudRedeem,
+    #[serde(rename = "cloud.groups")]
+    CloudGroups,
+    #[serde(rename = "cloud.group.select")]
+    CloudGroupSelect,
+    #[serde(rename = "cloud.usage")]
+    CloudUsage,
+    #[serde(rename = "cloud.leaderboard.save")]
+    CloudLeaderboardSave,
+    #[serde(rename = "live.status")]
+    LiveStatus,
+    #[serde(rename = "live.create")]
+    LiveCreate,
+    #[serde(rename = "live.close")]
+    LiveClose,
     #[serde(rename = "task.start")]
     TaskStart,
     #[serde(rename = "task.cancel")]
@@ -198,7 +236,7 @@ pub enum DesktopMethod {
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 92] = [
+    pub const ALL: [Self; 111] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -238,6 +276,25 @@ impl DesktopMethod {
         Self::WorktreeSnapshot,
         Self::WorktreeHandoff,
         Self::SchedulerGet,
+        Self::SchedulerCreate,
+        Self::SchedulerCreateFromText,
+        Self::SchedulerUpdate,
+        Self::SchedulerDelete,
+        Self::SchedulerRun,
+        Self::SchedulerMarkRead,
+        Self::CloudAccount,
+        Self::CloudLogin,
+        Self::CloudRegistrationCodeSend,
+        Self::CloudRegister,
+        Self::CloudLogout,
+        Self::CloudRedeem,
+        Self::CloudGroups,
+        Self::CloudGroupSelect,
+        Self::CloudUsage,
+        Self::CloudLeaderboardSave,
+        Self::LiveStatus,
+        Self::LiveCreate,
+        Self::LiveClose,
         Self::TaskStart,
         Self::TaskCancel,
         Self::TaskSnapshot,
@@ -806,6 +863,98 @@ pub struct WorktreePathRequest {
     pub output: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ScheduledTaskFromTextRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<Value>,
+    #[serde(default)]
+    pub runtime: Option<Value>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SchedulerMarkReadRequest {
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRegistrationCodeRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudRedeemRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudGroupSelectRequest {
+    pub group_id: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct CloudPayloadRequest {
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LiveCreateRequest {
+    pub sdp: String,
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub initial_items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct LiveCloseRequest {
+    pub call_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
@@ -1254,6 +1403,16 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         AgentMessageRequest,
         AgentIdRequest,
         WorktreePathRequest,
+        ScheduledTaskFromTextRequest,
+        SchedulerMarkReadRequest,
+        CloudLoginRequest,
+        CloudRegistrationCodeRequest,
+        CloudRegisterRequest,
+        CloudRedeemRequest,
+        CloudGroupSelectRequest,
+        CloudPayloadRequest,
+        LiveCreateRequest,
+        LiveCloseRequest,
         TaskStartRequest,
         TaskCancelRequest,
         TaskSnapshotRequest,
@@ -1363,6 +1522,23 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DesktopMethod::WorktreeSnapshot).expect("worktree method"),
             r#""worktree.snapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_scheduler_cloud_and_live_method_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::SchedulerCreateFromText)
+                .expect("scheduler method"),
+            r#""scheduler.create-from-text""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::CloudRegistrationCodeSend).expect("cloud method"),
+            r#""cloud.registration-code.send""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::LiveCreate).expect("live method"),
+            r#""live.create""#
         );
     }
 

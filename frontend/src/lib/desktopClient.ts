@@ -15,12 +15,10 @@ import type {
   BrowserBoundsRequest,
   BrowserFrame,
   BrowserState,
-  CloudAccountState,
   DesktopEvent,
   DesktopRecoveryRequired,
   EventReplay,
   EventEnvelope,
-  LiveStatus,
   Preferences,
   PromptSubmission,
   ProviderKind,
@@ -413,17 +411,26 @@ export const desktopClient = {
     cwd: string;
     schedule: unknown;
     runtime: unknown;
-  }) => call("create_scheduled_task", { request }),
+  }) =>
+    desktopApi.request("scheduler.create", {
+      name: request.name,
+      prompt: request.prompt,
+      cwd: request.cwd,
+      schedule: request.schedule as JsonValue,
+      runtime: (request.runtime ?? null) as JsonValue,
+    }),
   runScheduledTask: (id: string) =>
-    call("run_scheduled_task", { request: { id } }),
+    desktopApi.request("scheduler.run", { id }) as Promise<
+      Record<string, unknown>
+    >,
   deleteScheduledTask: (id: string) =>
-    call<boolean>("delete_scheduled_task", { request: { id } }),
-  liveStatus: () => call<LiveStatus>("get_live_status"),
-  getLiveStatus: () => call<LiveStatus>("get_live_status"),
+    desktopApi.request("scheduler.delete", { id }),
+  liveStatus: () => desktopApi.request("live.status", {}),
+  getLiveStatus: () => desktopApi.request("live.status", {}),
   requestMicrophoneAccess: () =>
     call<{ granted: boolean; status: string }>("request_microphone_access"),
-  cloudAccount: () => call<CloudAccountState>("get_cloud_account"),
-  getCloudAccount: () => call<CloudAccountState>("get_cloud_account"),
+  cloudAccount: () => desktopApi.request("cloud.account", {}),
+  getCloudAccount: () => desktopApi.request("cloud.account", {}),
   appUpdateState: () => call<AppUpdateState>("get_app_update_state"),
   getAppUpdateState: () => call<AppUpdateState>("get_app_update_state"),
   checkForAppUpdate: () =>
@@ -484,11 +491,6 @@ export const desktopClient = {
         terminal: false,
       }),
     );
-  },
-  streamLive: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_live", { channel });
   },
   listBrowserAnnotations: (routeId: string) =>
     desktopApi.request("browser.annotation.list", { routeId }),
@@ -554,43 +556,58 @@ export const desktopClient = {
       model: model ?? null,
     }) as Promise<Record<string, unknown>>,
   loginCloudAccount: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("login_cloud_account", { request: payload }),
+    desktopApi.request("cloud.login", {
+      email: String(payload.email ?? ""),
+      password: String(payload.password ?? ""),
+    }) as Promise<Record<string, unknown>>,
   sendCloudRegistrationCode: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("send_cloud_registration_code", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.registration-code.send", {
+      email: String(payload.email ?? ""),
+    }) as Promise<Record<string, unknown>>,
   registerCloudAccount: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("register_cloud_account", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.register", {
+      email: String(payload.email ?? ""),
+      password: String(payload.password ?? ""),
+      code: String(payload.code ?? ""),
+    }) as Promise<Record<string, unknown>>,
   logoutCloudAccount: () =>
-    call<Record<string, unknown>>("logout_cloud_account", { request: {} }),
+    desktopApi.request("cloud.logout", {}) as Promise<Record<string, unknown>>,
   redeemCloudCode: (code: string) =>
-    call<Record<string, unknown>>("redeem_cloud_code", { request: { code } }),
+    desktopApi.request("cloud.redeem", { code }) as Promise<
+      Record<string, unknown>
+    >,
   openCloudConsole: () =>
     call<Record<string, unknown>>("open_cloud_console", { request: {} }),
   openExternalUrl: (url: string) =>
     call<Record<string, unknown>>("open_external_url", { request: { url } }),
   listCloudGroups: () =>
-    call<Record<string, unknown>>("list_cloud_groups", { request: {} }),
+    desktopApi.request("cloud.groups", {}) as Promise<Record<string, unknown>>,
   selectCloudGroup: (groupId: string) =>
-    call<Record<string, unknown>>("select_cloud_group", {
-      request: { groupId },
-    }),
+    desktopApi.request("cloud.group.select", { groupId }) as Promise<
+      Record<string, unknown>
+    >,
   getCloudUsageProfile: (payload: Record<string, unknown> = {}) =>
-    call<Record<string, unknown>>("get_cloud_usage_profile", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.usage", {
+      payload: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   saveCloudLeaderboardPreference: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_cloud_leaderboard_preference", {
-      request: payload,
-    }),
+    desktopApi.request("cloud.leaderboard.save", {
+      payload: jsonRecord(payload),
+    }) as Promise<Record<string, unknown>>,
   createLiveSession: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_live_session", { request: payload }),
+    desktopApi.request("live.create", {
+      sdp: String(payload.sdp ?? ""),
+      voice: typeof payload.voice === "string" ? payload.voice : null,
+      instructions:
+        typeof payload.instructions === "string" ? payload.instructions : null,
+      initialItems: Array.isArray(payload.initialItems)
+        ? (payload.initialItems as JsonValue[])
+        : [],
+    }) as Promise<Record<string, unknown>>,
   closeLiveSession: (callId: string) =>
-    call<Record<string, unknown>>("close_live_session", {
-      request: { callId },
-    }),
+    desktopApi.request("live.close", { callId }) as Promise<
+      Record<string, unknown>
+    >,
   resumeTask: (threadId: string) =>
     desktopApi.request("task.resume", { threadId }),
   resumeThread: async (threadId: string): Promise<Record<string, unknown>> => {
@@ -892,20 +909,23 @@ export const desktopClient = {
     call<Record<string, unknown>>("list_local_hooks", { request: { cwd } }),
   createHook: (payload: Record<string, unknown>) =>
     call<Record<string, unknown>>("create_hook", { request: payload }),
-  listScheduledTasks: () =>
-    call<SchedulerSnapshot>("list_scheduled_tasks", { request: {} }),
+  listScheduledTasks: () => desktopApi.request("scheduler.get", {}),
   createScheduledTaskFromText: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_scheduled_task_from_text", {
-      request: payload,
-    }),
+    desktopApi.request("scheduler.create-from-text", {
+      name: typeof payload.name === "string" ? payload.name : null,
+      prompt: typeof payload.prompt === "string" ? payload.prompt : null,
+      text: typeof payload.text === "string" ? payload.text : null,
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+      schedule: (payload.schedule ?? null) as JsonValue,
+      runtime: (payload.runtime ?? null) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   updateScheduledTask: (taskId: string, patch: Record<string, unknown>) =>
-    call<Record<string, unknown>>("update_scheduled_task", {
-      request: { taskId, patch },
-    }),
+    desktopApi.request("scheduler.update", {
+      taskId,
+      patch: jsonRecord(patch) as JsonValue,
+    }) as Promise<Record<string, unknown>>,
   markScheduledNotificationsRead: (runId?: string | null) =>
-    call<SchedulerSnapshot>("mark_scheduled_notifications_read", {
-      request: { runId: runId ?? null },
-    }),
+    desktopApi.request("scheduler.mark-read", { runId: runId ?? null }),
   cancelTask: (threadId: string, taskId?: string | null) =>
     desktopApi.request("task.cancel", {
       threadId,

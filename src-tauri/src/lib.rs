@@ -1742,76 +1742,52 @@ impl AppState {
                 serde_json::to_value(self.runtime.scheduler_snapshot()).map_err(AppError::internal)
             }
             "create_scheduled_task" => {
-                let task = self.runtime.scheduler().create(
-                    required_string(&payload, "name")?,
-                    required_string(&payload, "prompt")?,
-                    required_string(&payload, "cwd")?,
-                    payload
-                        .get("schedule")
-                        .cloned()
-                        .unwrap_or_else(|| json!({ "kind": "once" })),
-                    payload.get("runtime").cloned().unwrap_or(Value::Null),
-                )?;
+                let task =
+                    self.runtime
+                        .create_scheduled_task(onpeople_types::ScheduledTaskRequest {
+                            name: required_string(&payload, "name")?,
+                            prompt: required_string(&payload, "prompt")?,
+                            cwd: required_string(&payload, "cwd")?,
+                            schedule: payload
+                                .get("schedule")
+                                .cloned()
+                                .unwrap_or_else(|| json!({ "kind": "once" })),
+                            runtime: payload.get("runtime").cloned().unwrap_or(Value::Null),
+                        })?;
                 serde_json::to_value(self.runtime.scheduler_snapshot())
                     .map(|snapshot| json!({ "task": task, "state": snapshot }))
                     .map_err(AppError::internal)
             }
             "create_scheduled_task_from_text" => {
-                let name = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("OnPeople 计划任务")
-                    .to_owned();
-                let prompt = payload
-                    .get("prompt")
-                    .or_else(|| payload.get("text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                let cwd = payload
-                    .get("cwd")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                serde_json::to_value(
-                    self.runtime.scheduler().create(
-                        name,
-                        prompt,
-                        cwd,
-                        payload
-                            .get("schedule")
-                            .cloned()
-                            .unwrap_or_else(|| json!({"kind":"once"})),
-                        payload.get("runtime").cloned().unwrap_or(Value::Null),
-                    )?,
-                )
-                .map_err(AppError::internal)
+                serde_json::to_value(self.runtime.create_scheduled_task_from_text(&payload)?)
+                    .map_err(AppError::internal)
             }
             "update_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                let task = self.runtime.scheduler().update(
-                    &task_id,
-                    payload
-                        .get("patch")
-                        .cloned()
-                        .unwrap_or_else(|| payload.clone()),
+                let task = self.runtime.update_scheduled_task(
+                    onpeople_types::ScheduledTaskMutationRequest {
+                        task_id,
+                        patch: payload
+                            .get("patch")
+                            .cloned()
+                            .unwrap_or_else(|| payload.clone()),
+                    },
                 )?;
                 Ok(json!({ "task": task, "state": self.runtime.scheduler_snapshot() }))
             }
             "delete_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                let deleted = self.runtime.scheduler().delete(&task_id)?;
+                let deleted = self.runtime.delete_scheduled_task(&task_id)?;
                 Ok(json!({ "deleted": deleted, "state": self.runtime.scheduler_snapshot() }))
             }
             "run_scheduled_task" => {
                 let task_id = required_string(&payload, "taskId")?;
-                execute_scheduled_task(Arc::clone(&self.runtime), task_id).await
+                self.runtime.run_scheduled_task(&task_id).await
             }
             "mark_scheduled_notifications_read" => {
                 let run_id = payload.get("runId").and_then(Value::as_str);
-                self.runtime.scheduler().mark_read(run_id)?;
-                Ok(serde_json::to_value(self.runtime.scheduler_snapshot())
-                    .map_err(AppError::internal)?)
+                serde_json::to_value(self.runtime.mark_scheduled_notifications_read(run_id)?)
+                    .map_err(AppError::internal)
             }
             "list_worktrees" => {
                 let root = payload
@@ -3193,52 +3169,6 @@ fn required_string(payload: &Value, key: &str) -> Result<String, AppError> {
         .ok_or_else(|| AppError::invalid(format!("缺少参数 {key}")))
 }
 
-async fn execute_scheduled_task(
-    runtime: Arc<CoreRuntime>,
-    task_id: String,
-) -> Result<Value, AppError> {
-    let run = runtime.scheduler().run_now(&task_id)?;
-    let task = runtime
-        .scheduler()
-        .task(&task_id)
-        .ok_or_else(|| AppError::new(onpeople_types::ErrorCode::NotFound, "计划任务不存在"))?;
-    let submission = runtime
-        .send_prompt(SendPromptRequest {
-            thread_id: None,
-            text: task.prompt,
-            cwd: Some(task.cwd),
-            workspace_mode: Some("local".to_owned()),
-            images: Vec::new(),
-            attachments: Vec::new(),
-            capability: None,
-            mode: None,
-            industry_plugin: None,
-            model: None,
-            reasoning_effort: None,
-        })
-        .await;
-    match submission {
-        Ok(submission) => {
-            runtime.scheduler().start_run(
-                &run.id,
-                submission.thread_id.clone(),
-                submission.turn_id.clone(),
-            )?;
-            Ok(json!({
-                "run": run,
-                "submission": submission,
-                "state": runtime.scheduler_snapshot(),
-            }))
-        }
-        Err(error) => {
-            runtime
-                .scheduler()
-                .finish_run(&run.id, "failed", None, Some(error.message.clone()))?;
-            Err(error)
-        }
-    }
-}
-
 fn install_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     let settings = MenuItemBuilder::with_id("menu-settings", "设置…")
         .accelerator("CmdOrCtrl+Comma")
@@ -3622,7 +3552,7 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
             for task in due {
                 let task_runtime = Arc::clone(&scheduled_runtime);
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = execute_scheduled_task(task_runtime, task.id).await {
+                    if let Err(error) = task_runtime.run_scheduled_task(&task.id).await {
                         tracing::warn!(
                             code = ?error.code,
                             message = %error.message,
@@ -4172,13 +4102,7 @@ fn create_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::ScheduledTaskRequest,
 ) -> Result<ScheduledTask, AppError> {
-    state.runtime.scheduler().create(
-        request.name,
-        request.prompt,
-        request.cwd,
-        request.schedule,
-        request.runtime,
-    )
+    state.runtime.create_scheduled_task(request)
 }
 
 #[tauri::command]
@@ -4186,10 +4110,7 @@ fn update_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::ScheduledTaskMutationRequest,
 ) -> Result<ScheduledTask, AppError> {
-    state
-        .runtime
-        .scheduler()
-        .update(&request.task_id, request.patch)
+    state.runtime.update_scheduled_task(request)
 }
 
 #[tauri::command]
@@ -4197,7 +4118,7 @@ fn delete_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::IdRequest,
 ) -> Result<bool, AppError> {
-    state.runtime.scheduler().delete(&request.id)
+    state.runtime.delete_scheduled_task(&request.id)
 }
 
 #[tauri::command]
@@ -4205,7 +4126,7 @@ async fn run_scheduled_task(
     state: State<'_, AppState>,
     request: onpeople_types::IdRequest,
 ) -> Result<Value, AppError> {
-    execute_scheduled_task(Arc::clone(&state.runtime), request.id).await
+    state.runtime.run_scheduled_task(&request.id).await
 }
 
 #[tauri::command]
@@ -4217,8 +4138,7 @@ fn mark_scheduled_notifications_read(
         .get("runId")
         .or_else(|| request.get("id"))
         .and_then(Value::as_str);
-    state.runtime.scheduler().mark_read(run_id)?;
-    Ok(state.runtime.scheduler_snapshot())
+    state.runtime.mark_scheduled_notifications_read(run_id)
 }
 
 #[tauri::command]

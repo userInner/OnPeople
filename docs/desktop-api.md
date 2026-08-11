@@ -49,6 +49,13 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `agent.message`, `agent.stop`, `agent.read`
 - `worktree.snapshot`, `worktree.handoff`
 - `scheduler.get`
+- `scheduler.create`, `scheduler.create-from-text`, `scheduler.update`
+- `scheduler.delete`, `scheduler.run`, `scheduler.mark-read`
+- `cloud.account`, `cloud.login`, `cloud.registration-code.send`
+- `cloud.register`, `cloud.logout`, `cloud.redeem`
+- `cloud.groups`, `cloud.group.select`, `cloud.usage`
+- `cloud.leaderboard.save`
+- `live.status`, `live.create`, `live.close`
 - `task.start`
 - `task.cancel`
 - `task.snapshot`
@@ -177,6 +184,24 @@ Worktree snapshot and handoff are filesystem/runtime operations rather than
 native UI effects. They now live behind `CoreRuntime` and are available to any
 Desktop API transport. Legacy Tauri commands stay registered as rollback
 aliases and delegate to the same facades.
+
+## Scheduler, cloud, and Live controls
+
+Scheduler list/create/update/delete/run/notification operations now use typed
+Desktop API requests. Task execution, including run bookkeeping and prompt
+submission, is owned by one `CoreRuntime` facade; both stable requests and the
+legacy scheduler loop call that same implementation.
+
+Cloud account, authentication, registration, redemption, groups, usage, and
+leaderboard preferences dispatch directly to `CoreRuntime`. Opening the cloud
+console remains a native-host responsibility because it launches the system
+browser; it is intentionally not represented as a headless request.
+
+Live status and session create/close are stable request/response methods. Live
+sideband status and event delivery remain the existing high-frequency event
+transport and are not forced through request/response. The unused legacy
+`streamLive` React wrapper was removed; Tauri retains its handler for rollback
+until event-transport cleanup is complete.
 
 ## Browser and extension host boundaries
 

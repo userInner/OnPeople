@@ -24,9 +24,10 @@ use onpeople_types::{
     GitPushRequest, GitRequest, GitState, Goal, GoalRequest, GoalStatus, GoalUpdateRequest,
     LiveStatus, ModelDescriptor, Policy, PreferencePatchRequest, Preferences, PromptSubmission,
     ProviderKind, ProviderRequest, ProviderSettings, RuntimeDiagnostics, RuntimeSnapshot,
-    SchedulerSnapshot, SendPromptRequest, TerminalIdRequest, TerminalResizeRequest,
-    TerminalSession, TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList,
-    ThreadSummary, WorktreeRequest,
+    ScheduledTask, ScheduledTaskMutationRequest, ScheduledTaskRequest, SchedulerSnapshot,
+    SendPromptRequest, TerminalIdRequest, TerminalResizeRequest, TerminalSession,
+    TerminalStartRequest, TerminalWriteRequest, ThreadFilters, ThreadList, ThreadSummary,
+    WorktreeRequest,
 };
 use onpeople_workspace::{
     GitService, TerminalEvent, TerminalService, WorktreeService, discover_project_actions,
@@ -4156,6 +4157,114 @@ impl CoreRuntime {
 
     pub fn scheduler_snapshot(&self) -> SchedulerSnapshot {
         self.scheduler.snapshot()
+    }
+
+    pub fn create_scheduled_task(
+        &self,
+        request: ScheduledTaskRequest,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.create(
+            request.name,
+            request.prompt,
+            request.cwd,
+            request.schedule,
+            request.runtime,
+        )
+    }
+
+    pub fn create_scheduled_task_from_text(
+        &self,
+        payload: &Value,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.create(
+            payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("OnPeople 计划任务")
+                .to_owned(),
+            payload
+                .get("prompt")
+                .and_then(Value::as_str)
+                .or_else(|| payload.get("text").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_owned(),
+            payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            payload
+                .get("schedule")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .unwrap_or_else(|| json!({ "kind": "once" })),
+            payload
+                .get("runtime")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .unwrap_or(Value::Null),
+        )
+    }
+
+    pub fn update_scheduled_task(
+        &self,
+        request: ScheduledTaskMutationRequest,
+    ) -> Result<ScheduledTask, AppError> {
+        self.scheduler.update(&request.task_id, request.patch)
+    }
+
+    pub fn delete_scheduled_task(&self, task_id: &str) -> Result<bool, AppError> {
+        self.scheduler.delete(task_id)
+    }
+
+    pub fn mark_scheduled_notifications_read(
+        &self,
+        run_id: Option<&str>,
+    ) -> Result<SchedulerSnapshot, AppError> {
+        self.scheduler.mark_read(run_id)?;
+        Ok(self.scheduler_snapshot())
+    }
+
+    pub async fn run_scheduled_task(&self, task_id: &str) -> Result<Value, AppError> {
+        let run = self.scheduler.run_now(task_id)?;
+        let task = self
+            .scheduler
+            .task(task_id)
+            .ok_or_else(|| AppError::new(onpeople_types::ErrorCode::NotFound, "计划任务不存在"))?;
+        let submission = self
+            .send_prompt(SendPromptRequest {
+                thread_id: None,
+                text: task.prompt,
+                cwd: Some(task.cwd),
+                workspace_mode: Some("local".to_owned()),
+                images: Vec::new(),
+                attachments: Vec::new(),
+                capability: None,
+                mode: None,
+                industry_plugin: None,
+                model: None,
+                reasoning_effort: None,
+            })
+            .await;
+        match submission {
+            Ok(submission) => {
+                self.scheduler.start_run(
+                    &run.id,
+                    submission.thread_id.clone(),
+                    submission.turn_id.clone(),
+                )?;
+                Ok(json!({
+                    "run": run,
+                    "submission": submission,
+                    "state": self.scheduler_snapshot(),
+                }))
+            }
+            Err(error) => {
+                self.scheduler
+                    .finish_run(&run.id, "failed", None, Some(error.message.clone()))?;
+                Err(error)
+            }
+        }
     }
 
     pub fn live_status(&self) -> LiveStatus {

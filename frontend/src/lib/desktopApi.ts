@@ -10,6 +10,13 @@ import type { BrowserAnnotationDeleteRequest } from "../bindings/BrowserAnnotati
 import type { BrowserBoundsRequest } from "../bindings/BrowserBoundsRequest";
 import type { BrowserRouteRequest } from "../bindings/BrowserRouteRequest";
 import type { BrowserState } from "../bindings/BrowserState";
+import type { CloudAccountState } from "../bindings/CloudAccountState";
+import type { CloudGroupSelectRequest } from "../bindings/CloudGroupSelectRequest";
+import type { CloudLoginRequest } from "../bindings/CloudLoginRequest";
+import type { CloudPayloadRequest } from "../bindings/CloudPayloadRequest";
+import type { CloudRedeemRequest } from "../bindings/CloudRedeemRequest";
+import type { CloudRegisterRequest } from "../bindings/CloudRegisterRequest";
+import type { CloudRegistrationCodeRequest } from "../bindings/CloudRegistrationCodeRequest";
 import type { ConnectorOauthCompleteRequest } from "../bindings/ConnectorOauthCompleteRequest";
 import type { QueuedTaskMessage } from "../bindings/QueuedTaskMessage";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
@@ -33,6 +40,9 @@ import type { GitPullRequestRequest } from "../bindings/GitPullRequestRequest";
 import type { GitReviewStartRequest } from "../bindings/GitReviewStartRequest";
 import type { GitReviewSubmitRequest } from "../bindings/GitReviewSubmitRequest";
 import type { LocalArtifactRequest } from "../bindings/LocalArtifactRequest";
+import type { LiveCloseRequest } from "../bindings/LiveCloseRequest";
+import type { LiveCreateRequest } from "../bindings/LiveCreateRequest";
+import type { LiveStatus } from "../bindings/LiveStatus";
 import type { ContextRequest } from "../bindings/ContextRequest";
 import type { NewTaskRequest } from "../bindings/NewTaskRequest";
 import type { ProjectPathRequest } from "../bindings/ProjectPathRequest";
@@ -61,10 +71,16 @@ import type { PluginPayloadRequest } from "../bindings/PluginPayloadRequest";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
 import type { ReasoningRequest } from "../bindings/ReasoningRequest";
+import type { ScheduledTask } from "../bindings/ScheduledTask";
+import type { ScheduledTaskFromTextRequest } from "../bindings/ScheduledTaskFromTextRequest";
+import type { ScheduledTaskMutationRequest } from "../bindings/ScheduledTaskMutationRequest";
+import type { ScheduledTaskRequest } from "../bindings/ScheduledTaskRequest";
+import type { SchedulerMarkReadRequest } from "../bindings/SchedulerMarkReadRequest";
 import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
+import type { IdRequest } from "../bindings/IdRequest";
 import type { ThreadAutoNameRequest } from "../bindings/ThreadAutoNameRequest";
 import type { ThreadMutationRequest } from "../bindings/ThreadMutationRequest";
 import type { ThreadRequest } from "../bindings/ThreadRequest";
@@ -196,6 +212,58 @@ export interface DesktopMethodMap {
     params: Record<string, never>;
     result: SchedulerSnapshot;
   };
+  "scheduler.create": {
+    params: ScheduledTaskRequest;
+    result: ScheduledTask;
+  };
+  "scheduler.create-from-text": {
+    params: ScheduledTaskFromTextRequest;
+    result: ScheduledTask;
+  };
+  "scheduler.update": {
+    params: ScheduledTaskMutationRequest;
+    result: ScheduledTask;
+  };
+  "scheduler.delete": { params: IdRequest; result: boolean };
+  "scheduler.run": { params: IdRequest; result: JsonValue };
+  "scheduler.mark-read": {
+    params: SchedulerMarkReadRequest;
+    result: SchedulerSnapshot;
+  };
+  "cloud.account": {
+    params: Record<string, never>;
+    result: CloudAccountState;
+  };
+  "cloud.login": { params: CloudLoginRequest; result: CloudAccountState };
+  "cloud.registration-code.send": {
+    params: CloudRegistrationCodeRequest;
+    result: JsonValue;
+  };
+  "cloud.register": {
+    params: CloudRegisterRequest;
+    result: CloudAccountState;
+  };
+  "cloud.logout": {
+    params: Record<string, never>;
+    result: CloudAccountState;
+  };
+  "cloud.redeem": { params: CloudRedeemRequest; result: JsonValue };
+  "cloud.groups": {
+    params: Record<string, never>;
+    result: { groups: JsonValue[] };
+  };
+  "cloud.group.select": {
+    params: CloudGroupSelectRequest;
+    result: CloudAccountState;
+  };
+  "cloud.usage": { params: CloudPayloadRequest; result: JsonValue };
+  "cloud.leaderboard.save": {
+    params: CloudPayloadRequest;
+    result: JsonValue;
+  };
+  "live.status": { params: Record<string, never>; result: LiveStatus };
+  "live.create": { params: LiveCreateRequest; result: JsonValue };
+  "live.close": { params: LiveCloseRequest; result: JsonValue };
   "task.start": {
     params: TaskStartRequest;
     result: TaskHandle;
