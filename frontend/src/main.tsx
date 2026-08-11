@@ -8,6 +8,19 @@ import "./codex-parity.css";
 
 declare global {
   interface Window {
+    onpeopleElectron?: {
+      isElectron: true;
+      invoke: (
+        command: string,
+        args?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      on: (event: string, handler: (payload: unknown) => void) => () => void;
+      browser: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      metrics: () => Promise<Record<string, unknown>>;
+    };
     __ONPEOPLE_DEV__?: {
       setWorkbenchState: typeof useWorkbenchStore.setState;
       invoke?: (

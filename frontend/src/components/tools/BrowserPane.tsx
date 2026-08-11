@@ -46,6 +46,10 @@ function tabDisplayTitle(tab: { title: string; url: string }): string {
 }
 
 export function BrowserPane() {
+  return <DesktopBrowserPane />;
+}
+
+function DesktopBrowserPane() {
   const browser = useWorkbenchStore((state) => state.browser);
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
   const localArtifactPreview = useWorkbenchStore(

@@ -7,6 +7,7 @@ import { useWorkbenchStore } from "../../store/workbenchStore";
 import { BrowserPane } from "./BrowserPane";
 
 vi.mock("../../lib/desktopClient", () => ({
+  isElectronRuntime: vi.fn(() => false),
   desktopClient: {
     activateBrowserTab: vi.fn(),
     browserCommand: vi.fn(),

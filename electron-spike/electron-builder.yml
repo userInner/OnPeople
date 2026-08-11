@@ -1,0 +1,24 @@
+appId: com.userinner.onpeople
+productName: OnPeople
+artifactName: onpeople-${version}-${arch}.${ext}
+directories:
+  output: dist-electron
+files:
+  - dist/**/*
+  - electron-spike/main.mjs
+  - electron-spike/preload.cjs
+  - electron-spike/rust-bridge.mjs
+  - electron-spike/browser-controller.mjs
+  - electron-spike/shell-adapter.mjs
+  - package.json
+extraResources:
+  - from: electron-spike/runtime
+    to: .embedded-runtime
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/OnPeople.icns
+  target:
+    - dir
+    - zip
+  identity: null
+asar: true

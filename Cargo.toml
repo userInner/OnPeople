@@ -10,6 +10,7 @@ members = [
   "crates/browser-host",
   "crates/mcp-host",
   "crates/onpeople-cli",
+  "crates/desktop-host",
   "crates/integrations",
   "xtask",
 ]
@@ -23,6 +24,7 @@ default-members = [
   "crates/integrations",
   "crates/mcp-host",
   "crates/onpeople-cli",
+  "crates/desktop-host",
   "xtask",
 ]
 

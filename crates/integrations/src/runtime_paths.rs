@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use onpeople_types::{AppError, ErrorCode};
 use sha2::{Digest, Sha256};
@@ -144,11 +147,7 @@ impl RuntimePaths {
                     "Browser Host manifest 哈希缺失",
                 )
             })?;
-        let executable = std::fs::read(&actual_path).map_err(|error| {
-            AppError::new(ErrorCode::RuntimeUnavailable, "无法校验 Browser Host")
-                .context("cause", error)
-        })?;
-        let actual_hash = format!("{:x}", Sha256::digest(executable));
+        let actual_hash = sha256_file(&actual_path, "无法校验 Browser Host")?;
         if actual_hash != expected_hash {
             return Err(AppError::new(
                 ErrorCode::PermissionDenied,
@@ -192,14 +191,8 @@ impl RuntimePaths {
                             format!("{name} runtime manifest 哈希缺失"),
                         )
                     })?;
-                let bytes = std::fs::read(&runtime_path).map_err(|error| {
-                    AppError::new(
-                        ErrorCode::RuntimeUnavailable,
-                        format!("无法校验 {name} runtime"),
-                    )
-                    .context("cause", error)
-                })?;
-                if format!("{:x}", Sha256::digest(bytes)) != expected_hash {
+                let actual_hash = sha256_file(&runtime_path, &format!("无法校验 {name} runtime"))?;
+                if actual_hash != expected_hash {
                     return Err(AppError::new(
                         ErrorCode::PermissionDenied,
                         format!("{name} runtime 与 manifest 哈希不一致"),
@@ -263,6 +256,24 @@ impl RuntimePaths {
             bundled: true,
         })
     }
+}
+
+fn sha256_file(path: &Path, message: &str) -> Result<String, AppError> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        AppError::new(ErrorCode::RuntimeUnavailable, message).context("cause", error)
+    })?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            AppError::new(ErrorCode::RuntimeUnavailable, message).context("cause", error)
+        })?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn executable_file(path: &Path) -> bool {
