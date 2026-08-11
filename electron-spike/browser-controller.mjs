@@ -36,7 +36,13 @@ function routeState(routeId, threadId, url) {
     visible: false,
     destroyTimer: null,
     generation: 0,
+    console: [],
   };
+}
+
+function pushBounded(values, value, limit = 100) {
+  values.push(value);
+  if (values.length > limit) values.splice(0, values.length - limit);
 }
 
 export class ElectronBrowserController {
@@ -137,7 +143,9 @@ export class ElectronBrowserController {
   }
 
   webContents(routeId = this.#activeRouteId) {
-    return routeId ? this.#routes.get(routeId)?.view?.webContents ?? null : null;
+    return routeId
+      ? (this.#routes.get(routeId)?.view?.webContents ?? null)
+      : null;
   }
 
   async forceDestroy(routeId, keepRoute = true) {
@@ -157,11 +165,7 @@ export class ElectronBrowserController {
     switch (command.command) {
       case "createRoute": {
         const url = this.#validateUrl(payload.url);
-        const route = this.#upsertRoute(
-          payload.routeId,
-          payload.threadId,
-          url,
-        );
+        const route = this.#upsertRoute(payload.routeId, payload.threadId, url);
         this.#activate(route);
         if (url !== "about:blank") await this.#navigate(route, url);
         this.#publishState();
@@ -201,17 +205,17 @@ export class ElectronBrowserController {
       case "select":
         return this.#select(payload.routeId, payload.selector, payload.value);
       case "press": {
-        const contents = (await this.#ensureView(
-          this.#requireRoute(payload.routeId),
-        )).webContents;
+        const contents = (
+          await this.#ensureView(this.#requireRoute(payload.routeId))
+        ).webContents;
         contents.sendInputEvent({ type: "keyDown", keyCode: payload.key });
         contents.sendInputEvent({ type: "keyUp", keyCode: payload.key });
         return { pressed: true };
       }
       case "scroll": {
-        const contents = (await this.#ensureView(
-          this.#requireRoute(payload.routeId),
-        )).webContents;
+        const contents = (
+          await this.#ensureView(this.#requireRoute(payload.routeId))
+        ).webContents;
         contents.sendInputEvent({
           type: "mouseWheel",
           x: 1,
@@ -449,6 +453,14 @@ export class ElectronBrowserController {
       route.faviconUrl = favicons.find(isSafeBrowserUrl) ?? null;
       this.#publishState();
     });
+    contents.on("console-message", (_event, level, message, line, sourceId) => {
+      pushBounded(route.console, {
+        level: Number(level),
+        message: String(message),
+        line: Number(line) || 0,
+        source: typeof sourceId === "string" ? sourceId : "",
+      });
+    });
     contents.on("render-process-gone", (_event, details) => {
       if (details.reason === "clean-exit" || this.#closed) return;
       this.#crashCount += 1;
@@ -582,10 +594,16 @@ export class ElectronBrowserController {
   }
 
   async #queryAction(routeId, selector, action) {
-    const script = action === "click"
-      ? `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true; })()`
-      : `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return true; })()`;
-    return { [action === "click" ? "clicked" : "hovered"]: await this.#evaluate(routeId, script) };
+    const script =
+      action === "click"
+        ? `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true; })()`
+        : `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return true; })()`;
+    return {
+      [action === "click" ? "clicked" : "hovered"]: await this.#evaluate(
+        routeId,
+        script,
+      ),
+    };
   }
 
   async #fill(routeId, selector, value) {
@@ -627,6 +645,23 @@ export class ElectronBrowserController {
   async #developerState(routeId) {
     const route = this.#requireRoute(routeId);
     const contents = (await this.#ensureView(route)).webContents;
+    let network = [];
+    try {
+      network = await contents.executeJavaScript(
+        `performance.getEntriesByType("resource").slice(-100).map((entry) => ({
+          name: entry.name,
+          initiatorType: entry.initiatorType,
+          duration: Math.round(entry.duration * 100) / 100,
+          transferSize: entry.transferSize || 0,
+          encodedBodySize: entry.encodedBodySize || 0,
+          decodedBodySize: entry.decodedBodySize || 0
+        }))`,
+        true,
+      );
+      if (!Array.isArray(network)) network = [];
+    } catch {
+      network = [];
+    }
     return {
       routeId,
       url: contents.getURL(),
@@ -635,13 +670,15 @@ export class ElectronBrowserController {
       processId: contents.getOSProcessId(),
       generation: route.generation,
       partition: this.#partition,
+      console: route.console,
+      network,
     };
   }
 
   async #pointer(payload) {
-    const contents = (await this.#ensureView(
-      this.#requireRoute(payload.routeId),
-    )).webContents;
+    const contents = (
+      await this.#ensureView(this.#requireRoute(payload.routeId))
+    ).webContents;
     const kind = String(payload.kind ?? "move");
     const type = kind.includes("wheel")
       ? "mouseWheel"
@@ -663,9 +700,9 @@ export class ElectronBrowserController {
   }
 
   async #key(payload) {
-    const contents = (await this.#ensureView(
-      this.#requireRoute(payload.routeId),
-    )).webContents;
+    const contents = (
+      await this.#ensureView(this.#requireRoute(payload.routeId))
+    ).webContents;
     const type = String(payload.kind).includes("up") ? "keyUp" : "keyDown";
     contents.sendInputEvent({
       type,

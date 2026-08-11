@@ -450,6 +450,9 @@ function DesktopBrowserPane() {
       setOverflowOpen(false);
       return;
     }
+    // Open synchronously. A visual capture can take a round trip through the
+    // Rust host; waiting for it here made the three-dot button look dead.
+    setOverflowOpen(true);
     // The native WebContentsView must be hidden while the menu is open so its
     // surface cannot eat menu clicks. Keep the page visible underneath by
     // refreshing the lightweight visual fallback first.
@@ -462,7 +465,6 @@ function DesktopBrowserPane() {
     } catch {
       // The menu remains usable even when a page snapshot is unavailable.
     }
-    setOverflowOpen(true);
   };
 
   const sendPointer = (
@@ -724,7 +726,7 @@ function DesktopBrowserPane() {
               <button
                 type="button"
                 role="menuitem"
-                disabled={!browserReady}
+                disabled={!activeTab || detailBusy}
                 onClick={() => {
                   setOverflowOpen(false);
                   void inspect("snapshot", "dom");
@@ -736,7 +738,7 @@ function DesktopBrowserPane() {
               <button
                 type="button"
                 role="menuitem"
-                disabled={!browserReady}
+                disabled={!activeTab || detailBusy}
                 onClick={() => {
                   setOverflowOpen(false);
                   void inspect("snapshot", "visual");
@@ -748,7 +750,7 @@ function DesktopBrowserPane() {
               <button
                 type="button"
                 role="menuitem"
-                disabled={!browserReady}
+                disabled={!activeTab || detailBusy}
                 onClick={() => {
                   setOverflowOpen(false);
                   void inspect("developer", "developer");
@@ -760,23 +762,32 @@ function DesktopBrowserPane() {
               <button
                 type="button"
                 role="menuitem"
-                disabled={!browserReady}
+                disabled={!activeTab || detailBusy}
                 onClick={() => {
                   setOverflowOpen(false);
                   setDetailView("session");
+                  setDetailBusy(true);
+                  setError(null);
+                  void desktopClient
+                    .getBrowserSessionStatus(routeId)
+                    .then((value) => setDetailValue(value))
+                    .catch((cause) => setError(errorMessage(cause)))
+                    .finally(() => setDetailBusy(false));
                 }}
               >
                 <KeyRound size={14} />
                 登录与浏览器数据
               </button>
               <span className="browser-overflow-status">
-                {frame
-                  ? frame.routeId === routeId
-                    ? `${frame.width} × ${frame.height}`
-                    : "正在连接当前标签页"
-                  : visualSnapshot
-                    ? "浏览器画面已连接"
-                    : "等待浏览器画面"}
+                {detailBusy
+                  ? "正在读取浏览器数据…"
+                  : frame
+                    ? frame.routeId === routeId
+                      ? `${frame.width} × ${frame.height}`
+                      : "正在连接当前标签页"
+                    : visualSnapshot
+                      ? "浏览器画面已连接"
+                      : "等待浏览器画面"}
               </span>
             </div>
           ) : null}
@@ -798,14 +809,27 @@ function DesktopBrowserPane() {
           onSaveAnnotation={() => void saveAnnotation()}
           onDeleteAnnotation={(id) => void deleteAnnotation(id)}
           onFillCredential={() =>
-            void desktopClient
-              .fillSavedBrowserCredential(routeId)
-              .catch((cause) => setError(errorMessage(cause)))
+            (() => {
+              setDetailBusy(true);
+              setError(null);
+              void desktopClient
+                .fillSavedBrowserCredential(routeId)
+                .then((value) => setDetailValue(value))
+                .catch((cause) => setError(errorMessage(cause)))
+                .finally(() => setDetailBusy(false));
+            })()
           }
           onSignIn={() =>
-            void desktopClient
-              .openBrowserSignIn(providerId, routeId)
-              .catch((cause) => setError(errorMessage(cause)))
+            (() => {
+              setDetailBusy(true);
+              setError(null);
+              void desktopClient
+                .openBrowserSignIn(providerId, routeId)
+                .then(() => desktopClient.getBrowserSessionStatus(routeId))
+                .then((value) => setDetailValue(value))
+                .catch((cause) => setError(errorMessage(cause)))
+                .finally(() => setDetailBusy(false));
+            })()
           }
           onClearSession={() => {
             if (
@@ -813,9 +837,13 @@ function DesktopBrowserPane() {
             ) {
               return;
             }
+            setDetailBusy(true);
             void desktopClient
               .clearBrowserSession(providerId, routeId)
-              .catch((cause) => setError(errorMessage(cause)));
+              .then(() => desktopClient.getBrowserSessionStatus(routeId))
+              .then((value) => setDetailValue(value))
+              .catch((cause) => setError(errorMessage(cause)))
+              .finally(() => setDetailBusy(false));
           }}
           onClearAll={() => {
             if (
@@ -823,9 +851,13 @@ function DesktopBrowserPane() {
             ) {
               return;
             }
+            setDetailBusy(true);
             void desktopClient
               .clearAllBrowserData(routeId)
-              .catch((cause) => setError(errorMessage(cause)));
+              .then(() => desktopClient.getBrowserSessionStatus(routeId))
+              .then((value) => setDetailValue(value))
+              .catch((cause) => setError(errorMessage(cause)))
+              .finally(() => setDetailBusy(false));
           }}
           onClose={() => {
             if (detailView === "annotations") {
@@ -1101,6 +1133,7 @@ function BrowserDetailPanel({
       ) : null}
       {view === "session" ? (
         <div className="browser-session-tools">
+          <BrowserSessionStatus value={value} />
           <label>
             <span>Provider ID</span>
             <input
@@ -1113,7 +1146,7 @@ function BrowserDetailPanel({
               打开登录页
             </button>
             <button type="button" onClick={onFillCredential}>
-              填充已保存凭据
+              自动填充凭据
             </button>
             <button type="button" onClick={onClearSession}>
               清除当前会话
@@ -1162,6 +1195,35 @@ function BrowserDeveloperList({
         <pre key={`${title}-${index}`}>{formatDeveloperValue(value)}</pre>
       ))}
     </section>
+  );
+}
+
+function BrowserSessionStatus({ value }: { value: unknown }) {
+  if (typeof value !== "object" || value === null) {
+    return <p className="browser-session-status">尚未读取当前浏览器会话。</p>;
+  }
+  const source = value as Record<string, unknown>;
+  const cookieCount =
+    typeof source.cookieCount === "number" ? source.cookieCount : null;
+  const persistent = source.persistent === true;
+  const partition =
+    typeof source.partition === "string" ? source.partition : "";
+  return (
+    <div className="browser-session-status" role="status">
+      <div>
+        <span
+          className={`browser-session-dot ${persistent ? "is-ready" : ""}`}
+        />
+        <strong>{persistent ? "持久化浏览器会话" : "临时浏览器会话"}</strong>
+      </div>
+      <span>
+        {cookieCount === null ? "Cookie 数量未知" : `${cookieCount} 个 Cookie`}
+      </span>
+      {partition ? <small>{partition}</small> : null}
+      {source.filled === false && source.reason === "credential-store-empty" ? (
+        <small>未配置可自动填充的凭据，请在页面中手动登录。</small>
+      ) : null}
+    </div>
   );
 }
 

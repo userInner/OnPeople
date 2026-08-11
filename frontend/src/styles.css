@@ -1858,7 +1858,8 @@ kbd {
   background: var(--surface-muted);
 }
 .browser-overflow-menu button:disabled {
-  opacity: 0.42;
+  cursor: wait;
+  opacity: 0.62;
 }
 .browser-overflow-status {
   margin: 5px 4px 1px;
@@ -1866,6 +1867,226 @@ kbd {
   border-top: 1px solid var(--line);
   color: var(--ink-faint);
   font-size: 10px;
+}
+.browser-detail-panel {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  min-height: 0;
+  max-height: min(360px, 42vh);
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.browser-detail-panel > header {
+  display: flex;
+  height: 36px;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+  padding: 0 10px 0 13px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+.browser-detail-panel > header strong {
+  color: var(--ink);
+}
+.browser-detail-panel > header > span {
+  flex: 1;
+}
+.browser-detail-panel > pre {
+  max-height: 280px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  font:
+    10px/1.5 "SFMono-Regular",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-developer-grid {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: auto;
+  background: var(--line);
+}
+.browser-developer-grid > section {
+  min-width: 0;
+  min-height: 120px;
+  padding: 10px;
+  overflow: auto;
+  background: var(--surface);
+}
+.browser-developer-grid > section > strong {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--ink);
+  font-size: 10px;
+}
+.browser-developer-grid p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.browser-developer-grid pre {
+  max-height: 90px;
+  margin: 0 0 5px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 5px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  font:
+    9px/1.4 "SFMono-Regular",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-annotations,
+.browser-session-tools {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.browser-annotation-form,
+.browser-session-tools {
+  display: grid;
+  gap: 7px;
+}
+.browser-annotation-form input,
+.browser-annotation-form textarea,
+.browser-session-tools input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 10px;
+}
+.browser-annotation-form textarea {
+  min-height: 54px;
+  resize: vertical;
+}
+.browser-annotation-form button,
+.browser-session-tools button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  font-size: 10px;
+}
+.browser-annotation-form button:hover,
+.browser-session-tools button:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+.browser-annotation-form button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+.browser-session-tools > label {
+  display: grid;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.browser-session-tools > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.browser-session-tools button.is-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+.browser-annotation-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+}
+.browser-annotation-list > p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.browser-annotation-list article {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.browser-annotation-list article > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.browser-annotation-list strong,
+.browser-annotation-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-annotation-list strong {
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+.browser-annotation-list small {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+.browser-session-status {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-faint);
+  background: var(--surface-soft);
+  font-size: 10px;
+}
+.browser-session-status > div {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-soft);
+}
+.browser-session-status strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+.browser-session-status small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-session-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--warning);
+}
+.browser-session-dot.is-ready {
+  background: var(--accent);
 }
 .browser-surface {
   position: relative;

@@ -13,6 +13,11 @@ vi.mock("../../lib/desktopClient", () => ({
     browserCommand: vi.fn(),
     browserSurfaceBounds: vi.fn(),
     captureBrowserVisualSnapshot: vi.fn(),
+    getBrowserSessionStatus: vi.fn(),
+    openBrowserSignIn: vi.fn(),
+    fillSavedBrowserCredential: vi.fn(),
+    clearBrowserSession: vi.fn(),
+    clearAllBrowserData: vi.fn(),
     listBrowserAnnotations: vi.fn(),
     streamBrowser: vi.fn(),
   },
@@ -44,6 +49,15 @@ describe("BrowserPane", () => {
     vi.mocked(desktopClient.activateBrowserTab).mockResolvedValue({});
     vi.mocked(desktopClient.browserSurfaceBounds).mockResolvedValue({});
     vi.mocked(desktopClient.captureBrowserVisualSnapshot).mockResolvedValue({});
+    vi.mocked(desktopClient.getBrowserSessionStatus).mockResolvedValue({
+      persistent: true,
+      cookieCount: 0,
+      partition: "persist:onpeople-browser",
+    });
+    vi.mocked(desktopClient.openBrowserSignIn).mockResolvedValue({});
+    vi.mocked(desktopClient.fillSavedBrowserCredential).mockResolvedValue({});
+    vi.mocked(desktopClient.clearBrowserSession).mockResolvedValue({});
+    vi.mocked(desktopClient.clearAllBrowserData).mockResolvedValue({});
     vi.mocked(desktopClient.listBrowserAnnotations).mockResolvedValue([]);
     vi.mocked(desktopClient.streamBrowser).mockResolvedValue(undefined);
     useWorkbenchStore.setState({
@@ -114,6 +128,37 @@ describe("BrowserPane", () => {
     );
     expect(screen.getByRole("menu")).toBeVisible();
     expect(screen.getByRole("menuitem", { name: /DOM 快照/ })).toBeEnabled();
+  });
+
+  it("opens the menu before a slow visual fallback capture completes", async () => {
+    let resolveCapture: ((value: Record<string, unknown>) => void) | undefined;
+    vi.mocked(desktopClient.captureBrowserVisualSnapshot).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        }),
+    );
+    render(<BrowserPane />);
+
+    fireEvent.click(screen.getByRole("button", { name: "更多浏览器工具" }));
+    expect(screen.getByRole("menu")).toBeVisible();
+    resolveCapture?.({});
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "更多浏览器工具" }),
+      ).toHaveAttribute("aria-expanded", "true"),
+    );
+  });
+
+  it("opens session status from the menu", async () => {
+    render(<BrowserPane />);
+    fireEvent.click(screen.getByRole("button", { name: "更多浏览器工具" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /登录与浏览器数据/ }));
+    expect(await screen.findByText("登录与浏览器数据")).toBeVisible();
+    expect(desktopClient.getBrowserSessionStatus).toHaveBeenCalledWith(
+      "route-current",
+    );
+    expect(screen.getByText("持久化浏览器会话")).toBeVisible();
   });
 
   it("renders the browser home instead of a native black surface for about:blank", async () => {
