@@ -70,6 +70,7 @@ function DesktopBrowserPane() {
   const [providerId, setProviderId] = useState("onpeople");
   const [detailBusy, setDetailBusy] = useState(false);
   const [surfaceFocused, setSurfaceFocused] = useState(false);
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const addressInput = useRef<HTMLInputElement>(null);
   const pane = useRef<HTMLDivElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
@@ -235,7 +236,7 @@ function DesktopBrowserPane() {
       );
       const occluded =
         document.querySelector(
-          '[aria-modal="true"], [data-native-surface-occluder="true"], details.browser-overflow[open]',
+          '[aria-modal="true"], [data-native-surface-occluder="true"], [data-browser-overflow-open="true"]',
         ) !== null;
       // A focused WebContentsView makes the React document report
       // `hasFocus() === false`. Visibility must follow the pane/route, not
@@ -684,66 +685,82 @@ function DesktopBrowserPane() {
               void desktopClient.openExternalUrl(activeTab.url);
           }}
         />
-        <details className="browser-overflow">
-          <summary aria-label="更多浏览器工具">
+        <div
+          className="browser-overflow"
+          data-browser-overflow-open={overflowOpen ? "true" : undefined}
+        >
+          <button
+            className="browser-overflow-trigger"
+            type="button"
+            aria-label="更多浏览器工具"
+            aria-haspopup="menu"
+            aria-expanded={overflowOpen}
+            onClick={() => setOverflowOpen((open) => !open)}
+          >
             <MoreHorizontal size={17} aria-hidden="true" />
-          </summary>
-          <div className="browser-overflow-menu">
-            <button
-              type="button"
-              disabled={!browserReady}
-              onClick={(event) => {
-                event.currentTarget.closest("details")?.removeAttribute("open");
-                void inspect("snapshot", "dom");
-              }}
-            >
-              <Code2 size={14} />
-              DOM 快照
-            </button>
-            <button
-              type="button"
-              disabled={!browserReady}
-              onClick={(event) => {
-                event.currentTarget.closest("details")?.removeAttribute("open");
-                void inspect("snapshot", "visual");
-              }}
-            >
-              <Camera size={14} />
-              视觉快照
-            </button>
-            <button
-              type="button"
-              disabled={!browserReady}
-              onClick={(event) => {
-                event.currentTarget.closest("details")?.removeAttribute("open");
-                void inspect("developer", "developer");
-              }}
-            >
-              <Bug size={14} />
-              开发检查
-            </button>
-            <button
-              type="button"
-              disabled={!browserReady}
-              onClick={(event) => {
-                event.currentTarget.closest("details")?.removeAttribute("open");
-                setDetailView("session");
-              }}
-            >
-              <KeyRound size={14} />
-              登录与浏览器数据
-            </button>
-            <span className="browser-overflow-status">
-              {frame
-                ? frame.routeId === routeId
-                  ? `${frame.width} × ${frame.height}`
-                  : "正在连接当前标签页"
-                : visualSnapshot
-                  ? "浏览器画面已连接"
-                  : "等待浏览器画面"}
-            </span>
-          </div>
-        </details>
+          </button>
+          {overflowOpen ? (
+            <div className="browser-overflow-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!browserReady}
+                onClick={() => {
+                  setOverflowOpen(false);
+                  void inspect("snapshot", "dom");
+                }}
+              >
+                <Code2 size={14} />
+                DOM 快照
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!browserReady}
+                onClick={() => {
+                  setOverflowOpen(false);
+                  void inspect("snapshot", "visual");
+                }}
+              >
+                <Camera size={14} />
+                视觉快照
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!browserReady}
+                onClick={() => {
+                  setOverflowOpen(false);
+                  void inspect("developer", "developer");
+                }}
+              >
+                <Bug size={14} />
+                开发检查
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!browserReady}
+                onClick={() => {
+                  setOverflowOpen(false);
+                  setDetailView("session");
+                }}
+              >
+                <KeyRound size={14} />
+                登录与浏览器数据
+              </button>
+              <span className="browser-overflow-status">
+                {frame
+                  ? frame.routeId === routeId
+                    ? `${frame.width} × ${frame.height}`
+                    : "正在连接当前标签页"
+                  : visualSnapshot
+                    ? "浏览器画面已连接"
+                    : "等待浏览器画面"}
+              </span>
+            </div>
+          ) : null}
+        </div>
       </div>
       {activeTab && detailView ? (
         <BrowserDetailPanel

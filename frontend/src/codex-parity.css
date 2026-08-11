@@ -8279,7 +8279,7 @@ button.activity-row:hover {
     sans-serif;
 }
 
-.browser-overflow > summary {
+.browser-overflow-trigger {
   width: 28px;
   height: 28px;
   border-radius: 8px;

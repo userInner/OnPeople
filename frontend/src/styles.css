@@ -1813,21 +1813,19 @@ kbd {
   position: relative;
   flex: 0 0 auto;
 }
-.browser-overflow > summary {
+.browser-overflow-trigger {
   display: grid;
   width: 28px;
   height: 28px;
-  cursor: default;
+  cursor: pointer;
   list-style: none;
   place-items: center;
   border-radius: 7px;
   color: var(--ink-faint);
+  background: transparent;
 }
-.browser-overflow > summary::-webkit-details-marker {
-  display: none;
-}
-.browser-overflow > summary:hover,
-.browser-overflow[open] > summary {
+.browser-overflow-trigger:hover,
+.browser-overflow[data-browser-overflow-open="true"] .browser-overflow-trigger {
   color: var(--ink);
   background: var(--surface-muted);
 }
