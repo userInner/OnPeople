@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   readText as readClipboardText,
@@ -275,8 +275,8 @@ function replayEvents(
 
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
-  activateDeepLinks: () => call<string[]>("activate_deep_links"),
-  frontendReady: () => call<void>("frontend_ready"),
+  activateDeepLinks: () => desktopApi.request("shell.deep-links.activate", {}),
+  frontendReady: () => desktopApi.request("shell.frontend.ready", {}),
   listAgents: (parentThreadId?: string | null) =>
     call<{ agents?: Array<Record<string, unknown>> }>("list_agents", {
       request: { parentThreadId: parentThreadId ?? null },
@@ -421,17 +421,28 @@ export const desktopClient = {
   liveStatus: () => call<LiveStatus>("get_live_status"),
   getLiveStatus: () => call<LiveStatus>("get_live_status"),
   requestMicrophoneAccess: () =>
-    call<{ granted: boolean; status: string }>("request_microphone_access"),
+    desktopApi.request("shell.microphone.request", {}),
   cloudAccount: () => call<CloudAccountState>("get_cloud_account"),
   getCloudAccount: () => call<CloudAccountState>("get_cloud_account"),
-  appUpdateState: () => call<AppUpdateState>("get_app_update_state"),
-  getAppUpdateState: () => call<AppUpdateState>("get_app_update_state"),
+  appUpdateState: () => desktopApi.request("shell.app-update.state", {}),
+  getAppUpdateState: () => desktopApi.request("shell.app-update.state", {}),
   checkForAppUpdate: () =>
-    call<Record<string, unknown>>("check_for_app_update"),
-  downloadAppUpdate: () => call<Record<string, unknown>>("download_app_update"),
-  installAppUpdate: () => call<Record<string, unknown>>("install_app_update"),
-  openAppDownload: () => call<Record<string, unknown>>("open_app_download"),
-  openScheduler: () => call<SchedulerSnapshot>("open_scheduler"),
+    desktopApi.request("shell.app-update.check", {}) as Promise<
+      Record<string, unknown>
+    >,
+  downloadAppUpdate: () =>
+    desktopApi.request("shell.app-update.download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  installAppUpdate: () =>
+    desktopApi.request("shell.app-update.install", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openAppDownload: () =>
+    desktopApi.request("shell.app-update.open-download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openScheduler: () => desktopApi.request("shell.scheduler.open", {}),
   copyText: (text: string) => writeClipboardText(text),
   readText: () => readClipboardText(),
   pickProject: async () => {
@@ -458,22 +469,6 @@ export const desktopClient = {
     const selected = await openDialog({ directory: true, multiple: false });
     return typeof selected === "string" ? selected : null;
   },
-  streamTerminal: (
-    processId: string,
-    handler: (event: StreamEnvelope) => void,
-  ) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_terminal", {
-      request: { processId },
-      channel,
-    });
-  },
-  streamAgent: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_agent", { channel });
-  },
   streamBrowser: async (handler: (event: StreamEnvelope) => void) => {
     await subscribe<BrowserFrame>("browser:preview-updated", (frame) =>
       handler({
@@ -485,11 +480,6 @@ export const desktopClient = {
       }),
     );
   },
-  streamLive: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_live", { channel });
-  },
   listBrowserAnnotations: (routeId: string) =>
     desktopApi.request("browser.annotation.list", { routeId }),
   saveBrowserAnnotation: (annotation: BrowserAnnotation) =>
@@ -497,17 +487,23 @@ export const desktopClient = {
   deleteBrowserAnnotation: (id: string) =>
     desktopApi.request("browser.annotation.delete", { id }),
   openTaskWindow: (threadId?: string | null) =>
-    call<void>("open_task_window", { threadId: threadId ?? null }),
+    desktopApi.request("shell.task-window.open", {
+      threadId: threadId ?? null,
+    }),
   pickImages: () =>
-    call<Record<string, unknown>>("pick_images", { request: {} }),
+    desktopApi.request("shell.images.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pickAttachments: () =>
-    call<Record<string, unknown>>("pick_attachments", { request: {} }),
+    desktopApi.request("shell.attachments.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteImage: () =>
-    call<Record<string, unknown>>("paste_image", { request: {} }),
+    desktopApi.request("shell.image.paste", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteFiles: async () => {
-    const result = await call<Record<string, unknown>>("paste_image", {
-      request: {},
-    });
+    const result = await desktopApi.request("shell.image.paste", { paths: [] });
     const selected = result.selected;
     return Array.isArray(selected)
       ? selected.filter((path): path is string => typeof path === "string")
@@ -519,17 +515,20 @@ export const desktopClient = {
       threadId: threadId ?? null,
     }) as Promise<Record<string, unknown>>,
   revealGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("reveal_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.reveal", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   copyGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("copy_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.copy", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   openLocalArtifact: (path: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("open_local_artifact", {
-      request: { path, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.local-artifact.open", {
+      path,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   previewLocalArtifact: (path: string, threadId?: string | null) =>
     desktopApi.request("file.artifact.preview", {
       path,
@@ -568,7 +567,9 @@ export const desktopClient = {
   openCloudConsole: () =>
     call<Record<string, unknown>>("open_cloud_console", { request: {} }),
   openExternalUrl: (url: string) =>
-    call<Record<string, unknown>>("open_external_url", { request: { url } }),
+    desktopApi.request("shell.external-url.open", { url }) as Promise<
+      Record<string, unknown>
+    >,
   listCloudGroups: () =>
     call<Record<string, unknown>>("list_cloud_groups", { request: {} }),
   selectCloudGroup: (groupId: string) =>
@@ -620,7 +621,9 @@ export const desktopClient = {
       request: { threadId, text, model: model ?? null },
     }),
   revealThread: (threadId: string) =>
-    call<Record<string, unknown>>("reveal_thread", { request: { threadId } }),
+    desktopApi.request("shell.thread.reveal", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   showTerminalContextMenu: (payload: Record<string, unknown>) =>
     desktopApi.request("terminal.context-menu", {
       processId: String(payload.processId ?? ""),
@@ -636,9 +639,9 @@ export const desktopClient = {
       request: { projectPath, action, value: value ?? null },
     }),
   revealProject: (projectPath: string) =>
-    call<Record<string, unknown>>("reveal_project", {
-      request: { projectPath },
-    }),
+    desktopApi.request("shell.project.reveal", { projectPath }) as Promise<
+      Record<string, unknown>
+    >,
   archiveProjectTasks: (projectPath: string) =>
     call<Record<string, unknown>>("archive_project_tasks", {
       request: { projectPath },
@@ -684,7 +687,10 @@ export const desktopClient = {
           : null,
     }) as Promise<Record<string, unknown>>,
   openEditor: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("open_editor", { request: payload }),
+    desktopApi.request("shell.editor.open", {
+      cwd: String(payload.cwd ?? ""),
+      path: String(payload.path ?? payload.filePath ?? ""),
+    }) as Promise<Record<string, unknown>>,
   restartRuntime: () =>
     call<RuntimeDiagnostics>("restart_runtime", { request: {} }),
   listExtensions: (cwd?: string | null) =>
@@ -848,8 +854,8 @@ export const desktopClient = {
       request: { threadId, policy },
     }),
   pickDownloadDirectory: (path?: string | null) =>
-    call<Preferences>("pick_download_directory", {
-      request: { path: path ?? null },
+    desktopApi.request("shell.download-directory.pick", {
+      path: path ?? null,
     }),
   getEffectiveConfig: (payload: Record<string, unknown> = {}) =>
     call<Record<string, unknown>>("get_effective_config", { request: payload }),

@@ -21,7 +21,7 @@ use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
     BrowserAction, BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserHostOperation,
     DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRecoveryRequired, DesktopRequest,
-    DesktopResponse, should_forward_desktop_event,
+    DesktopResponse, ShellHostOperation, ShellOpenTaskWindowRequest, should_forward_desktop_event,
 };
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
@@ -3892,6 +3892,7 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
 struct TauriDesktopHost<'a, R: Runtime> {
     app: &'a AppHandle<R>,
     state: &'a AppState,
+    frontend: &'a FrontendServer,
 }
 
 const fn legacy_browser_action_command(action: BrowserAction) -> &'static str {
@@ -3989,6 +3990,110 @@ impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
             }
         })
     }
+
+    fn shell<'a>(
+        &'a self,
+        operation: ShellHostOperation,
+        params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            match operation {
+                ShellHostOperation::ActivateDeepLinks => {
+                    serde_json::to_value(self.state.activate_deep_links())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::FrontendReady => {
+                    frontend_ready(self.app.clone())?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::OpenTaskWindow => {
+                    let request: ShellOpenTaskWindowRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    open_task_window_impl(self.app, self.frontend, request.thread_id)?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::RequestMicrophoneAccess => request_microphone_access().await,
+                ShellHostOperation::OpenExternalUrl => {
+                    self.state
+                        .dispatch_command(self.app, "open_external_url", params)
+                        .await
+                }
+                ShellHostOperation::OpenEditor => {
+                    self.state
+                        .dispatch_command(self.app, "open_editor", params)
+                        .await
+                }
+                ShellHostOperation::OpenLocalArtifact => {
+                    self.state
+                        .dispatch_command(self.app, "open_local_artifact", params)
+                        .await
+                }
+                ShellHostOperation::RevealGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::CopyGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "copy_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::PickImages => {
+                    self.state
+                        .dispatch_command(self.app, "pick_images", params)
+                        .await
+                }
+                ShellHostOperation::PickAttachments => {
+                    self.state
+                        .dispatch_command(self.app, "pick_attachments", params)
+                        .await
+                }
+                ShellHostOperation::PasteImage => {
+                    self.state
+                        .dispatch_command(self.app, "paste_image", params)
+                        .await
+                }
+                ShellHostOperation::RevealThread => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_thread", params)
+                        .await
+                }
+                ShellHostOperation::RevealProject => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_project", params)
+                        .await
+                }
+                ShellHostOperation::PickDownloadDirectory => {
+                    self.state
+                        .dispatch_command(self.app, "pick_download_directory", params)
+                        .await
+                }
+                ShellHostOperation::OpenScheduler => {
+                    self.app
+                        .emit("scheduler:open", json!({}))
+                        .map_err(AppError::internal)?;
+                    serde_json::to_value(self.state.runtime.scheduler_snapshot())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateState => {
+                    serde_json::to_value(self.state.update_state()).map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateCheck => self.state.check_app_update(self.app).await,
+                ShellHostOperation::AppUpdateDownload => {
+                    self.state.download_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateInstall => {
+                    self.state.install_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateOpenDownload => {
+                    self.state
+                        .dispatch_command(self.app, "open_app_download", params)
+                        .await
+                }
+            }
+        })
+    }
 }
 
 #[tauri::command]
@@ -4000,11 +4105,13 @@ fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
 async fn desktop_request(
     app: AppHandle,
     state: State<'_, AppState>,
+    frontend: State<'_, FrontendServer>,
     request: DesktopRequest,
 ) -> Result<DesktopResponse, AppError> {
     let host = TauriDesktopHost {
         app: &app,
         state: &state,
+        frontend: &frontend,
     };
     Ok(state.desktop_api.dispatch_with_host(request, &host).await)
 }
@@ -4545,6 +4652,14 @@ fn open_task_window<R: Runtime>(
     frontend: State<'_, FrontendServer>,
     thread_id: Option<String>,
 ) -> Result<(), AppError> {
+    open_task_window_impl(&app, &frontend, thread_id)
+}
+
+fn open_task_window_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    frontend: &FrontendServer,
+    thread_id: Option<String>,
+) -> Result<(), AppError> {
     let suffix = thread_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let label = format!("task-{}", suffix.replace('-', ""));
     if app.get_webview_window(&label).is_some() {
@@ -4552,7 +4667,7 @@ fn open_task_window<R: Runtime>(
     }
     let url = frontend.page_url(Some(&format!("thread={suffix}")));
     let navigation_base = frontend.base_url.to_string();
-    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("OnPeople")
         .inner_size(1280.0, 820.0)
         .min_inner_size(960.0, 640.0)

@@ -139,10 +139,52 @@ pub enum DesktopMethod {
     ConnectorOauthComplete,
     #[serde(rename = "connector.disconnect")]
     ConnectorDisconnect,
+    #[serde(rename = "shell.deep-links.activate")]
+    ShellActivateDeepLinks,
+    #[serde(rename = "shell.frontend.ready")]
+    ShellFrontendReady,
+    #[serde(rename = "shell.task-window.open")]
+    ShellOpenTaskWindow,
+    #[serde(rename = "shell.microphone.request")]
+    ShellRequestMicrophoneAccess,
+    #[serde(rename = "shell.external-url.open")]
+    ShellOpenExternalUrl,
+    #[serde(rename = "shell.editor.open")]
+    ShellOpenEditor,
+    #[serde(rename = "shell.local-artifact.open")]
+    ShellOpenLocalArtifact,
+    #[serde(rename = "shell.generated-image.reveal")]
+    ShellRevealGeneratedImage,
+    #[serde(rename = "shell.generated-image.copy")]
+    ShellCopyGeneratedImage,
+    #[serde(rename = "shell.images.pick")]
+    ShellPickImages,
+    #[serde(rename = "shell.attachments.pick")]
+    ShellPickAttachments,
+    #[serde(rename = "shell.image.paste")]
+    ShellPasteImage,
+    #[serde(rename = "shell.thread.reveal")]
+    ShellRevealThread,
+    #[serde(rename = "shell.project.reveal")]
+    ShellRevealProject,
+    #[serde(rename = "shell.download-directory.pick")]
+    ShellPickDownloadDirectory,
+    #[serde(rename = "shell.scheduler.open")]
+    ShellOpenScheduler,
+    #[serde(rename = "shell.app-update.state")]
+    ShellAppUpdateState,
+    #[serde(rename = "shell.app-update.check")]
+    ShellAppUpdateCheck,
+    #[serde(rename = "shell.app-update.download")]
+    ShellAppUpdateDownload,
+    #[serde(rename = "shell.app-update.install")]
+    ShellAppUpdateInstall,
+    #[serde(rename = "shell.app-update.open-download")]
+    ShellAppUpdateOpenDownload,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 64] = [
+    pub const ALL: [Self; 85] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -207,6 +249,27 @@ impl DesktopMethod {
         Self::ConnectorOauthStart,
         Self::ConnectorOauthComplete,
         Self::ConnectorDisconnect,
+        Self::ShellActivateDeepLinks,
+        Self::ShellFrontendReady,
+        Self::ShellOpenTaskWindow,
+        Self::ShellRequestMicrophoneAccess,
+        Self::ShellOpenExternalUrl,
+        Self::ShellOpenEditor,
+        Self::ShellOpenLocalArtifact,
+        Self::ShellRevealGeneratedImage,
+        Self::ShellCopyGeneratedImage,
+        Self::ShellPickImages,
+        Self::ShellPickAttachments,
+        Self::ShellPasteImage,
+        Self::ShellRevealThread,
+        Self::ShellRevealProject,
+        Self::ShellPickDownloadDirectory,
+        Self::ShellOpenScheduler,
+        Self::ShellAppUpdateState,
+        Self::ShellAppUpdateCheck,
+        Self::ShellAppUpdateDownload,
+        Self::ShellAppUpdateInstall,
+        Self::ShellAppUpdateOpenDownload,
     ];
 
     #[must_use]
@@ -221,6 +284,27 @@ impl DesktopMethod {
                 | Self::BrowserAnnotationSave
                 | Self::BrowserAnnotationDelete
                 | Self::BrowserAction
+                | Self::ShellActivateDeepLinks
+                | Self::ShellFrontendReady
+                | Self::ShellOpenTaskWindow
+                | Self::ShellRequestMicrophoneAccess
+                | Self::ShellOpenExternalUrl
+                | Self::ShellOpenEditor
+                | Self::ShellOpenLocalArtifact
+                | Self::ShellRevealGeneratedImage
+                | Self::ShellCopyGeneratedImage
+                | Self::ShellPickImages
+                | Self::ShellPickAttachments
+                | Self::ShellPasteImage
+                | Self::ShellRevealThread
+                | Self::ShellRevealProject
+                | Self::ShellPickDownloadDirectory
+                | Self::ShellOpenScheduler
+                | Self::ShellAppUpdateState
+                | Self::ShellAppUpdateCheck
+                | Self::ShellAppUpdateDownload
+                | Self::ShellAppUpdateInstall
+                | Self::ShellAppUpdateOpenDownload
         )
     }
 }
@@ -235,6 +319,187 @@ pub enum BrowserHostOperation {
     AnnotationSave,
     AnnotationDelete,
     Action,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellHostOperation {
+    ActivateDeepLinks,
+    FrontendReady,
+    OpenTaskWindow,
+    RequestMicrophoneAccess,
+    OpenExternalUrl,
+    OpenEditor,
+    OpenLocalArtifact,
+    RevealGeneratedImage,
+    CopyGeneratedImage,
+    PickImages,
+    PickAttachments,
+    PasteImage,
+    RevealThread,
+    RevealProject,
+    PickDownloadDirectory,
+    OpenScheduler,
+    AppUpdateState,
+    AppUpdateCheck,
+    AppUpdateDownload,
+    AppUpdateInstall,
+    AppUpdateOpenDownload,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellOpenTaskWindowRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellExternalUrlRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellEditorOpenRequest {
+    pub cwd: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellGeneratedImageRequest {
+    pub image_path: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellFileSelectionRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellThreadRequest {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellProjectRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellPickDownloadDirectoryRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellMicrophoneAccess {
+    pub granted: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedUrl {
+    pub opened: bool,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedPath {
+    pub opened: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageReveal {
+    pub revealed: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageCopy {
+    pub copied: bool,
+    pub image: GeneratedImage,
+    pub clipboard: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellFileSelection {
+    pub selected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellThreadReveal {
+    pub thread_id: String,
+    pub cwd: String,
+    pub opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateCheck {
+    pub available: bool,
+    pub current_version: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateDownload {
+    pub available: bool,
+    #[serde(default)]
+    pub current_version: Option<String>,
+    #[serde(default)]
+    pub downloaded: Option<bool>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateInstall {
+    pub installed: bool,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1106,6 +1371,24 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         PluginIdRequest,
         PluginCatalogSyncRequest,
         ConnectorOauthCompleteRequest,
+        ShellOpenTaskWindowRequest,
+        ShellExternalUrlRequest,
+        ShellEditorOpenRequest,
+        ShellGeneratedImageRequest,
+        ShellFileSelectionRequest,
+        ShellThreadRequest,
+        ShellProjectRequest,
+        ShellPickDownloadDirectoryRequest,
+        ShellMicrophoneAccess,
+        ShellOpenedUrl,
+        ShellOpenedPath,
+        ShellGeneratedImageReveal,
+        ShellGeneratedImageCopy,
+        ShellFileSelection,
+        ShellThreadReveal,
+        ShellAppUpdateCheck,
+        ShellAppUpdateDownload,
+        ShellAppUpdateInstall,
     );
     Ok(())
 }
@@ -1165,6 +1448,20 @@ mod tests {
             serde_json::to_string(&BrowserAction::CaptureVisualSnapshot)
                 .expect("serialize browser action"),
             r#""captureVisualSnapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_native_shell_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenLocalArtifact)
+                .expect("serialize shell method"),
+            r#""shell.local-artifact.open""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellAppUpdateDownload)
+                .expect("serialize update method"),
+            r#""shell.app-update.download""#
         );
     }
 

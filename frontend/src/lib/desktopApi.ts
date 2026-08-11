@@ -49,6 +49,25 @@ import type { PluginPayloadRequest } from "../bindings/PluginPayloadRequest";
 import type { RuntimeDiagnostics } from "../bindings/RuntimeDiagnostics";
 import type { RuntimeSnapshot } from "../bindings/RuntimeSnapshot";
 import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
+import type { AppUpdateState } from "../bindings/AppUpdateState";
+import type { ShellAppUpdateCheck } from "../bindings/ShellAppUpdateCheck";
+import type { ShellAppUpdateDownload } from "../bindings/ShellAppUpdateDownload";
+import type { ShellAppUpdateInstall } from "../bindings/ShellAppUpdateInstall";
+import type { ShellEditorOpenRequest } from "../bindings/ShellEditorOpenRequest";
+import type { ShellExternalUrlRequest } from "../bindings/ShellExternalUrlRequest";
+import type { ShellFileSelection } from "../bindings/ShellFileSelection";
+import type { ShellFileSelectionRequest } from "../bindings/ShellFileSelectionRequest";
+import type { ShellGeneratedImageCopy } from "../bindings/ShellGeneratedImageCopy";
+import type { ShellGeneratedImageRequest } from "../bindings/ShellGeneratedImageRequest";
+import type { ShellGeneratedImageReveal } from "../bindings/ShellGeneratedImageReveal";
+import type { ShellMicrophoneAccess } from "../bindings/ShellMicrophoneAccess";
+import type { ShellOpenedPath } from "../bindings/ShellOpenedPath";
+import type { ShellOpenedUrl } from "../bindings/ShellOpenedUrl";
+import type { ShellOpenTaskWindowRequest } from "../bindings/ShellOpenTaskWindowRequest";
+import type { ShellPickDownloadDirectoryRequest } from "../bindings/ShellPickDownloadDirectoryRequest";
+import type { ShellProjectRequest } from "../bindings/ShellProjectRequest";
+import type { ShellThreadRequest } from "../bindings/ShellThreadRequest";
+import type { ShellThreadReveal } from "../bindings/ShellThreadReveal";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
@@ -283,6 +302,90 @@ export interface DesktopMethodMap {
   "connector.disconnect": {
     params: PluginIdRequest;
     result: JsonValue;
+  };
+  "shell.deep-links.activate": {
+    params: Record<string, never>;
+    result: string[];
+  };
+  "shell.frontend.ready": {
+    params: Record<string, never>;
+    result: void;
+  };
+  "shell.task-window.open": {
+    params: ShellOpenTaskWindowRequest;
+    result: void;
+  };
+  "shell.microphone.request": {
+    params: Record<string, never>;
+    result: ShellMicrophoneAccess;
+  };
+  "shell.external-url.open": {
+    params: ShellExternalUrlRequest;
+    result: ShellOpenedUrl;
+  };
+  "shell.editor.open": {
+    params: ShellEditorOpenRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.local-artifact.open": {
+    params: LocalArtifactRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.generated-image.reveal": {
+    params: ShellGeneratedImageRequest;
+    result: ShellGeneratedImageReveal;
+  };
+  "shell.generated-image.copy": {
+    params: ShellGeneratedImageRequest;
+    result: ShellGeneratedImageCopy;
+  };
+  "shell.images.pick": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.attachments.pick": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.image.paste": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.thread.reveal": {
+    params: ShellThreadRequest;
+    result: ShellThreadReveal;
+  };
+  "shell.project.reveal": {
+    params: ShellProjectRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.download-directory.pick": {
+    params: ShellPickDownloadDirectoryRequest;
+    result: Preferences;
+  };
+  "shell.scheduler.open": {
+    params: Record<string, never>;
+    result: SchedulerSnapshot;
+  };
+  "shell.app-update.state": {
+    params: Record<string, never>;
+    result: AppUpdateState;
+  };
+  "shell.app-update.check": {
+    params: Record<string, never>;
+    result: ShellAppUpdateCheck;
+  };
+  "shell.app-update.download": {
+    params: Record<string, never>;
+    result: ShellAppUpdateDownload;
+  };
+  "shell.app-update.install": {
+    params: Record<string, never>;
+    result: ShellAppUpdateInstall;
+  };
+  "shell.app-update.open-download": {
+    params: Record<string, never>;
+    result: ShellOpenedUrl;
   };
 }
 
