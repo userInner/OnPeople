@@ -3,6 +3,7 @@ import path from "node:path";
 
 const DEFAULT_IDLE_DESTROY_MS = 60_000;
 const BROWSER_INSPECT_TIMEOUT_MS = 8_000;
+const BROWSER_LOAD_TIMEOUT_MS = 8_000;
 
 export function isSafeBrowserUrl(value) {
   try {
@@ -389,7 +390,13 @@ export class ElectronBrowserController {
     route.url = url;
     route.crashed = false;
     const contents = (await this.#ensureView(route)).webContents;
-    if (contents.getURL() !== url) await contents.loadURL(url);
+    if (contents.getURL() !== url) {
+      await withTimeout(
+        contents.loadURL(url),
+        BROWSER_LOAD_TIMEOUT_MS,
+        "浏览器页面加载超时，请重新加载页面后重试",
+      );
+    }
     this.#syncRoute(route);
     this.#publishState();
   }
@@ -493,7 +500,11 @@ export class ElectronBrowserController {
         try {
           const recovered = await this.#ensureView(route);
           if (recoveryUrl !== "about:blank") {
-            await recovered.webContents.loadURL(recoveryUrl);
+            await withTimeout(
+              recovered.webContents.loadURL(recoveryUrl),
+              BROWSER_LOAD_TIMEOUT_MS,
+              "浏览器页面恢复超时，请重新加载页面后重试",
+            );
           }
           route.crashed = false;
           this.#recoveryCount += 1;
@@ -509,7 +520,13 @@ export class ElectronBrowserController {
         }
       }, 250);
     });
-    if (route.url !== "about:blank") await contents.loadURL(route.url);
+    if (route.url !== "about:blank") {
+      await withTimeout(
+        contents.loadURL(route.url),
+        BROWSER_LOAD_TIMEOUT_MS,
+        "浏览器页面加载超时，请重新加载页面后重试",
+      );
+    }
     return view;
   }
 
