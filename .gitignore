@@ -16,5 +16,7 @@ playwright-report/
 release/
 release-*/
 output/
+dist-electron-spike*/
+electron-spike/runtime/
 services/cloud/.env
 services/cloud/data/

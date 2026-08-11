@@ -192,6 +192,13 @@ async function call<T>(
   if (import.meta.env.DEV && window.__ONPEOPLE_DEV__?.invoke) {
     return (await window.__ONPEOPLE_DEV__.invoke(command, args)) as T;
   }
+  if (isElectronRuntime()) {
+    try {
+      return (await window.onpeopleElectron!.invoke(command, args)) as T;
+    } catch (error) {
+      throw normalizeError(error);
+    }
+  }
   if (!isTauriRuntime()) {
     throw normalizeError({
       code: "RUNTIME_UNAVAILABLE",
@@ -210,8 +217,21 @@ async function subscribe<T>(
   event: string,
   handler: (payload: T) => void,
 ): Promise<UnlistenFn> {
+  if (isElectronRuntime()) {
+    return window.onpeopleElectron!.on(event, (payload) =>
+      handler(payload as T),
+    );
+  }
   if (!isTauriRuntime()) return () => undefined;
   return listen<T>(event, ({ payload }) => handler(payload));
+}
+
+export function isElectronRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.onpeopleElectron?.isElectron === true &&
+    typeof window.onpeopleElectron.invoke === "function"
+  );
 }
 
 function isTauriRuntime(): boolean {

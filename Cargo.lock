@@ -4141,6 +4141,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "onpeople-desktop-host"
+version = "0.30.0"
+dependencies = [
+ "onpeople-core-runtime",
+ "onpeople-desktop-api",
+ "onpeople-storage",
+ "onpeople-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "onpeople-integrations"
 version = "0.30.0"
 dependencies = [
