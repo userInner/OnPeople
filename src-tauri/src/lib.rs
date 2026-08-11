@@ -19,8 +19,9 @@ use onpeople_browser_host::{
 };
 use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
-    DesktopDispatcher, DesktopEvent, DesktopRecoveryRequired, DesktopRequest, DesktopResponse,
-    should_forward_desktop_event,
+    BrowserAction, BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserHostOperation,
+    DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRecoveryRequired, DesktopRequest,
+    DesktopResponse, should_forward_desktop_event,
 };
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
@@ -3888,6 +3889,108 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     Ok(())
 }
 
+struct TauriDesktopHost<'a, R: Runtime> {
+    app: &'a AppHandle<R>,
+    state: &'a AppState,
+}
+
+const fn legacy_browser_action_command(action: BrowserAction) -> &'static str {
+    match action {
+        BrowserAction::Navigate => "browser_navigate",
+        BrowserAction::Back => "browser_back",
+        BrowserAction::Forward => "browser_forward",
+        BrowserAction::Reload => "browser_reload",
+        BrowserAction::CaptureVisualSnapshot => "capture_browser_visual_snapshot",
+        BrowserAction::InspectDeveloperState => "inspect_browser_developer_state",
+        BrowserAction::BeginAnnotation => "begin_browser_annotation",
+        BrowserAction::CancelAnnotation => "cancel_browser_annotation",
+        BrowserAction::SessionStatus => "get_browser_session_status",
+        BrowserAction::OpenSignIn => "open_browser_sign_in",
+        BrowserAction::ClearSession => "clear_browser_session",
+        BrowserAction::ClearAllData => "clear_all_browser_data",
+        BrowserAction::ClearSettingsData => "clear_browser_data_from_settings",
+        BrowserAction::FillSavedCredential => "fill_saved_browser_credential",
+        BrowserAction::ListImportProfiles => "list_browser_import_profiles",
+        BrowserAction::ImportProfile => "import_browser_profile",
+        BrowserAction::Attach => "attach_browser",
+        BrowserAction::ActivateTab => "activate_browser_tab",
+        BrowserAction::DetachTab => "detach_browser_tab",
+    }
+}
+
+impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
+    fn browser<'a>(
+        &'a self,
+        operation: BrowserHostOperation,
+        params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            match operation {
+                BrowserHostOperation::State => {
+                    serde_json::to_value(self.state.current_browser_state())
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Restart => {
+                    self.state.force_restart_browser_host().await?;
+                    serde_json::to_value(self.state.current_browser_state())
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Command => {
+                    let command: BrowserCommand =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    self.state.apply_browser_remote(command).await
+                }
+                BrowserHostOperation::SurfaceBounds => {
+                    let request: BrowserBoundsRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    native_compositor::update_bounds(self.app, request.clone())?;
+                    if request.interactive {
+                        return Ok(json!({ "interactive": true }));
+                    }
+                    self.state
+                        .apply_browser_remote(BrowserCommand::Resize {
+                            route_id: request.route_id,
+                            width: request.width.round().clamp(1.0, 8_192.0) as u32,
+                            height: request.height.round().clamp(1.0, 8_192.0) as u32,
+                            scale_factor: request.scale_factor,
+                            visible: request.visible,
+                        })
+                        .await
+                }
+                BrowserHostOperation::AnnotationList => {
+                    let route_id = route_id(&params)?;
+                    serde_json::to_value(self.state.browser.annotations(&route_id))
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::AnnotationSave => {
+                    let annotation: BrowserAnnotation =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    serde_json::to_value(self.state.browser.save_annotation(annotation)?)
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::AnnotationDelete => {
+                    let request: BrowserAnnotationDeleteRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    serde_json::to_value(self.state.browser.delete_annotation(&request.id))
+                        .map_err(AppError::internal)
+                }
+                BrowserHostOperation::Action => {
+                    let request: BrowserActionRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    self.state
+                        .dispatch_command(
+                            self.app,
+                            legacy_browser_action_command(request.action),
+                            Value::Object(request.payload.into_iter().collect()),
+                        )
+                        .await
+                }
+            }
+        })
+    }
+}
+
 #[tauri::command]
 fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
     state.runtime.agent_status()
@@ -3895,10 +3998,15 @@ fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
 
 #[tauri::command]
 async fn desktop_request(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: DesktopRequest,
 ) -> Result<DesktopResponse, AppError> {
-    Ok(state.desktop_api.dispatch(request).await)
+    let host = TauriDesktopHost {
+        app: &app,
+        state: &state,
+    };
+    Ok(state.desktop_api.dispatch_with_host(request, &host).await)
 }
 
 #[tauri::command]

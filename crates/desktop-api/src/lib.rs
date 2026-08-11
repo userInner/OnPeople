@@ -1,13 +1,18 @@
 mod dispatcher;
+mod host;
 mod protocol;
 
 pub use dispatcher::DesktopDispatcher;
+pub use host::DesktopHost;
 pub use protocol::{
-    ApprovalDecision, AuthorizedProjectAction, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities,
-    DesktopEvent, DesktopMethod, DesktopRecoveryRequired, DesktopRequest, DesktopResponse,
-    EventReplay, EventReplayRequest, FileListRequest, FilePreview, FilePreviewRequest,
-    FileSearchRequest, GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest,
-    GitReviewStartRequest, GitReviewSubmitRequest, LocalArtifactRequest,
+    ApprovalDecision, AuthorizedProjectAction, BrowserAction, BrowserActionRequest,
+    BrowserAnnotationDeleteRequest, BrowserCommandRequest, BrowserHostOperation,
+    BrowserRouteRequest, ConnectorOauthCompleteRequest, DESKTOP_PROTOCOL_VERSION,
+    DesktopBrowserCommand, DesktopCapabilities, DesktopEvent, DesktopMethod,
+    DesktopRecoveryRequired, DesktopRequest, DesktopResponse, EventReplay, EventReplayRequest,
+    FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest, GeneratedImage,
+    GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest, GitReviewSubmitRequest,
+    LocalArtifactRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
     ProjectActionAuthorizeRequest, QueuedTaskMessage, RuntimeSnapshotRequest,
     TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest, TaskCancellation,
     TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
