@@ -37,10 +37,12 @@ pub enum DesktopMethod {
     TaskCancel,
     #[serde(rename = "task.snapshot")]
     TaskSnapshot,
+    #[serde(rename = "task.resume")]
+    TaskResume,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -54,6 +56,7 @@ impl DesktopMethod {
         Self::TaskStart,
         Self::TaskCancel,
         Self::TaskSnapshot,
+        Self::TaskResume,
     ];
 }
 
@@ -233,6 +236,13 @@ pub struct TaskSnapshotRequest {
     pub task_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct TaskResumeRequest {
+    pub thread_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(export)]
@@ -284,6 +294,15 @@ pub struct TaskCancellation {
     pub last_sequence: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TaskRecovery {
+    pub snapshot: TaskSnapshot,
+    pub resume_payload: Value,
+    pub timeline: Vec<Value>,
+}
+
 pub fn export_types(output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let config = Config::default().with_out_dir(output);
@@ -302,10 +321,12 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         TaskStartRequest,
         TaskCancelRequest,
         TaskSnapshotRequest,
+        TaskResumeRequest,
         TaskState,
         TaskHandle,
         TaskSnapshot,
         TaskCancellation,
+        TaskRecovery,
     );
     Ok(())
 }

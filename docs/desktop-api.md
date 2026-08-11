@@ -39,6 +39,7 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `task.start`
 - `task.cancel`
 - `task.snapshot`
+- `task.resume`
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
@@ -54,3 +55,5 @@ consumers move to `DesktopApiClient.subscribe`.
 `task.cancel` reports `cancelling`; the ordered terminal event remains the
 authority for completion. `task.snapshot` exposes the current task state and
 event cursor without requiring React to infer state from loading indicators.
+`task.resume` returns the authoritative recovered thread payload, persisted
+timeline, task snapshot, and latest event cursor in one response.

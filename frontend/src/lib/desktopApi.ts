@@ -14,6 +14,8 @@ import type { ThreadList } from "../bindings/ThreadList";
 import type { TaskCancelRequest } from "../bindings/TaskCancelRequest";
 import type { TaskCancellation } from "../bindings/TaskCancellation";
 import type { TaskHandle } from "../bindings/TaskHandle";
+import type { TaskRecovery } from "../bindings/TaskRecovery";
+import type { TaskResumeRequest } from "../bindings/TaskResumeRequest";
 import type { TaskSnapshot } from "../bindings/TaskSnapshot";
 import type { TaskSnapshotRequest } from "../bindings/TaskSnapshotRequest";
 import type { TaskStartRequest } from "../bindings/TaskStartRequest";
@@ -72,6 +74,10 @@ export interface DesktopMethodMap {
   "task.snapshot": {
     params: TaskSnapshotRequest;
     result: TaskSnapshot;
+  };
+  "task.resume": {
+    params: TaskResumeRequest;
+    result: TaskRecovery;
   };
 }
 

@@ -559,8 +559,12 @@ export const desktopClient = {
     call<Record<string, unknown>>("close_live_session", {
       request: { callId },
     }),
-  resumeThread: (threadId: string) =>
-    call<Record<string, unknown>>("resume_thread", { request: { threadId } }),
+  resumeTask: (threadId: string) =>
+    desktopApi.request("task.resume", { threadId }),
+  resumeThread: async (threadId: string): Promise<Record<string, unknown>> => {
+    const recovery = await desktopApi.request("task.resume", { threadId });
+    return recovery.resumePayload as Record<string, unknown>;
+  },
   forkThread: (threadId: string) =>
     call<Record<string, unknown>>("fork_thread", { request: { threadId } }),
   archiveThread: (threadId: string) =>

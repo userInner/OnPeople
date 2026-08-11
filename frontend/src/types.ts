@@ -35,6 +35,8 @@ export type { StreamEnvelope } from "./bindings/StreamEnvelope";
 export type { TaskCancelRequest } from "./bindings/TaskCancelRequest";
 export type { TaskCancellation } from "./bindings/TaskCancellation";
 export type { TaskHandle } from "./bindings/TaskHandle";
+export type { TaskRecovery } from "./bindings/TaskRecovery";
+export type { TaskResumeRequest } from "./bindings/TaskResumeRequest";
 export type { TaskSnapshot } from "./bindings/TaskSnapshot";
 export type { TaskSnapshotRequest } from "./bindings/TaskSnapshotRequest";
 export type { TaskStartRequest } from "./bindings/TaskStartRequest";

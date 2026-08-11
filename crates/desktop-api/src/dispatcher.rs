@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 
 use crate::{
     DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopMethod, DesktopRequest, DesktopResponse,
-    RuntimeSnapshotRequest, TaskCancelRequest, TaskCancellation, TaskHandle, TaskSnapshot,
-    TaskSnapshotRequest, TaskStartRequest, TaskState,
+    RuntimeSnapshotRequest, TaskCancelRequest, TaskCancellation, TaskHandle, TaskRecovery,
+    TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState,
 };
 
 #[derive(Clone)]
@@ -133,39 +133,70 @@ impl DesktopDispatcher {
             }
             DesktopMethod::TaskSnapshot => {
                 let request: TaskSnapshotRequest = parse_params(params)?;
+                to_value(task_snapshot(&self.runtime, request)?)
+            }
+            DesktopMethod::TaskResume => {
+                let request: TaskResumeRequest = parse_params(params)?;
                 if request.thread_id.trim().is_empty() {
                     return Err(AppError::invalid("缺少 threadId"));
                 }
-                let runtime = self.runtime.runtime_snapshot(None);
-                let is_active_thread =
-                    runtime.thread_id.as_deref() == Some(request.thread_id.as_str());
-                let task_id = if is_active_thread {
-                    runtime.turn_id.clone()
-                } else {
-                    None
-                };
-                let state = if !is_active_thread || task_id.is_none() {
-                    TaskState::Ready
-                } else if let Some(expected) = request.task_id.as_deref() {
-                    if task_id.as_deref() == Some(expected) {
-                        task_state(&runtime.state)
-                    } else {
-                        TaskState::Unknown
-                    }
-                } else {
-                    task_state(&runtime.state)
-                };
-                to_value(TaskSnapshot {
-                    task_id,
-                    thread_id: request.thread_id,
-                    state,
-                    queued_messages: runtime.queued_messages,
-                    pending_approvals: runtime.pending_approvals,
-                    last_sequence: self.runtime.event_cursor(),
+                let resume_payload = self.runtime.resume_thread(&request.thread_id).await?;
+                let timeline = resume_payload
+                    .get("onpeopleTimelineItems")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let snapshot = task_snapshot(
+                    &self.runtime,
+                    TaskSnapshotRequest {
+                        thread_id: request.thread_id,
+                        task_id: None,
+                    },
+                )?;
+                to_value(TaskRecovery {
+                    snapshot,
+                    resume_payload,
+                    timeline,
                 })
             }
         }
     }
+}
+
+fn task_snapshot(
+    runtime: &CoreRuntime,
+    request: TaskSnapshotRequest,
+) -> Result<TaskSnapshot, AppError> {
+    if request.thread_id.trim().is_empty() {
+        return Err(AppError::invalid("缺少 threadId"));
+    }
+    let runtime_snapshot = runtime.runtime_snapshot(None);
+    let is_active_thread =
+        runtime_snapshot.thread_id.as_deref() == Some(request.thread_id.as_str());
+    let task_id = if is_active_thread {
+        runtime_snapshot.turn_id.clone()
+    } else {
+        None
+    };
+    let state = if !is_active_thread || task_id.is_none() {
+        TaskState::Ready
+    } else if let Some(expected) = request.task_id.as_deref() {
+        if task_id.as_deref() == Some(expected) {
+            task_state(&runtime_snapshot.state)
+        } else {
+            TaskState::Unknown
+        }
+    } else {
+        task_state(&runtime_snapshot.state)
+    };
+    Ok(TaskSnapshot {
+        task_id,
+        thread_id: request.thread_id,
+        state,
+        queued_messages: runtime_snapshot.queued_messages,
+        pending_approvals: runtime_snapshot.pending_approvals,
+        last_sequence: runtime.event_cursor(),
+    })
 }
 
 fn task_state(runtime_state: &str) -> TaskState {
