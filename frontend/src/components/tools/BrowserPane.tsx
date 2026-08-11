@@ -236,7 +236,7 @@ function DesktopBrowserPane() {
       );
       const occluded =
         document.querySelector(
-          '[aria-modal="true"], [data-native-surface-occluder="true"]',
+          '[aria-modal="true"], [data-native-surface-occluder="true"], [data-browser-overflow-open="true"]',
         ) !== null;
       // A focused WebContentsView makes the React document report
       // `hasFocus() === false`. Visibility must follow the pane/route, not
@@ -443,6 +443,26 @@ function DesktopBrowserPane() {
       .catch((cause) => {
         setError(errorMessage(cause));
       });
+  };
+
+  const toggleOverflow = async () => {
+    if (overflowOpen) {
+      setOverflowOpen(false);
+      return;
+    }
+    // The native WebContentsView must be hidden while the menu is open so its
+    // surface cannot eat menu clicks. Keep the page visible underneath by
+    // refreshing the lightweight visual fallback first.
+    try {
+      const value = await desktopClient.captureBrowserVisualSnapshot(routeId);
+      const imageBase64 =
+        typeof value.imageBase64 === "string" ? value.imageBase64 : null;
+      if (imageBase64)
+        setVisualSnapshot(`data:image/png;base64,${imageBase64}`);
+    } catch {
+      // The menu remains usable even when a page snapshot is unavailable.
+    }
+    setOverflowOpen(true);
   };
 
   const sendPointer = (
@@ -695,7 +715,7 @@ function DesktopBrowserPane() {
             aria-label="更多浏览器工具"
             aria-haspopup="menu"
             aria-expanded={overflowOpen}
-            onClick={() => setOverflowOpen((open) => !open)}
+            onClick={() => void toggleOverflow()}
           >
             <MoreHorizontal size={17} aria-hidden="true" />
           </button>

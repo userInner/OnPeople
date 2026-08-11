@@ -103,13 +103,15 @@ describe("BrowserPane", () => {
     expect(screen.getByText("你在控制")).toBeVisible();
   });
 
-  it("opens the browser tools menu from the Electron toolbar", () => {
+  it("opens the browser tools menu from the Electron toolbar", async () => {
     render(<BrowserPane />);
 
     const trigger = screen.getByRole("button", { name: "更多浏览器工具" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() =>
+      expect(trigger).toHaveAttribute("aria-expanded", "true"),
+    );
     expect(screen.getByRole("menu")).toBeVisible();
     expect(screen.getByRole("menuitem", { name: /DOM 快照/ })).toBeEnabled();
   });
