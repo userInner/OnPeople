@@ -2575,7 +2575,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
     set((state) => ({
       timeline: state.timeline.map((item) =>
         item.requestId === requestId
-          ? { ...item, status: "正在提交决定" }
+          ? { ...item, status: "正在提交决定", error: undefined }
           : item,
       ),
     }));
@@ -2607,6 +2607,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
                   pending: false,
                   approvalDecision: decision,
                   status,
+                  error: undefined,
                 }
               : item,
           ),
@@ -2621,7 +2622,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
                 ...item,
                 pending: true,
                 status: "提交失败",
-                text: `${item.text}\n\n${message}`,
+                error: message,
               }
             : item,
         ),
@@ -2633,7 +2634,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
     set((state) => ({
       timeline: state.timeline.map((item) =>
         item.requestId === requestId
-          ? { ...item, status: "正在提交回答" }
+          ? { ...item, status: "正在提交回答", error: undefined }
           : item,
       ),
     }));
@@ -2650,16 +2651,19 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
                 pending: false,
                 status: "已回答",
                 userInputAnswers: answers,
+                error: undefined,
               }
             : item,
         ),
       }));
     } catch (error) {
+      const message = errorMessage(error);
       set((state) => ({
         timeline: state.timeline.map((item) =>
-          item.requestId === requestId ? { ...item, status: "提交失败" } : item,
+          item.requestId === requestId
+            ? { ...item, status: "提交失败", error: message }
+            : item,
         ),
-        error: errorMessage(error),
       }));
     }
   },

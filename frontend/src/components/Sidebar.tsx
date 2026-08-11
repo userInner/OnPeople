@@ -25,6 +25,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { desktopClient } from "../lib/desktopClient";
 import { isCloudAccountState } from "../lib/cloudAccount";
+import { numberedThreadShortcuts } from "../lib/threadShortcuts";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import type { CloudAccountState, PrimaryView, ThreadSummary } from "../types";
 import { AccountAuthPopover } from "./AccountAuthPopover";
@@ -472,13 +473,7 @@ function ProjectSwitcherPopover({
   const visibleProjectPaths = new Set(
     visibleProjects.map((project) => project.path),
   );
-  const pinnedThreads = [...allThreads]
-    .filter(
-      (thread) =>
-        threadSidebarSection(thread, visibleProjectPaths) === "pinned",
-    )
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, 8);
+  const pinnedThreads = numberedThreadShortcuts(allThreads);
   const recentThreads = [...threads]
     .filter(
       (thread) =>

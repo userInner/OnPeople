@@ -51,6 +51,7 @@ describe("Codex conversation controls", () => {
       sendPrompt: originalSendPrompt,
       selectedThreadId: "thread-main",
       threadLoading: false,
+      error: null,
       timeline: [],
       queuedMessages: [],
       runtime: {
@@ -867,7 +868,12 @@ describe("Codex conversation controls", () => {
       ],
     });
 
-    render(<Timeline />);
+    render(
+      <>
+        <Timeline />
+        <textarea aria-label="任务输入" />
+      </>,
+    );
     expect(screen.getByText("命令执行")).toBeInTheDocument();
     expect(
       screen.queryByText("item/commandExecution/requestApproval"),
@@ -883,6 +889,59 @@ describe("Codex conversation controls", () => {
     );
     await screen.findByText("已允许一次");
     expect(useWorkbenchStore.getState().runtime?.pendingApprovals).toBe(0);
+    await waitFor(() =>
+      expect(screen.getByLabelText("任务输入")).toHaveFocus(),
+    );
+  });
+
+  it("keeps approval payload intact and offers an in-card retry after failure", async () => {
+    vi.mocked(desktopClient.resolveApproval).mockRejectedValueOnce(
+      new Error(
+        "审批通道暂时不可用 authorization=Bearer approval-secret-token",
+      ),
+    );
+    useWorkbenchStore.setState({
+      runtime: {
+        state: "waiting-approval",
+        threadId: "thread-main",
+        turnId: "turn-1",
+        queuedMessages: 0,
+        pendingApprovals: 1,
+        context: null,
+      },
+      timeline: [
+        {
+          id: "approval-failing",
+          role: "tool",
+          kind: "approval",
+          title: "批准命令执行",
+          text: "npm test",
+          meta: "item/commandExecution/requestApproval",
+          requestId: "approval-failing",
+          approvalMethod: "item/commandExecution/requestApproval",
+          status: "需要确认",
+          pending: true,
+        },
+      ],
+    });
+
+    render(<Timeline />);
+    fireEvent.click(screen.getByRole("button", { name: "允许一次" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "审批通道暂时不可用",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "authorization=••••••••",
+    );
+    expect(screen.queryByText(/approval-secret-token/)).not.toBeInTheDocument();
+    expect(screen.getByText("npm test")).toBeVisible();
+    expect(screen.getByRole("button", { name: "允许一次" })).toBeEnabled();
+    expect(useWorkbenchStore.getState().timeline[0]).toMatchObject({
+      text: "npm test",
+      status: "提交失败",
+      error: "审批通道暂时不可用 authorization=Bearer approval-secret-token",
+    });
   });
 
   it("submits a request_user_input answer and resumes the turn", async () => {
@@ -922,7 +981,12 @@ describe("Codex conversation controls", () => {
       ],
     });
 
-    render(<Timeline />);
+    render(
+      <>
+        <Timeline />
+        <textarea aria-label="任务输入" />
+      </>,
+    );
     fireEvent.click(screen.getByRole("radio", { name: /本地预览/ }));
     fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
 
@@ -933,5 +997,60 @@ describe("Codex conversation controls", () => {
     );
     await screen.findByText("已回答");
     expect(useWorkbenchStore.getState().runtime?.state).toBe("working");
+    await waitFor(() =>
+      expect(screen.getByLabelText("任务输入")).toHaveFocus(),
+    );
+  });
+
+  it("keeps selected input answers and the global runtime healthy after submission failure", async () => {
+    vi.mocked(desktopClient.resolveUserInput).mockRejectedValueOnce(
+      new Error("回答暂时无法提交"),
+    );
+    useWorkbenchStore.setState({
+      runtime: {
+        state: "waiting-input",
+        threadId: "thread-main",
+        turnId: "turn-1",
+        queuedMessages: 0,
+        pendingApprovals: 0,
+        context: null,
+      },
+      timeline: [
+        {
+          id: "user-input-failing",
+          role: "tool",
+          kind: "user-input",
+          title: "需要你的输入",
+          text: "选择发布方式",
+          requestId: "input-failing",
+          status: "等待回答",
+          pending: true,
+          userInputQuestions: [
+            {
+              id: "delivery",
+              header: "发布方式",
+              question: "选择发布方式",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "本地预览", description: "只在本机打开" },
+                { label: "正式发布", description: "部署到生产环境" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<Timeline />);
+    fireEvent.click(screen.getByRole("radio", { name: /本地预览/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "回答暂时无法提交",
+    );
+    expect(screen.getByRole("radio", { name: /本地预览/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "提交回答" })).toBeEnabled();
+    expect(useWorkbenchStore.getState().error).toBeNull();
   });
 });

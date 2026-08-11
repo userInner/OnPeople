@@ -1325,6 +1325,21 @@ summary:focus-visible {
     monospace;
 }
 
+.approval-inline-error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 8px 0 0 35px;
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.approval-inline-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .approval-actions {
   display: flex;
   gap: 6px;

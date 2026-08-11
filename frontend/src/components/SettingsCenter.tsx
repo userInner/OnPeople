@@ -960,6 +960,7 @@ function ActionRow({
 function ShortcutSettings() {
   const shortcuts = [
     ["新任务", "⌘ N"],
+    ["打开置顶任务", "⌘ 1–9"],
     ["聚焦输入框", "⌘ L"],
     ["打开命令面板", "⌘ K"],
     ["打开设置", "⌘ ,"],

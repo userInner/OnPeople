@@ -166,6 +166,8 @@ export interface TimelineItem {
   kind?: TimelineKind | undefined;
   status?: string | undefined;
   meta?: string | undefined;
+  /** Recoverable error attached to this timeline action, separate from its payload. */
+  error?: string | undefined;
   requestId?: string | undefined;
   approvalMethod?: string | undefined;
   approvalDecision?: string | undefined;

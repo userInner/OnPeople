@@ -194,11 +194,36 @@ describe("Timeline activity status", () => {
     });
 
     render(<Timeline />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("连接中断")).toBeInTheDocument();
     expect(screen.getByText("WS 优先 · HTTP 备用")).toBeInTheDocument();
     expect(
       screen.getByText("当前任务、执行记录和本地文件不会丢失。"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps recovered transport notices quiet and masks credentials", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-transport-fallback",
+      timeline: [
+        {
+          id: "transport-fallback",
+          role: "error",
+          kind: "notice",
+          title: "WebSocket 已回退到 HTTP",
+          text: "authorization=Bearer visible-secret-token，当前请求继续执行。",
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    render(<Timeline />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("传输已恢复");
+    expect(screen.getByText(/authorization=••••••••/)).toBeVisible();
+    expect(screen.queryByText(/visible-secret-token/)).not.toBeInTheDocument();
   });
 
   it("uses the command with an exit receipt when one turn reports two traces", () => {

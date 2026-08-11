@@ -41,6 +41,7 @@ import { browserBridge } from "./browser/browserBridge";
 import { parseDeepLinkActions } from "./lib/deepLinks";
 import { desktopClient } from "./lib/desktopClient";
 import { runtimeIssuePresentation } from "./lib/runtimeIssue";
+import { threadForNumberShortcut } from "./lib/threadShortcuts";
 import {
   clamp,
   DEFAULT_SIDEBAR_WIDTH,
@@ -364,6 +365,23 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        const target = threadForNumberShortcut(
+          useWorkbenchStore.getState().threadList.threads,
+          event.key,
+        );
+        if (target) {
+          event.preventDefault();
+          const store = useWorkbenchStore.getState();
+          store.setPrimaryView("tasks");
+          void store.selectThread(target.id);
+          return;
+        }
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         useWorkbenchStore.getState().newTask();

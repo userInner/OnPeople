@@ -1172,7 +1172,11 @@ function visibleCommandOutput(output: string): {
 function sanitizeToolText(value: string): string {
   return value
     .replace(
-      /((?:approval[_-]?token|api[_-]?key|authorization|password|passwd|secret)(?:\\+)?["']?\s*[=:]\s*(?:\\+)?["']?)[^\s"'\\}]+/giu,
+      /((?:authorization)(?:\\+)?["']?\s*[=:]\s*(?:\\+)?["']?)(?:Bearer|Basic)?\s*[^\s"'\\}]+/giu,
+      "$1••••••••",
+    )
+    .replace(
+      /((?:approval[_-]?token|api[_-]?key|password|passwd|secret)(?:\\+)?["']?\s*[=:]\s*(?:\\+)?["']?)[^\s"'\\}]+/giu,
       "$1••••••••",
     )
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "sk-••••••••")
@@ -1250,6 +1254,14 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
   const requestPreview = requestLines[0] ?? "";
   const hasMoreRequestDetails =
     requestLines.length > 1 || requestPreview.length > 140;
+  const choose = async (decision: string) => {
+    if (!item.requestId) return;
+    await resolveApproval(item.requestId, decision);
+    const resolvedItem = useWorkbenchStore
+      .getState()
+      .timeline.find((entry) => entry.requestId === item.requestId);
+    if (resolvedItem?.approvalDecision) focusTaskComposer();
+  };
 
   return (
     <article
@@ -1280,24 +1292,26 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
           ) : null}
         </div>
       ) : null}
+      {item.error ? (
+        <div className="approval-inline-error" role="alert">
+          <AlertCircle size={13} aria-hidden="true" />
+          <span>{sanitizeToolText(item.error)}</span>
+        </div>
+      ) : null}
       {!resolved ? (
         <div className="approval-actions">
           <button
             className="approval-decline"
             type="button"
             disabled={busy}
-            onClick={() =>
-              item.requestId && void resolveApproval(item.requestId, "decline")
-            }
+            onClick={() => void choose("decline")}
           >
             拒绝
           </button>
           <button
             type="button"
             disabled={busy}
-            onClick={() =>
-              item.requestId && void resolveApproval(item.requestId, "accept")
-            }
+            onClick={() => void choose("accept")}
           >
             允许一次
           </button>
@@ -1305,10 +1319,7 @@ function ApprovalCard({ item }: { item: TimelineItem }) {
             className="approval-primary"
             type="button"
             disabled={busy}
-            onClick={() =>
-              item.requestId &&
-              void resolveApproval(item.requestId, "acceptForSession")
-            }
+            onClick={() => void choose("acceptForSession")}
           >
             本次会话允许
           </button>
@@ -1337,6 +1348,14 @@ function UserInputCard({ item }: { item: TimelineItem }) {
   const complete = questions.every((question) =>
     (answers[question.id] ?? []).some((value) => value.trim()),
   );
+  const submitAnswers = async () => {
+    if (!item.requestId) return;
+    await resolveUserInput(item.requestId, answers);
+    const resolvedItem = useWorkbenchStore
+      .getState()
+      .timeline.find((entry) => entry.requestId === item.requestId);
+    if (resolvedItem?.userInputAnswers) focusTaskComposer();
+  };
 
   return (
     <article
@@ -1405,15 +1424,19 @@ function UserInputCard({ item }: { item: TimelineItem }) {
           </fieldset>
         ))}
       </div>
+      {item.error ? (
+        <div className="approval-inline-error" role="alert">
+          <AlertCircle size={13} aria-hidden="true" />
+          <span>{sanitizeToolText(item.error)}</span>
+        </div>
+      ) : null}
       {!resolved ? (
         <div className="approval-actions">
           <button
             className="approval-primary"
             type="button"
             disabled={!complete || busy}
-            onClick={() =>
-              item.requestId && void resolveUserInput(item.requestId, answers)
-            }
+            onClick={() => void submitAnswers()}
           >
             {busy ? "提交中…" : "提交回答"}
           </button>
@@ -1421,6 +1444,14 @@ function UserInputCard({ item }: { item: TimelineItem }) {
       ) : null}
     </article>
   );
+}
+
+function focusTaskComposer() {
+  window.requestAnimationFrame(() => {
+    document
+      .querySelector<HTMLTextAreaElement>("[aria-label='任务输入']")
+      ?.focus();
+  });
 }
 
 function ToolCard({
@@ -1598,7 +1629,10 @@ function RecoveryNotice({ item }: { item: TimelineItem }) {
   };
 
   return (
-    <article className={`recovery-card is-${recovery.kind}`} role="status">
+    <article
+      className={`recovery-card is-${recovery.kind}`}
+      role={recovery.kind === "transport" ? "status" : "alert"}
+    >
       <div className="recovery-card-icon" aria-hidden="true">
         {recovery.kind === "connection" || recovery.kind === "transport" ? (
           <Wifi size={15} />
@@ -1614,7 +1648,7 @@ function RecoveryNotice({ item }: { item: TimelineItem }) {
           {recovery.route ? <code>{recovery.route}</code> : null}
         </div>
         <strong>{recovery.title}</strong>
-        <p>{recovery.description}</p>
+        <p>{sanitizeToolText(recovery.description)}</p>
         <div className="recovery-preservation">
           <ShieldCheck size={13} aria-hidden="true" />
           <span>{recovery.preservation}</span>
