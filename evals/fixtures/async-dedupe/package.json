@@ -1,0 +1,5 @@
+{
+  "name": "async-dedupe-eval",
+  "private": true,
+  "type": "module"
+}

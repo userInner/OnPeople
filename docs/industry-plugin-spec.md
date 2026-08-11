@@ -59,13 +59,13 @@ All IDs use lower-case hyphen-case. All file paths must be relative, resolve to 
 1. A marketplace exposes a standard plugin.
 2. OnPeople validates and installs it through the App Server plugin API.
 3. The user configures any Apps, MCP credentials, or project settings.
-4. The user activates one installed industry plugin as the default for new tasks.
-5. OnPeople snapshots its ID, version, workflow metadata, and instructions into each new task record.
+4. The user explicitly selects one installed industry plugin from the composer plus menu for the current conversation or turn.
+5. OnPeople snapshots its ID, version, workflow metadata, and instructions into that task record; a new task starts without an industry plugin unless the user selects one again.
 6. Existing tasks and forks retain their snapshot. Upgrades affect new tasks unless the user explicitly migrates an old task.
-7. Deactivation changes only the default for new tasks. Uninstalling does not delete user-created project artifacts.
+7. Removing the selection affects only the current draft. Uninstalling does not delete user-created project artifacts.
 
 Only one primary industry plugin may be active. Standard capability plugins, Skills, Apps, and MCP servers can be composed with it.
 
 ## Security boundary
 
-Industry manifests are declarative. They cannot inject Electron main-process or renderer code, access secrets directly, widen the active sandbox, or override OnPeople Core safety rules. External execution and network integrations use the existing MCP, App, approval, and secret-storage boundaries.
+Industry manifests are declarative. They cannot inject desktop-shell or renderer code, access secrets directly, widen the active sandbox, or override OnPeople Core safety rules. External execution and network integrations use the existing MCP, App, approval, and secret-storage boundaries.

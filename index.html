@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>OnPeople</title>
+    <script>
+      (() => {
+        if (!new URLSearchParams(location.search).has("frontendProbe")) return;
+        const printable = (value) => {
+          if (value instanceof Error) return value.stack || value.message;
+          if (typeof value === "string") return value;
+          try {
+            return JSON.stringify(value);
+          } catch {
+            return String(value);
+          }
+        };
+        const report = (kind, detail) => {
+          const target = new URL("./__frontend_log", location.href);
+          target.searchParams.set("kind", kind);
+          target.searchParams.set("detail", printable(detail).slice(0, 2000));
+          void fetch(target).catch(() => undefined);
+        };
+        window.addEventListener("error", (event) => {
+          report(
+            "error",
+            `${event.message} @ ${event.filename}:${event.lineno}:${event.colno}`,
+          );
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          report("rejection", event.reason);
+        });
+        report("probe", location.href);
+        window.setTimeout(() => {
+          const root = document.getElementById("root");
+          const shell = document.querySelector(".app-shell");
+          const rootRect = root?.getBoundingClientRect();
+          const shellRect = shell?.getBoundingClientRect();
+          report("dom", {
+            readyState: document.readyState,
+            visibilityState: document.visibilityState,
+            title: document.title,
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            rootChildren: root?.childElementCount,
+            rootText: root?.textContent?.slice(0, 240),
+            rootRect: rootRect && {
+              x: rootRect.x,
+              y: rootRect.y,
+              width: rootRect.width,
+              height: rootRect.height,
+            },
+            shellRect: shellRect && {
+              x: shellRect.x,
+              y: shellRect.y,
+              width: shellRect.width,
+              height: shellRect.height,
+            },
+            bodyDisplay: getComputedStyle(document.body).display,
+            bodyVisibility: getComputedStyle(document.body).visibility,
+          });
+        }, 1500);
+      })();
+    </script>
+  </head>
+  <body style="margin: 0; background: #f5f6f3">
+    <div id="root">
+      <main
+        style="
+          display: grid;
+          min-height: 100vh;
+          place-items: center;
+          color: #686863;
+          font:
+            14px -apple-system,
+            BlinkMacSystemFont,
+            sans-serif;
+        "
+      >
+        OnPeople 正在载入界面…
+      </main>
+    </div>
+    <script type="module" src="/frontend/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core capability for OnPeople task windows",
+  "remote": {
+    "urls": ["http://127.0.0.1:*/*"]
+  },
+  "windows": ["main", "task-*"],
+  "permissions": [
+    "allow-onpeople-commands",
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "dialog:default",
+    "notification:default",
+    "deep-link:default",
+    "updater:default",
+    "window-state:default"
+  ]
+}

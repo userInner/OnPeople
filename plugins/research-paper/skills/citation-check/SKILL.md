@@ -9,7 +9,7 @@ Use this skill to verify citation grounding and bibliography consistency.
 
 1. Extract each material claim and its nearby citation.
 2. Classify support as direct, partial, contradictory, irrelevant, or unavailable.
-3. Deduplicate DOI-bearing references, call `research_verify_reference` once per unique DOI, cache the result for the task, and inspect every mismatch and partial-source failure. Use `research_resolve_doi` when only identifier resolution is needed.
+3. Deduplicate DOI-bearing references. Search each unique DOI once with the public research connector, cache the returned metadata for the task, and inspect every mismatch and partial-source failure. Fetch a specific public record only when the metadata is insufficient.
 4. Verify title, authors, venue, year, volume, pages, DOI or stable identifier against authoritative metadata. Connector metadata can verify identity and fields, but cannot verify whether the paper supports a claim.
 5. Check quotations against the original wording and location.
 6. Check that every in-text citation has a bibliography entry and every bibliography entry is used.

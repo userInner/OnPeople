@@ -1,0 +1,175 @@
+{
+  "name": "OnPeople core coding tasks",
+  "cases": [
+    {
+      "id": "credit-boundary",
+      "title": "Fix numeric boundary validation without changing the API",
+      "fixture": "evals/fixtures/credit-boundary",
+      "prompt": "Fix applyCredit in src/credit.js. The function must accept a non-negative integer credit amount, including zero. It must throw RangeError for negative numbers and TypeError for non-integers or non-numbers. Preserve the exported function name and return shape. Inspect the repository, implement the fix, and run any useful local checks.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/credit-boundary.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unique-slug",
+      "title": "Implement deterministic collision-safe slugs",
+      "fixture": "evals/fixtures/unique-slug",
+      "prompt": "Implement uniqueSlug in src/slug.js. Normalize input to lowercase ASCII words separated by one dash, remove leading and trailing dashes, and return `item` when no word remains. The second argument is an iterable of already-used slugs. Return the base slug when available, otherwise append -2, -3, and so on using the first available suffix. Do not mutate the iterable or change the module API.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/unique-slug.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry-after",
+      "title": "Parse Retry-After values without clock errors",
+      "fixture": "evals/fixtures/retry-after",
+      "prompt": "Implement retryDelayMs in src/retry-after.js. Accept a Retry-After value plus an optional current time in epoch milliseconds. A non-negative finite number or decimal numeric string represents seconds; an HTTP-date string represents an absolute time. Return a non-negative integer delay in milliseconds, rounding fractional milliseconds up. Return null for empty, negative, non-finite, unparseable, or unsupported values. Past valid dates return 0. Preserve the module API and do not read the clock when nowMs is supplied.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/retry-after.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "async-dedupe",
+      "title": "Deduplicate only in-flight asynchronous work",
+      "fixture": "evals/fixtures/async-dedupe",
+      "prompt": "Implement createRequestDeduper in src/dedupe.js. It receives a load(key) function and returns a request(key) function. Concurrent requests for the same key must return the exact same in-flight Promise. Different keys run independently. A key must be evicted after either fulfillment or rejection so a later request retries. Convert synchronous throws from load into rejected Promises. Cleanup from an older request must never remove a newer entry. Preserve the exported API.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/async-dedupe.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "safe-workspace-path",
+      "title": "Confine lexical paths to a workspace",
+      "fixture": "evals/fixtures/safe-workspace-path",
+      "prompt": "Implement resolveWorkspacePath in src/safe-path.js using the host platform's path semantics. Given an absolute workspace root and a candidate string, return the normalized absolute path only when the candidate is relative and resolves strictly inside the root. Reject empty paths, the root itself, absolute candidates, traversal outside the root, and sibling-prefix tricks with RangeError. Reject non-string candidates with TypeError. This is a lexical check; filesystem access and symlink resolution are out of scope. Preserve the export.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/safe-workspace-path.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "secure-config-merge",
+      "title": "Deep-merge configuration without prototype pollution",
+      "fixture": "evals/fixtures/secure-config-merge",
+      "prompt": "Fix mergeConfig in src/config.js. Inputs are plain objects containing JSON-like values. Recursively merge plain objects; override values win, arrays replace rather than merge, and an undefined override leaves the default unchanged. Return a deep copy and never mutate or retain mutable array/object references from either input. Ignore the keys __proto__, prototype, and constructor at every depth to prevent prototype pollution. Return an ordinary plain object and preserve the export.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/secure-config-merge.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ttl-lru-cache",
+      "title": "Implement deterministic TTL and LRU eviction",
+      "fixture": "evals/fixtures/ttl-lru-cache",
+      "prompt": "Implement the TTLCache class in src/cache.js. The constructor is new TTLCache(capacity, ttlMs, now = Date.now), where capacity is a positive integer and ttlMs is a non-negative finite number; invalid values throw RangeError and a non-function clock throws TypeError. set(key, value) stores with a fresh TTL and marks the key most-recently used, evicting the least-recent live key when over capacity. get returns undefined for missing/expired keys and refreshes LRU order but not TTL. has reports live membership without refreshing LRU order. delete returns whether a live entry was removed, clear empties the cache, and the size getter counts only live entries. An entry expires when now() is greater than or equal to its expiry. Methods should lazily purge expired entries and remain deterministic with the injected clock.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/ttl-lru-cache.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stream-line-decoder",
+      "title": "Decode UTF-8 lines across arbitrary chunks",
+      "fixture": "evals/fixtures/stream-line-decoder",
+      "prompt": "Implement LineDecoder in src/line-decoder.js. push(chunk) accepts a string, Buffer, or Uint8Array and returns only the complete lines produced by that chunk. Handle LF and CRLF, including delimiters split across chunks, preserve empty lines, and correctly decode UTF-8 code points split across binary chunks. end() flushes decoding and returns one final unterminated line when present, but no spurious line after a trailing newline. After end(), push or a second end must throw. Reject unsupported chunk types with TypeError. Preserve the class export.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/stream-line-decoder.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "guarded-pagination",
+      "title": "Collect cursor pages with abort and cycle guards",
+      "fixture": "evals/fixtures/guarded-pagination",
+      "prompt": "Implement collectPages in src/pagination.js. It calls await fetchPage({ cursor, signal }), beginning with cursor null, validates that each result is an object with an items array, appends items in order, and stops when nextCursor is null or undefined. Options are { signal, maxPages = 100 }; maxPages must be a positive integer. Check abortion before every fetch using signal.throwIfAborted() when available, otherwise throw signal.reason when aborted. Detect repeated non-null cursors and throw rather than looping. Throw RangeError before fetching a page beyond maxPages. Do not mutate returned page arrays and preserve the export.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/guarded-pagination.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ledger-reducer",
+      "title": "Apply a validated idempotent ledger",
+      "fixture": "evals/fixtures/ledger-reducer",
+      "prompt": "Implement summarizeLedger in src/ledger.js and repair src/validation.js as needed. summarizeLedger(openingBalance, events) works in integer cents. The opening balance must be a non-negative safe integer. Each event must have a non-empty string id, type credit or debit, and a positive safe-integer amount; validateAmount must return true exactly for positive safe integers. Validate every event even if its id duplicates an earlier event. Apply only the first occurrence of each valid id, preserving order; debits may not make the balance negative and must throw RangeError if they would. Return { openingBalance, balance, appliedIds } without mutating inputs. Invalid numeric/type/shape data throws TypeError. Preserve both modules' existing exports.",
+      "timeoutMs": 18000000,
+      "checks": [
+        {
+          "name": "hidden behavior oracle",
+          "command": [
+            "node",
+            "{repo}/evals/oracles/ledger-reducer.mjs",
+            "{workspace}"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "pdf",
+  "version": "0.1.0",
+  "description": "Create, inspect, and verify PDF artifacts with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["pdf", "documents", "artifacts"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "PDF",
+    "shortDescription": "Create and inspect PDF files",
+    "longDescription": "Creates portable PDF files in the active workspace and validates that the result is readable.",
+    "developerName": "OnPeople",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Create a PDF report from this content.",
+      "Inspect this PDF and summarize its contents."
+    ],
+    "brandColor": "#F04B4C"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "presentations",
+  "version": "0.1.0",
+  "description": "Create, inspect, and verify presentation artifacts with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["presentations", "pptx", "powerpoint", "slides"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Presentations",
+    "shortDescription": "Create and inspect presentation files",
+    "longDescription": "Creates structured PPTX decks in the active workspace and verifies the generated package before returning it.",
+    "developerName": "OnPeople",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Create a concise presentation from this outline.",
+      "Inspect this deck and summarize every slide."
+    ],
+    "brandColor": "#EAA223"
+  }
+}

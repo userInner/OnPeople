@@ -4,6 +4,14 @@ npm-debug.log*
 dist/
 dist-next/
 dist-preview/
+target/
+src-tauri/gen/
+frontend/src/generated/
+.vite/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
 .embedded-runtime/
 release/
 release-*/

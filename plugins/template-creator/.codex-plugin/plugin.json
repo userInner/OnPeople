@@ -1,0 +1,22 @@
+{
+  "name": "template-creator",
+  "version": "0.1.0",
+  "description": "Create and apply reusable artifact templates with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["templates", "artifacts", "automation"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Template Creator",
+    "shortDescription": "Create and apply reusable templates",
+    "longDescription": "Stores reusable structured templates with named placeholders and applies values safely inside the active workspace.",
+    "developerName": "OnPeople",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Create a reusable template from this structure.",
+      "Apply this template with the following values."
+    ],
+    "brandColor": "#6C7CF6"
+  }
+}

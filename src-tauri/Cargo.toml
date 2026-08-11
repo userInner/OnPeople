@@ -1,0 +1,67 @@
+[package]
+name = "onpeople-tauri"
+version.workspace = true
+description = "Tauri desktop runtime for OnPeople"
+authors = ["OnPeople"]
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "onpeople_desktop_shell"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5.3", features = [] }
+
+[dependencies]
+chrono.workspace = true
+base64.workspace = true
+onpeople-browser-host = { path = "../crates/browser-host", default-features = false }
+onpeople-core-runtime = { path = "../crates/core-runtime" }
+onpeople-integrations = { path = "../crates/integrations" }
+onpeople-storage = { path = "../crates/storage" }
+onpeople-types = { path = "../crates/onpeople-types" }
+onpeople-workspace = { path = "../crates/workspace" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rustls.workspace = true
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-clipboard-manager = "2.3.2"
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-window-state = "2.4.1"
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+objc2-core-foundation = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-io-surface = "0.3.2"
+objc2-metal = { version = "0.3.2", features = ["objc2-io-surface"] }
+objc2-quartz-core = "0.3.2"
+objc2-web-kit = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_DirectComposition",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+] }

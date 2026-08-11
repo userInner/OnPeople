@@ -8,7 +8,7 @@ description: Build a reproducible bilingual literature search, screening log, ev
 Use this skill for literature discovery, screening, evidence extraction, synthesis, and review writing.
 
 1. Confirm the research question, field, date range, source types, languages, and inclusion/exclusion criteria.
-2. When current public discovery is needed, call `research_search_papers` with domain-appropriate sources. Use `research_search_datasets` for datasets or software and `research_search_trials` for trial-registry questions.
+2. When current public discovery is needed, call the read-only `research_search` connector with a focused query. Use `research_fetch` only for a specific public record or full-text page that needs to be read.
 3. Record databases or sources, exact queries, filters, search dates, result counts, partial failures, and coverage limits when searches are performed.
 4. Resolve a DOI or verify bibliographic metadata before marking an item as included. Do not treat metadata, an abstract, or a full-text link as proof that the underlying paper supports a claim.
 5. Build an evidence matrix with study context, method, sample or dataset, findings, limitations, and relevance.

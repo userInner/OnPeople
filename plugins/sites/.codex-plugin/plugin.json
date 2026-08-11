@@ -1,0 +1,22 @@
+{
+  "name": "sites",
+  "version": "0.1.0",
+  "description": "Create standalone local web pages with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["sites", "html", "web", "artifacts"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Sites",
+    "shortDescription": "Build standalone workspace web pages",
+    "longDescription": "Creates responsive, self-contained HTML pages in the active workspace for prototypes, reports, and lightweight sites.",
+    "developerName": "OnPeople",
+    "category": "Creativity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Build a polished standalone page for this content.",
+      "Create a responsive project landing page."
+    ],
+    "brandColor": "#58A6E7"
+  }
+}

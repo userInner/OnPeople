@@ -1,0 +1,22 @@
+{
+  "name": "spreadsheets",
+  "version": "0.1.0",
+  "description": "Create, inspect, and verify spreadsheet artifacts with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["spreadsheets", "xlsx", "excel", "data"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Spreadsheets",
+    "shortDescription": "Create and inspect spreadsheet files",
+    "longDescription": "Builds XLSX workbooks with multiple sheets, typed values, and formulas, then validates that the workbook can be reopened.",
+    "developerName": "OnPeople",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write", "Analyze"],
+    "defaultPrompt": [
+      "Turn this data into a structured Excel workbook.",
+      "Inspect this spreadsheet and summarize each sheet."
+    ],
+    "brandColor": "#2E9D50"
+  }
+}

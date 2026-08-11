@@ -5,14 +5,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  CODEX_VERSION: "0.146.0-alpha.3.1"
+  CUA_DRIVER_VERSION: "0.12.4"
+
 jobs:
   check:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-15
-          - windows-2022
+        os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -20,48 +22,168 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
-      - run: npm run rebuild:native
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - run: npm ci --legacy-peer-deps
+      - run: npx playwright install chromium
       - run: npm run check
 
-  package-windows:
-    name: Package Windows installer
+  package-macos:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     needs: check
-    runs-on: windows-2022
-    permissions:
-      contents: write
-    env:
-      CODEX_VERSION: "0.146.0-alpha.3.1"
-      CUA_DRIVER_VERSION: "0.12.4"
-      ONPEOPLE_STORE_IDENTITY_NAME: ${{ vars.MS_STORE_IDENTITY_NAME }}
-      ONPEOPLE_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
-      ONPEOPLE_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
-      ONPEOPLE_STORE_APPLICATION_ID: ${{ vars.MS_STORE_APPLICATION_ID }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+            triple: aarch64-apple-darwin
+          - os: macos-15-intel
+            arch: x64
+            triple: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
-      - run: npm run rebuild:native
-      - name: Stage public Windows runtimes
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - run: npm ci --legacy-peer-deps
+      - name: Download and verify public macOS runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache="$RUNNER_TEMP/onpeople-runtime"
+          codex_extract="$cache/codex"
+          cua_extract="$cache/cua"
+          mkdir -p "$cache" "$codex_extract" "$cua_extract"
+
+          codex_spec="@openai/codex@$CODEX_VERSION-darwin-${{ matrix.arch }}"
+          codex_archive_name="$(npm pack "$codex_spec" --silent --pack-destination "$cache" | tail -1)"
+          tar -xzf "$cache/$codex_archive_name" -C "$codex_extract"
+          codex_binary="$codex_extract/package/vendor/${{ matrix.triple }}/bin/codex"
+          test -x "$codex_binary"
+
+          cua_asset="cua-driver-rs-$CUA_DRIVER_VERSION-darwin-universal.tar.gz"
+          cua_release="https://github.com/trycua/cua/releases/download/cua-driver-rs-v$CUA_DRIVER_VERSION"
+          curl --fail --location --retry 3 "$cua_release/$cua_asset" --output "$cache/$cua_asset"
+          curl --fail --location --retry 3 "$cua_release/checksums.txt" --output "$cache/cua-checksums.txt"
+          expected="$(awk -v asset="$cua_asset" '$0 ~ asset { print $1; exit }' "$cache/cua-checksums.txt")"
+          actual="$(shasum -a 256 "$cache/$cua_asset" | awk '{ print $1 }')"
+          test -n "$expected"
+          test "$actual" = "$expected"
+          tar -xzf "$cache/$cua_asset" -C "$cua_extract"
+          cua_binary="$(find "$cua_extract" -path '*/Contents/MacOS/cua-driver' -type f -print -quit)"
+          test -x "$cua_binary"
+
+          echo "CODEX_BUNDLE_SOURCE=$codex_binary" >> "$GITHUB_ENV"
+          echo "CUA_DRIVER_BINARY_SOURCE=$cua_binary" >> "$GITHUB_ENV"
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_CERTIFICATE"
+          certificate="$RUNNER_TEMP/onpeople-developer-id.p12"
+          keychain="$RUNNER_TEMP/onpeople-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain" | grep '6K4S66PVRQ'
+      - name: Build and stage macOS runtime
+        run: |
+          npm run runtime:build
+          npm run runtime:stage
+        env:
+          ONPEOPLE_TARGET_PLATFORM: darwin
+          ONPEOPLE_TARGET_ARCH: ${{ matrix.arch }}
+      - name: Sign Browser Host, CEF Framework, and Helpers
+        run: npm run runtime:sign
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      - name: Verify staged macOS runtime
+        run: npm run package:contents
+        env:
+          ONPEOPLE_TARGET_PLATFORM: darwin
+          ONPEOPLE_TARGET_ARCH: ${{ matrix.arch }}
+      - name: Build, sign, notarize, and staple app and DMG
+        run: npx tauri build --bundles app,dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: 6K4S66PVRQ
+          ONPEOPLE_TARGET_PLATFORM: darwin
+          ONPEOPLE_TARGET_ARCH: ${{ matrix.arch }}
+      - name: Create updater ZIP
+        run: npm run package:macos-zip
+        env:
+          ONPEOPLE_TARGET_ARCH: ${{ matrix.arch }}
+      - name: Smoke final macOS Browser Host and CEF
+        run: npm run smoke:browser-runtime -- --runtime-root target/release/bundle/macos/OnPeople.app/Contents/Resources/.embedded-runtime
+      - name: Smoke final macOS Codex App Server
+        run: npm run smoke:agent-runtime -- --runtime-root target/release/bundle/macos/OnPeople.app/Contents/Resources/.embedded-runtime
+      - name: Smoke final macOS headless CLI
+        run: npm run smoke:headless-runtime -- --runtime-root target/release/bundle/macos/OnPeople.app/Contents/Resources/.embedded-runtime
+      - name: Verify final signed and notarized macOS release
+        run: |
+          dmg="$(find target/release/bundle -name '*.dmg' -type f -print -quit)"
+          test -n "$dmg"
+          hdiutil verify "$dmg"
+          npm run release:gate
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ONPEOPLE_TARGET_PLATFORM: darwin
+          ONPEOPLE_TARGET_ARCH: ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v5
+        with:
+          name: OnPeople-macOS-${{ matrix.arch }}
+          path: target/release/bundle
+          if-no-files-found: error
+          retention-days: 7
+
+  package-windows:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - run: npm ci --legacy-peer-deps
+      - name: Download and verify public Windows runtimes
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $cache = Join-Path $env:RUNNER_TEMP "onpeople-runtime"
           $codexExtract = Join-Path $cache "codex"
           $cuaExtract = Join-Path $cache "cua"
-          New-Item -ItemType Directory -Force $cache, $codexExtract, $cuaExtract, ".embedded-runtime\bin" | Out-Null
+          New-Item -ItemType Directory -Force $cache, $codexExtract, $cuaExtract | Out-Null
 
           $codexSpec = "@openai/codex@$env:CODEX_VERSION-win32-x64"
           $codexArchiveName = (npm pack $codexSpec --silent --pack-destination $cache | Select-Object -Last 1).Trim()
-          $codexArchive = Join-Path $cache $codexArchiveName
-          tar -xzf $codexArchive -C $codexExtract
+          tar -xzf (Join-Path $cache $codexArchiveName) -C $codexExtract
           if ($LASTEXITCODE -ne 0) { throw "Failed to extract $codexArchiveName" }
-          $codexVendor = Join-Path $codexExtract "package\vendor\x86_64-pc-windows-msvc"
-          Copy-Item "$codexVendor\*" -Destination ".embedded-runtime" -Recurse -Force
+          $codexBinary = Join-Path $codexExtract "package\vendor\x86_64-pc-windows-msvc\bin\codex.exe"
+          if (-not (Test-Path $codexBinary)) { throw "Codex executable was not staged" }
 
           $cuaAsset = "cua-driver-rs-$env:CUA_DRIVER_VERSION-windows-x86_64-binary.zip"
           $cuaRelease = "https://github.com/trycua/cua/releases/download/cua-driver-rs-v$env:CUA_DRIVER_VERSION"
@@ -69,153 +191,123 @@ jobs:
           $checksums = Join-Path $cache "cua-checksums.txt"
           Invoke-WebRequest "$cuaRelease/$cuaAsset" -OutFile $cuaArchive
           Invoke-WebRequest "$cuaRelease/checksums.txt" -OutFile $checksums
-          $checksumLine = Get-Content $checksums | Where-Object { $_ -match [regex]::Escape($cuaAsset) } | Select-Object -First 1
-          if (-not $checksumLine) { throw "Checksum for $cuaAsset was not published" }
-          $expectedChecksum = ($checksumLine -split "\s+")[0].ToLowerInvariant()
-          $actualChecksum = (Get-FileHash $cuaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualChecksum -ne $expectedChecksum) { throw "Checksum mismatch for $cuaAsset" }
+          $line = Get-Content $checksums | Where-Object { $_ -match [regex]::Escape($cuaAsset) } | Select-Object -First 1
+          if (-not $line) { throw "Checksum for $cuaAsset was not published" }
+          $expected = ($line -split "\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash $cuaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Checksum mismatch for $cuaAsset" }
           Expand-Archive $cuaArchive -DestinationPath $cuaExtract -Force
-          Copy-Item "$cuaExtract\*" -Destination ".embedded-runtime\bin" -Recurse -Force
+          $cuaBinary = Get-ChildItem $cuaExtract -Filter cua-driver.exe -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $cuaBinary) { throw "Cua Driver executable was not staged" }
 
-          $codexBinary = ".embedded-runtime\bin\codex.exe"
-          $cuaBinary = ".embedded-runtime\bin\cua-driver.exe"
-          if (-not (Test-Path $codexBinary)) { throw "Codex executable was not staged" }
-          if (-not (Test-Path $cuaBinary)) { throw "Cua Driver executable was not staged" }
-          $manifest = @{
-            createdAt = (Get-Date).ToUniversalTime().ToString("o")
-            target = @{ platform = "win32"; arch = "x64" }
-            components = @{
-              codex = @{ kind = "npm"; version = $env:CODEX_VERSION; source = "npm:$codexSpec"; target = "bin/codex.exe"; sha256 = (Get-FileHash $codexBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
-              cuaDriver = @{ version = $env:CUA_DRIVER_VERSION; source = "$cuaRelease/$cuaAsset"; target = "bin/cua-driver.exe"; sha256 = (Get-FileHash $cuaBinary -Algorithm SHA256).Hash.ToLowerInvariant() }
-            }
-            notice = "Public release runtimes downloaded from their official distributions during the build."
+          "CODEX_BUNDLE_SOURCE=$codexBinary" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "CUA_DRIVER_BINARY_SOURCE=$cuaBinary" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Import Windows code-signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.ONPEOPLE_MSIX_CERTIFICATE_B64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ONPEOPLE_MSIX_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:WINDOWS_CERTIFICATE) { throw "ONPEOPLE_MSIX_CERTIFICATE_B64 is required" }
+          $certificate = Join-Path $env:RUNNER_TEMP "onpeople-signing.pfx"
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $imported = Import-PfxCertificate -FilePath $certificate -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (-not $imported.HasPrivateKey) { throw "Imported Windows certificate has no private key" }
+          $cer = Join-Path $env:RUNNER_TEMP "onpeople-signing.cer"
+          Export-Certificate -Cert $imported -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\CurrentUser\TrustedPeople | Out-Null
+          "ONPEOPLE_MSIX_CERTIFICATE=$certificate" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "ONPEOPLE_WINDOWS_CERTIFICATE_THUMBPRINT=$($imported.Thumbprint)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build and sign Windows sidecars
+        shell: pwsh
+        env:
+          ONPEOPLE_MSIX_CERTIFICATE_PASSWORD: ${{ secrets.ONPEOPLE_MSIX_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm run runtime:build
+          foreach ($binary in @("target\release\onpeople-browser-host.exe", "target\release\onpeople-mcp-host.exe", "target\release\onpeople.exe")) {
+            & signtool.exe sign /fd SHA256 /f $env:ONPEOPLE_MSIX_CERTIFICATE /p $env:ONPEOPLE_MSIX_CERTIFICATE_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $binary
+            if ($LASTEXITCODE -ne 0) { throw "Failed to sign $binary" }
           }
-          $manifestPath = Join-Path (Get-Location) ".embedded-runtime\manifest.json"
-          [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
-      - name: Build and verify NSIS installer
-        run: node scripts/package-win-installer.cjs
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v5
+      - name: Stage and verify Windows runtime including CEF
+        shell: pwsh
+        run: |
+          $env:ONPEOPLE_TARGET_PLATFORM = "win32"
+          $env:ONPEOPLE_TARGET_ARCH = "x64"
+          npm run runtime:stage
+          npm run package:contents
+      - name: Configure Tauri Authenticode signing
+        shell: pwsh
+        run: |
+          $config = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $env:ONPEOPLE_WINDOWS_CERTIFICATE_THUMBPRINT
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.digicert.com"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
+          [IO.File]::WriteAllText($path, $config, [Text.UTF8Encoding]::new($false))
+          "ONPEOPLE_TAURI_WINDOWS_CONFIG=$path" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build signed Windows shell and NSIS installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ONPEOPLE_TARGET_PLATFORM: win32
+          ONPEOPLE_TARGET_ARCH: x64
+        run: npx tauri build --bundles nsis --config $env:ONPEOPLE_TAURI_WINDOWS_CONFIG
+      - name: Create signed MSIX
+        shell: pwsh
+        env:
+          ONPEOPLE_MSIX_PUBLISHER: ${{ secrets.ONPEOPLE_MSIX_PUBLISHER }}
+          ONPEOPLE_MSIX_CERTIFICATE_PASSWORD: ${{ secrets.ONPEOPLE_MSIX_CERTIFICATE_PASSWORD }}
+        run: npm run package:msix
+      - name: Install NSIS and smoke final shell, Browser Host, and CEF
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem "target\release\bundle\nsis" -Filter *.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          $installRoot = Join-Path $env:RUNNER_TEMP "OnPeople-NSIS"
+          $process = Start-Process $installer -ArgumentList @("/S", "/D=$installRoot") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS install failed with $($process.ExitCode)" }
+          $shell = Get-ChildItem $installRoot -Filter *.exe | Where-Object Name -NotLike "uninstall*" | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $shell) { throw "Installed OnPeople shell is missing" }
+          $app = Start-Process $shell -PassThru
+          Start-Sleep -Seconds 8
+          if ($app.HasExited) { throw "Installed OnPeople shell exited with $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          cargo run -p xtask -- smoke-browser-runtime --runtime-root (Join-Path $installRoot ".embedded-runtime")
+          cargo run -p xtask -- smoke-agent-runtime --runtime-root (Join-Path $installRoot ".embedded-runtime")
+          cargo run -p xtask -- smoke-headless-runtime --runtime-root (Join-Path $installRoot ".embedded-runtime")
+      - name: Install MSIX and smoke packaged Browser Host and CEF
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msix = Get-ChildItem "target\release\bundle" -Filter *.msix | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $msix) { throw "MSIX package was not produced" }
+          Add-AppxPackage -Path $msix
+          $package = Get-AppxPackage -Name com.userinner.onpeople
+          if (-not $package) { throw "MSIX package was not installed" }
+          cargo run -p xtask -- smoke-browser-runtime --runtime-root (Join-Path $package.InstallLocation ".embedded-runtime")
+          cargo run -p xtask -- smoke-agent-runtime --runtime-root (Join-Path $package.InstallLocation ".embedded-runtime")
+          cargo run -p xtask -- smoke-headless-runtime --runtime-root (Join-Path $package.InstallLocation ".embedded-runtime")
+          Remove-AppxPackage -Package $package.PackageFullName
+      - name: Verify signed Windows release and size gates
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ONPEOPLE_TARGET_PLATFORM: win32
+          ONPEOPLE_TARGET_ARCH: x64
+        run: npm run release:gate
+      - uses: actions/upload-artifact@v5
         with:
           name: OnPeople-Windows-x64
-          path: |
-            release/windows/OnPeople-Setup-*-win-x64.exe
-            release/windows/OnPeople-Setup-*-win-x64.exe.blockmap
-            release/windows/latest.yml
+          path: target/release/bundle
           if-no-files-found: error
           retention-days: 7
-      - name: Build Microsoft Store AppX package
-        if: env.ONPEOPLE_STORE_IDENTITY_NAME != ''
-        run: node scripts/package-win-store.cjs
-      - name: Upload Microsoft Store submission package
-        if: env.ONPEOPLE_STORE_IDENTITY_NAME != ''
-        uses: actions/upload-artifact@v5
-        with:
-          name: OnPeople-Windows-Store-x64
-          path: release/store/OnPeople-Store-*-win-x64.appx
-          if-no-files-found: error
-          retention-days: 14
-
-  package-macos:
-    name: Package macOS apps
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    needs: check
-    runs-on: macos-15
-    env:
-      CODEX_NPM_VERSION: "0.146.0-alpha.3.1"
-      CUA_DRIVER_VERSION: "0.12.4"
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run rebuild:native
-      - name: Download and verify public universal macOS Cua Driver
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "arm64"
-          runtime_cache="$RUNNER_TEMP/onpeople-runtime"
-          cua_extract="$runtime_cache/cua"
-          mkdir -p "$runtime_cache" "$cua_extract"
-
-          cua_asset="cua-driver-rs-$CUA_DRIVER_VERSION-darwin-universal.tar.gz"
-          cua_release="https://github.com/trycua/cua/releases/download/cua-driver-rs-v$CUA_DRIVER_VERSION"
-          cua_archive="$runtime_cache/$cua_asset"
-          checksums="$runtime_cache/cua-checksums.txt"
-          curl --fail --location --retry 3 "$cua_release/$cua_asset" --output "$cua_archive"
-          curl --fail --location --retry 3 "$cua_release/checksums.txt" --output "$checksums"
-          expected_checksum="$(awk -v asset="$cua_asset" '$0 ~ asset { print $1; exit }' "$checksums")"
-          actual_checksum="$(shasum -a 256 "$cua_archive" | awk '{ print $1 }')"
-          test -n "$expected_checksum"
-          test "$actual_checksum" = "$expected_checksum"
-          tar -xzf "$cua_archive" -C "$cua_extract"
-          cua_app="$(find "$cua_extract" -type d -name CuaDriver.app -print -quit)"
-          test -x "$cua_app/Contents/MacOS/cua-driver"
-
-          echo "CUA_DRIVER_APP_SOURCE=$cua_app" >> "$GITHUB_ENV"
-      - name: Build, sign, and verify macOS archive
-        run: npm run package:mac
-      - name: Upload macOS app
-        uses: actions/upload-artifact@v5
-        with:
-          name: OnPeople-macOS
-          path: |
-            release/OnPeople-*-macos-arm64.zip
-            release/OnPeople-*-macos-arm64.dmg
-            release/OnPeople-*-macos-x64.zip
-            release/OnPeople-*-macos-x64.dmg
-          if-no-files-found: error
-          retention-days: 7
-
-  publish-release:
-    name: Publish tagged GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - package-windows
-      - package-macos
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
-        with:
-          pattern: OnPeople-*
-          path: release-assets
-          merge-multiple: true
-      - name: Publish installers
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          package_version="$(node -p "require('./package.json').version")"
-          expected_tag="v$package_version"
-          test "$TAG_NAME" = "$expected_tag"
-          windows_installer="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe' -print -quit)"
-          windows_blockmap="$(find release-assets -maxdepth 1 -name 'OnPeople-Setup-*-win-x64.exe.blockmap' -print -quit)"
-          windows_latest="release-assets/latest.yml"
-          macos_arm64_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.zip' -print -quit)"
-          macos_arm64_dmg="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-arm64.dmg' -print -quit)"
-          macos_x64_archive="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-x64.zip' -print -quit)"
-          macos_x64_dmg="$(find release-assets -maxdepth 1 -name 'OnPeople-*-macos-x64.dmg' -print -quit)"
-          test -f "$windows_installer"
-          test -f "$windows_blockmap"
-          test -f "$windows_latest"
-          test -f "$macos_arm64_archive"
-          test -f "$macos_arm64_dmg"
-          test -f "$macos_x64_archive"
-          test -f "$macos_x64_dmg"
-          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_arm64_archive" "$macos_arm64_dmg" "$macos_x64_archive" "$macos_x64_dmg" --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$TAG_NAME" "$windows_installer" "$windows_blockmap" "$windows_latest" "$macos_arm64_archive" "$macos_arm64_dmg" "$macos_x64_archive" "$macos_x64_dmg" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --generate-notes \
-              --title "OnPeople $package_version"
-          fi

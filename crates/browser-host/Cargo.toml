@@ -1,0 +1,45 @@
+[package]
+name = "onpeople-browser-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "onpeople-browser-host"
+path = "src/main.rs"
+test = false
+
+[features]
+default = ["cef-runtime", "accelerated-osr"]
+cef-runtime = ["dep:cef"]
+accelerated-osr = ["cef/accelerated_osr"]
+
+[dependencies]
+base64.workspace = true
+# Cargo ignores SemVer build metadata in requirements. Pinning the core version
+# still resolves the exact 151.2.0+151.3.14 CEF package recorded in Cargo.lock.
+cef = { version = "=151.2.0", optional = true }
+chrono.workspace = true
+futures-util.workspace = true
+onpeople-storage = { path = "../storage" }
+onpeople-types = { path = "../onpeople-types" }
+parking_lot.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = "0.3.2"
+objc2-io-surface = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation"] }
+
+[lints]
+workspace = true

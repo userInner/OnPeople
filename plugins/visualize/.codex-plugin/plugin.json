@@ -1,0 +1,22 @@
+{
+  "name": "visualize",
+  "version": "0.1.0",
+  "description": "Turn structured data into standalone interactive visualizations with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["visualization", "charts", "data", "html"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Visualize",
+    "shortDescription": "Create interactive data visualizations",
+    "longDescription": "Builds self-contained HTML bar, line, or scatter visualizations from structured data in the active workspace.",
+    "developerName": "OnPeople",
+    "category": "Creativity",
+    "capabilities": ["Interactive", "Write", "Analyze"],
+    "defaultPrompt": [
+      "Visualize this dataset as an interactive chart.",
+      "Create a clear comparison chart from these values."
+    ],
+    "brandColor": "#4B8EFA"
+  }
+}

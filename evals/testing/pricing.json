@@ -1,0 +1,10 @@
+{
+  "currency": "TEST",
+  "adapters": {
+    "fixture": {
+      "inputPerMillion": 10,
+      "cachedInputPerMillion": 2,
+      "outputPerMillion": 30
+    }
+  }
+}

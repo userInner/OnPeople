@@ -1,0 +1,22 @@
+{
+  "name": "documents",
+  "version": "0.1.0",
+  "description": "Create, inspect, and verify document artifacts with OnPeople.",
+  "author": { "name": "OnPeople" },
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["documents", "docx", "word", "artifacts"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Documents",
+    "shortDescription": "Create and inspect document artifacts",
+    "longDescription": "Creates structured DOCX files in the active workspace and verifies the generated package before returning it.",
+    "developerName": "OnPeople",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Create a polished DOCX report from these notes.",
+      "Inspect this document and summarize its structure."
+    ],
+    "brandColor": "#4285F4"
+  }
+}
