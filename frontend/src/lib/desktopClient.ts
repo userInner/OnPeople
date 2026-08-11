@@ -14,6 +14,7 @@ import type {
   BrowserBoundsRequest,
   BrowserState,
   CloudAccountState,
+  DesktopEvent,
   EventEnvelope,
   FileEntry,
   FileSearchResult,
@@ -201,9 +202,22 @@ function isTauriRuntime(): boolean {
   );
 }
 
-const desktopApi = createDesktopApiClient((request) =>
-  call("desktop_request", { request }),
+const desktopApi = createDesktopApiClient(
+  (request) => call("desktop_request", { request }),
+  undefined,
+  (handler) => subscribe("desktop:event", handler),
 );
+
+function legacyEventEnvelope(event: DesktopEvent): EventEnvelope {
+  return {
+    sequence: event.sequence,
+    kind: event.topic as EventEnvelope["kind"],
+    emittedAt: event.emittedAt,
+    windowLabel: null,
+    threadId: event.threadId,
+    payload: event.payload,
+  };
+}
 
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
@@ -878,12 +892,16 @@ export const desktopClient = {
     call<Record<string, unknown>>("detach_browser_tab", {
       request: { routeId },
     }),
+  onDesktopEvent: (handler: (event: DesktopEvent) => void) =>
+    desktopApi.subscribe(handler),
   onRuntimeEvent: (handler: (event: EventEnvelope) => void) =>
-    subscribe("runtime:event", handler),
+    desktopApi.subscribe((event) => handler(legacyEventEnvelope(event))),
   onAgentEvent: (handler: (event: EventEnvelope) => void) =>
-    subscribe("agent:event", handler),
+    desktopApi.subscribe((event) => {
+      if (event.topic === "agent") handler(legacyEventEnvelope(event));
+    }),
   onTurnEvent: (handler: (event: EventEnvelope) => void) =>
-    subscribe("runtime:event", handler),
+    desktopApi.subscribe((event) => handler(legacyEventEnvelope(event))),
   onSchedulerUpdated: (handler: (snapshot: SchedulerSnapshot) => void) =>
     subscribe("scheduler:updated", handler),
   onSchedulerOpen: (handler: (payload: unknown) => void) =>

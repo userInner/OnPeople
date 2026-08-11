@@ -11,7 +11,7 @@ describe("DesktopApiClient", () => {
       result: {
         protocolVersion: DESKTOP_PROTOCOL_VERSION,
         methods: ["system.capabilities"],
-        orderedEvents: false,
+        orderedEvents: true,
         reconnectable: false,
       },
     }));
@@ -65,5 +65,27 @@ describe("DesktopApiClient", () => {
       code: "RUNTIME_UNAVAILABLE",
       retryable: true,
     });
+  });
+
+  it("subscribes through the shell event adapter", async () => {
+    const dispose = vi.fn();
+    const eventTransport = vi.fn(async () => dispose);
+    const client = createDesktopApiClient(
+      async (request) => ({
+        protocolVersion: DESKTOP_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        ok: true,
+        result: null,
+      }),
+      () => "request-4",
+      eventTransport,
+    );
+    const handler = vi.fn();
+
+    const unsubscribe = await client.subscribe(handler);
+
+    expect(eventTransport).toHaveBeenCalledWith(handler);
+    unsubscribe();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });

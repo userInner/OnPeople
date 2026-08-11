@@ -1,5 +1,6 @@
 import type { AgentStatus } from "../bindings/AgentStatus";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
+import type { DesktopEvent } from "../bindings/DesktopEvent";
 import type { DesktopMethod } from "../bindings/DesktopMethod";
 import type { DesktopRequest } from "../bindings/DesktopRequest";
 import type { DesktopResponse } from "../bindings/DesktopResponse";
@@ -61,12 +62,16 @@ type MethodName = keyof DesktopMethodMap & DesktopMethod;
 export type DesktopTransport = (
   request: DesktopRequest,
 ) => Promise<DesktopResponse>;
+export type DesktopEventTransport = (
+  handler: (event: DesktopEvent) => void,
+) => Promise<() => void>;
 
 export interface DesktopApiClient {
   request<M extends MethodName>(
     method: M,
     params: DesktopMethodMap[M]["params"],
   ): Promise<DesktopMethodMap[M]["result"]>;
+  subscribe(handler: (event: DesktopEvent) => void): Promise<() => void>;
 }
 
 function defaultRequestId(): string {
@@ -78,6 +83,7 @@ function defaultRequestId(): string {
 export function createDesktopApiClient(
   transport: DesktopTransport,
   createRequestId: () => string = defaultRequestId,
+  eventTransport?: DesktopEventTransport,
 ): DesktopApiClient {
   return {
     async request<M extends MethodName>(
@@ -116,6 +122,16 @@ export function createDesktopApiClient(
         );
       }
       return response.result as DesktopMethodMap[M]["result"];
+    },
+    subscribe(handler) {
+      if (!eventTransport) {
+        return Promise.reject({
+          code: "RUNTIME_UNAVAILABLE",
+          message: "当前桌面适配器不支持事件订阅",
+          retryable: true,
+        });
+      }
+      return eventTransport(handler);
     },
   };
 }

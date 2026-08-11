@@ -19,8 +19,8 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - Rust owns request, response, error, and event DTOs and exports TypeScript
   bindings through `npm run bindings`.
 - A long-running operation must return a task identifier instead of keeping a
-  request open. Ordered progress and recovery events will be introduced before
-  long-running commands move to this API.
+  request open. Runtime events are already ordered; task snapshots and replay
+  will be introduced before long-running commands move to this API.
 - New shell-specific behavior belongs behind an adapter capability, not in
   `CoreRuntime`.
 
@@ -39,3 +39,10 @@ Tauri currently calls `DesktopDispatcher` in process through the
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
+
+## Ordered events
+
+Tauri publishes `desktop:event` using `DesktopEvent`. The adapter preserves the
+sequence allocated by `CoreRuntime`; it must never allocate a second sequence
+for agent or runtime events. Legacy event names remain available while React
+consumers move to `DesktopApiClient.subscribe`.

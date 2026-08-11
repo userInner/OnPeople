@@ -18,7 +18,7 @@ use onpeople_browser_host::{
     BrowserCommand, BrowserHostEvent, BrowserHostState, BrowserIpcClient, IpcConfig,
 };
 use onpeople_core_runtime::CoreRuntime;
-use onpeople_desktop_api::{DesktopDispatcher, DesktopRequest, DesktopResponse};
+use onpeople_desktop_api::{DesktopDispatcher, DesktopEvent, DesktopRequest, DesktopResponse};
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
     AgentStatus, AppError, AppUpdateState, BrowserAnnotation, BrowserBoundsRequest, BrowserFrame,
@@ -3516,6 +3516,8 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
             if !should_forward_runtime_event(&event) {
                 continue;
             }
+            let desktop_event = DesktopEvent::from(event.clone());
+            let _ = event_app.emit("desktop:event", &desktop_event);
             let _ = event_app.emit("runtime:event", &event);
             match event.kind {
                 onpeople_types::EventKind::Preferences => {
