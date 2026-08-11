@@ -940,10 +940,10 @@ export const desktopClient = {
   createHook: (payload: Record<string, unknown>) =>
     desktopApi.request("hook.create", {
       cwd: String(payload.cwd ?? ""),
-      id: String(payload.id ?? ""),
-      event: String(payload.event ?? ""),
-      command: String(payload.command ?? ""),
-      enabled: payload.enabled !== false,
+      id: typeof payload.id === "string" ? payload.id : null,
+      event: (payload.event ?? null) as JsonValue,
+      command: (payload.command ?? null) as JsonValue,
+      enabled: typeof payload.enabled === "boolean" ? payload.enabled : null,
     }) as Promise<Record<string, unknown>>,
   listScheduledTasks: () => desktopApi.request("scheduler.get", {}),
   createScheduledTaskFromText: (payload: Record<string, unknown>) =>

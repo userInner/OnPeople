@@ -211,7 +211,11 @@ them.
 Worktree snapshot and handoff are filesystem/runtime operations rather than
 native UI effects. They now live behind `CoreRuntime` and are available to any
 Desktop API transport. Legacy Tauri commands stay registered as rollback
-aliases and delegate to the same facades.
+aliases and delegate to the same facades. Snapshot output is either the runtime
+default `.onpeople.snapshot.patch` or a single relative `.patch` filename in
+the canonical worktree root. Absolute paths, traversal, nested/symlink parents,
+and symlink targets are rejected before Git runs; a create-new temporary file
+is atomically renamed into place.
 
 ## Scheduler, cloud, and Live controls
 
@@ -271,6 +275,8 @@ responses; only `SecretMetadata` crosses the protocol boundary.
 `get_provider` and `get_provider_settings` intentionally converge on
 `provider.get`. Global and project hooks remain separate methods because they
 resolve different storage roots, but they share one generated request and
-result contract. Dynamic extension manifests and memory settings stay typed as
-bounded JSON fields inside otherwise strict DTOs; unknown top-level request
-fields are rejected.
+result contract. `hook.create` keeps legacy compatibility: `id` is optional and
+defaults to `hook`, while event and command remain lossless JSON values rather
+than being coerced to strings. Dynamic extension manifests and memory settings
+stay typed as bounded JSON fields inside otherwise strict DTOs; unknown
+top-level request fields are rejected.

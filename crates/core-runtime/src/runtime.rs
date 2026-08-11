@@ -3346,7 +3346,18 @@ impl CoreRuntime {
             .join("hooks");
         std::fs::create_dir_all(&directory).map_err(AppError::storage)?;
         let path = directory.join(format!("{id}.json"));
-        let value = json!({ "id": id, "event": payload.get("event"), "command": payload.get("command"), "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true) });
+        let event = payload.get("event").cloned().unwrap_or(Value::Null);
+        let command = payload.get("command").cloned().unwrap_or(Value::Null);
+        let enabled = payload
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let value = json!({
+            "id": id,
+            "event": event,
+            "command": command,
+            "enabled": enabled,
+        });
         std::fs::write(
             &path,
             serde_json::to_vec_pretty(&value).map_err(AppError::internal)?,
@@ -4212,12 +4223,7 @@ impl CoreRuntime {
         let root = onpeople_workspace::canonical_workspace(Path::new(worktree_path))?;
         let output = output
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join(".onpeople.snapshot.patch"));
-        let output = if output.is_absolute() {
-            output
-        } else {
-            root.join(output)
-        };
+            .unwrap_or_else(|| PathBuf::from(".onpeople.snapshot.patch"));
         let path = self.worktrees.snapshot(&root, &output)?;
         Ok(json!({ "path": path }))
     }

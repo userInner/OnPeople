@@ -9,12 +9,16 @@ describe("desktopClient config and data compatibility", () => {
 
   it("routes legacy helpers through stable Desktop API methods", async () => {
     const methods: string[] = [];
+    const params: unknown[] = [];
     const invoke = vi.fn(async (command: string, args: unknown) => {
       expect(command).toBe("desktop_request");
       const request = (
-        args as { request: { requestId: string; method: string } }
+        args as {
+          request: { requestId: string; method: string; params: unknown };
+        }
       ).request;
       methods.push(request.method);
+      params.push(request.params);
       return {
         protocolVersion: 1,
         requestId: request.requestId,
@@ -95,5 +99,59 @@ describe("desktopClient config and data compatibility", () => {
       "hook.local.list",
       "hook.create",
     ]);
+    expect(params.at(-1)).toEqual({
+      cwd: "/workspace",
+      id: "verify",
+      event: "turn.completed",
+      command: "npm test",
+      enabled: true,
+    });
+  });
+
+  it("preserves optional hook id and JSON event/command values", async () => {
+    const invoke = vi.fn(async (command: string, args: unknown) => {
+      expect(command).toBe("desktop_request");
+      const request = (
+        args as {
+          request: { requestId: string; method: string; params: unknown };
+        }
+      ).request;
+      expect(request.method).toBe("hook.create");
+      expect(request.params).toEqual({
+        cwd: "/workspace",
+        id: null,
+        event: { kind: "turn.completed", attempt: 2 },
+        command: ["npm", "test"],
+        enabled: null,
+      });
+      return {
+        protocolVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          id: "hook",
+          event: { kind: "turn.completed", attempt: 2 },
+          command: ["npm", "test"],
+          enabled: true,
+        },
+      };
+    });
+    window.__ONPEOPLE_DEV__ = {
+      setWorkbenchState: vi.fn() as never,
+      invoke,
+    };
+
+    await expect(
+      desktopClient.createHook({
+        cwd: "/workspace",
+        event: { kind: "turn.completed", attempt: 2 },
+        command: ["npm", "test"],
+      }),
+    ).resolves.toEqual({
+      id: "hook",
+      event: { kind: "turn.completed", attempt: 2 },
+      command: ["npm", "test"],
+      enabled: true,
+    });
   });
 });

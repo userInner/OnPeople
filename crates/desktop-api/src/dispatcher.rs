@@ -1257,7 +1257,7 @@ mod tests {
     use super::*;
     use onpeople_storage::Storage;
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::{process::Command, sync::Mutex};
 
     #[derive(Default)]
     struct FakeDesktopHost {
@@ -1735,6 +1735,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worktree_snapshot_rejects_unsafe_outputs_and_keeps_safe_default() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let worktree = temporary.path().join("worktree");
+        std::fs::create_dir(&worktree).expect("worktree directory");
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&worktree)
+                    .status()
+                    .expect("git command")
+                    .success()
+            );
+        }
+        std::fs::write(worktree.join("README.md"), "initial\n").expect("initial file");
+        assert!(
+            Command::new("git")
+                .args(["add", "README.md"])
+                .current_dir(&worktree)
+                .status()
+                .expect("git add")
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["commit", "-m", "initial"])
+                .current_dir(&worktree)
+                .status()
+                .expect("git commit")
+                .success()
+        );
+
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+
+        let absolute = temporary.path().join("outside.patch");
+        for (request_id, output) in [
+            ("snapshot-absolute", absolute.to_string_lossy().into_owned()),
+            ("snapshot-traversal", "../outside.patch".to_owned()),
+        ] {
+            let response = dispatcher
+                .dispatch(DesktopRequest {
+                    protocol_version: DESKTOP_PROTOCOL_VERSION,
+                    request_id: request_id.to_owned(),
+                    method: DesktopMethod::WorktreeSnapshot,
+                    params: json!({ "worktreePath": worktree, "output": output }),
+                })
+                .await;
+            assert!(!response.ok, "unsafe output was accepted: {response:?}");
+            assert_eq!(
+                response.error.as_ref().map(|error| error.code),
+                Some(ErrorCode::WorkspaceBoundary)
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            symlink(&absolute, worktree.join("linked.patch")).expect("symlink snapshot target");
+            let response = dispatcher
+                .dispatch(DesktopRequest {
+                    protocol_version: DESKTOP_PROTOCOL_VERSION,
+                    request_id: "snapshot-symlink".to_owned(),
+                    method: DesktopMethod::WorktreeSnapshot,
+                    params: json!({ "worktreePath": worktree, "output": "linked.patch" }),
+                })
+                .await;
+            assert!(!response.ok, "symlink output was accepted: {response:?}");
+            assert_eq!(
+                response.error.as_ref().map(|error| error.code),
+                Some(ErrorCode::WorkspaceBoundary)
+            );
+        }
+
+        std::fs::write(worktree.join("README.md"), "changed\n").expect("changed file");
+        let valid = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "snapshot-default".to_owned(),
+                method: DesktopMethod::WorktreeSnapshot,
+                params: json!({ "worktreePath": worktree }),
+            })
+            .await;
+        assert!(valid.ok, "default output failed: {valid:?}");
+        assert_eq!(
+            valid
+                .result
+                .as_ref()
+                .and_then(|value| value["path"].as_str()),
+            worktree
+                .canonicalize()
+                .expect("canonical worktree")
+                .join(".onpeople.snapshot.patch")
+                .to_str()
+        );
+        assert!(worktree.join(".onpeople.snapshot.patch").is_file());
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
     async fn dispatches_scheduler_cloud_and_live_controls_without_a_shell_host() {
         let temporary = tempfile::tempdir().expect("temporary workspace");
         let storage =
@@ -1913,6 +2023,43 @@ mod tests {
                 .as_ref()
                 .and_then(Value::as_array)
                 .is_some_and(Vec::is_empty)
+        );
+
+        let created_hook = dispatcher
+            .dispatch(DesktopRequest {
+                protocol_version: DESKTOP_PROTOCOL_VERSION,
+                request_id: "hook-create-compatible-1".to_owned(),
+                method: DesktopMethod::HookCreate,
+                params: json!({
+                    "cwd": temporary.path(),
+                    "event": { "kind": "turn.completed", "attempt": 2 },
+                    "command": ["npm", "test"],
+                }),
+            })
+            .await;
+        assert!(created_hook.ok, "unexpected response: {created_hook:?}");
+        assert_eq!(
+            created_hook.result,
+            Some(json!({
+                "id": "hook",
+                "path": null,
+                "local": null,
+                "event": { "kind": "turn.completed", "attempt": 2 },
+                "command": ["npm", "test"],
+                "enabled": true,
+            }))
+        );
+        let persisted_hook =
+            std::fs::read_to_string(temporary.path().join(".onpeople/hooks/hook.json"))
+                .expect("persisted hook");
+        assert_eq!(
+            serde_json::from_str::<Value>(&persisted_hook).expect("hook json"),
+            json!({
+                "id": "hook",
+                "event": { "kind": "turn.completed", "attempt": 2 },
+                "command": ["npm", "test"],
+                "enabled": true,
+            })
         );
         runtime.stop().await;
     }

@@ -1141,15 +1141,14 @@ pub struct HookDefinition {
 #[ts(export)]
 pub struct HookCreateRequest {
     pub cwd: String,
-    pub id: String,
-    pub event: String,
-    pub command: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-const fn default_true() -> bool {
-    true
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    #[serde(default)]
+    pub command: Option<Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
