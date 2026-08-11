@@ -21,7 +21,7 @@ use onpeople_core_runtime::CoreRuntime;
 use onpeople_desktop_api::{
     BrowserAction, BrowserActionRequest, BrowserAnnotationDeleteRequest, BrowserHostOperation,
     DesktopDispatcher, DesktopEvent, DesktopHost, DesktopRecoveryRequired, DesktopRequest,
-    DesktopResponse, should_forward_desktop_event,
+    DesktopResponse, ShellHostOperation, ShellOpenTaskWindowRequest, should_forward_desktop_event,
 };
 use onpeople_storage::{Storage, stable_data_root};
 use onpeople_types::{
@@ -1852,9 +1852,7 @@ impl AppState {
                 })?;
                 Ok(json!({ "removed": true, "path": path }))
             }
-            "get_policy" => Ok(
-                json!({ "policy": self.runtime.agent_status()?.policy, "audit": self.runtime.storage().metadata_prefix("audit.")?.into_iter().map(|(_, value)| value).collect::<Vec<_>>() }),
-            ),
+            "get_policy" => self.runtime.policy_state(),
             "save_policy" => {
                 let policy = payload
                     .get("policy")
@@ -1864,27 +1862,16 @@ impl AppState {
                     .map_err(AppError::internal)
             }
             "get_usage_ledger" => self.runtime.usage_snapshot(),
-            "save_usage_price" => {
-                let key = required_string(&payload, "key")?;
-                let price = payload
+            "save_usage_price" => self.runtime.save_usage_price(
+                &required_string(&payload, "key")?,
+                payload
                     .get("price")
                     .and_then(Value::as_f64)
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?;
-                let mut usage = self.runtime.usage_snapshot()?;
-                usage["prices"][key] = json!(price);
-                self.runtime
-                    .storage()
-                    .put_metadata("usage.snapshot", &usage)?;
-                Ok(usage)
-            }
-            "get_effective_config" => Ok(json!({
-                "source": "onpeople.db",
-                "cwd": payload.get("cwd"),
-                "provider": self.runtime.agent_status()?.provider,
-                "policy": self.runtime.agent_status()?.policy,
-                "preferences": self.runtime.preferences()?,
-            })),
+                    .ok_or_else(|| AppError::invalid("价格必须是非负数"))?,
+            ),
+            "get_effective_config" => self
+                .runtime
+                .effective_config(payload.get("cwd").and_then(Value::as_str)),
             "pick_download_directory" => {
                 let directory = payload
                     .get("path")
@@ -1911,20 +1898,17 @@ impl AppState {
                 payload.get("cwd").and_then(Value::as_str),
                 payload.get("threadId").and_then(Value::as_str),
             ),
-            "save_memory" => {
-                let entry = payload.get("entry").unwrap_or(&payload);
-                let saved = self.runtime.save_memory_from_payload(entry)?;
-                Ok(json!({
-                    "entry": saved,
-                    "state": self.runtime.memory_state(
-                        entry.get("cwd").and_then(Value::as_str),
-                        payload.get("threadId").and_then(Value::as_str),
-                    )?,
-                }))
-            }
-            "delete_memory" => self
-                .runtime
-                .delete_document_from_payload("memories", &payload),
+            "save_memory" => self.runtime.save_memory(
+                payload.get("entry").unwrap_or(&payload),
+                payload.get("threadId").and_then(Value::as_str),
+            ),
+            "delete_memory" => self.runtime.delete_memory(
+                payload
+                    .get("memoryId")
+                    .or_else(|| payload.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AppError::invalid("缺少 memoryId"))?,
+            ),
             "save_memory_settings" => self.runtime.save_memory_settings(&payload),
             "list_agent_profiles" => Ok(json!({ "profiles": self.runtime.list_agent_profiles()? })),
             "save_agent_profile" => {
@@ -1940,21 +1924,16 @@ impl AppState {
                     .await
             }
             "list_secrets" => Ok(json!({ "secrets": self.runtime.list_secrets()? })),
-            "save_secret" => {
-                let secret = payload.get("secret").unwrap_or(&payload);
-                let saved = self.runtime.save_secret_from_payload(secret)?;
-                Ok(json!({ "secret": saved, "secrets": self.runtime.list_secrets()? }))
-            }
-            "delete_secret" => {
-                let id = payload
+            "save_secret" => self
+                .runtime
+                .save_secret(payload.get("secret").unwrap_or(&payload)),
+            "delete_secret" => self.runtime.delete_secret(
+                payload
                     .get("id")
                     .or_else(|| payload.get("secretId"))
                     .and_then(Value::as_str)
-                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?;
-                Ok(
-                    json!({ "deleted": self.runtime.storage().delete_secret(id)?, "secrets": self.runtime.list_secrets()? }),
-                )
-            }
+                    .ok_or_else(|| AppError::invalid("缺少 secretId"))?,
+            ),
             "list_hooks" | "list_local_hooks" => {
                 let cwd = payload
                     .get("cwd")
@@ -3762,6 +3741,7 @@ pub fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
 struct TauriDesktopHost<'a, R: Runtime> {
     app: &'a AppHandle<R>,
     state: &'a AppState,
+    frontend: &'a FrontendServer,
 }
 
 const fn legacy_browser_action_command(action: BrowserAction) -> &'static str {
@@ -3859,6 +3839,115 @@ impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
             }
         })
     }
+
+    fn shell<'a>(
+        &'a self,
+        operation: ShellHostOperation,
+        params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            match operation {
+                ShellHostOperation::ActivateDeepLinks => {
+                    serde_json::to_value(self.state.activate_deep_links())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::FrontendReady => {
+                    frontend_ready(self.app.clone())?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::OpenTaskWindow => {
+                    let request: ShellOpenTaskWindowRequest =
+                        serde_json::from_value(params).map_err(AppError::invalid)?;
+                    open_task_window_impl(self.app, self.frontend, request.thread_id)?;
+                    Ok(Value::Null)
+                }
+                ShellHostOperation::RequestMicrophoneAccess => request_microphone_access().await,
+                ShellHostOperation::OpenCloudConsole => {
+                    self.state
+                        .dispatch_command(self.app, "open_cloud_console", params)
+                        .await
+                }
+                ShellHostOperation::OpenExternalUrl => {
+                    self.state
+                        .dispatch_command(self.app, "open_external_url", params)
+                        .await
+                }
+                ShellHostOperation::OpenEditor => {
+                    self.state
+                        .dispatch_command(self.app, "open_editor", params)
+                        .await
+                }
+                ShellHostOperation::OpenLocalArtifact => {
+                    self.state
+                        .dispatch_command(self.app, "open_local_artifact", params)
+                        .await
+                }
+                ShellHostOperation::RevealGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::CopyGeneratedImage => {
+                    self.state
+                        .dispatch_command(self.app, "copy_generated_image", params)
+                        .await
+                }
+                ShellHostOperation::PickImages => {
+                    self.state
+                        .dispatch_command(self.app, "pick_images", params)
+                        .await
+                }
+                ShellHostOperation::PickAttachments => {
+                    self.state
+                        .dispatch_command(self.app, "pick_attachments", params)
+                        .await
+                }
+                ShellHostOperation::PasteImage => {
+                    self.state
+                        .dispatch_command(self.app, "paste_image", params)
+                        .await
+                }
+                ShellHostOperation::RevealThread => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_thread", params)
+                        .await
+                }
+                ShellHostOperation::RevealProject => {
+                    self.state
+                        .dispatch_command(self.app, "reveal_project", params)
+                        .await
+                }
+                ShellHostOperation::PickDownloadDirectory => {
+                    self.state
+                        .dispatch_command(self.app, "pick_download_directory", params)
+                        .await
+                }
+                ShellHostOperation::OpenScheduler => {
+                    self.app
+                        .emit("scheduler:open", json!({}))
+                        .map_err(AppError::internal)?;
+                    serde_json::to_value(self.state.runtime.scheduler_snapshot())
+                        .map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateState => {
+                    serde_json::to_value(self.state.update_state()).map_err(AppError::internal)
+                }
+                ShellHostOperation::AppUpdateCheck => self.state.check_app_update(self.app).await,
+                ShellHostOperation::AppUpdateDownload => {
+                    self.state.download_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateInstall => {
+                    self.state.install_app_update(self.app).await
+                }
+                ShellHostOperation::AppUpdateOpenDownload => {
+                    self.state
+                        .dispatch_command(self.app, "open_app_download", params)
+                        .await
+                }
+            }
+        })
+    }
 }
 
 #[tauri::command]
@@ -3870,11 +3959,13 @@ fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus, AppError> {
 async fn desktop_request(
     app: AppHandle,
     state: State<'_, AppState>,
+    frontend: State<'_, FrontendServer>,
     request: DesktopRequest,
 ) -> Result<DesktopResponse, AppError> {
     let host = TauriDesktopHost {
         app: &app,
         state: &state,
+        frontend: &frontend,
     };
     Ok(state.desktop_api.dispatch_with_host(request, &host).await)
 }
@@ -4405,6 +4496,14 @@ fn open_task_window<R: Runtime>(
     frontend: State<'_, FrontendServer>,
     thread_id: Option<String>,
 ) -> Result<(), AppError> {
+    open_task_window_impl(&app, &frontend, thread_id)
+}
+
+fn open_task_window_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    frontend: &FrontendServer,
+    thread_id: Option<String>,
+) -> Result<(), AppError> {
     let suffix = thread_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let label = format!("task-{}", suffix.replace('-', ""));
     if app.get_webview_window(&label).is_some() {
@@ -4412,7 +4511,7 @@ fn open_task_window<R: Runtime>(
     }
     let url = frontend.page_url(Some(&format!("thread={suffix}")));
     let navigation_base = frontend.base_url.to_string();
-    let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("OnPeople")
         .inner_size(1280.0, 820.0)
         .min_inner_size(960.0, 640.0)

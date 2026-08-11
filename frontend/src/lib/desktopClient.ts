@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   readText as readClipboardText,
@@ -19,10 +19,10 @@ import type {
   DesktopRecoveryRequired,
   EventReplay,
   EventEnvelope,
+  Policy,
   Preferences,
   PromptSubmission,
   ProviderKind,
-  ProviderSettings,
   SchedulerSnapshot,
   StreamEnvelope,
   TaskStartRequest,
@@ -271,8 +271,8 @@ function replayEvents(
 
 export const desktopClient = {
   // Every call below crosses the one typed Tauri command boundary.
-  activateDeepLinks: () => call<string[]>("activate_deep_links"),
-  frontendReady: () => call<void>("frontend_ready"),
+  activateDeepLinks: () => desktopApi.request("shell.deep-links.activate", {}),
+  frontendReady: () => desktopApi.request("shell.frontend.ready", {}),
   listAgents: (parentThreadId?: string | null) =>
     desktopApi.request("agent.list", {
       parentThreadId: parentThreadId ?? null,
@@ -342,8 +342,9 @@ export const desktopClient = {
       value: (request.value ?? null) as JsonValue,
     }),
   getProvider: (kind: ProviderKind, threadId?: string | null) =>
-    call<ProviderSettings>("get_provider", {
-      request: { kind, threadId: threadId ?? null },
+    desktopApi.request("provider.get", {
+      kind,
+      threadId: threadId ?? null,
     }),
   saveProvider: (request: {
     kind: ProviderKind;
@@ -353,13 +354,13 @@ export const desktopClient = {
     threadId?: string | null;
     extra?: Record<string, unknown>;
   }) =>
-    call<ProviderSettings>("save_provider", {
-      request: {
-        ...request,
-        apiKey: request.apiKey ?? null,
-        threadId: request.threadId ?? null,
-        extra: request.extra ?? {},
-      },
+    desktopApi.request("provider.save", {
+      kind: request.kind,
+      model: request.model,
+      baseUrl: request.baseUrl,
+      apiKey: request.apiKey ?? null,
+      threadId: request.threadId ?? null,
+      extra: jsonRecord(request.extra ?? {}),
     }),
   startTerminal: (request: {
     cwd: string;
@@ -428,17 +429,28 @@ export const desktopClient = {
   liveStatus: () => desktopApi.request("live.status", {}),
   getLiveStatus: () => desktopApi.request("live.status", {}),
   requestMicrophoneAccess: () =>
-    call<{ granted: boolean; status: string }>("request_microphone_access"),
+    desktopApi.request("shell.microphone.request", {}),
   cloudAccount: () => desktopApi.request("cloud.account", {}),
   getCloudAccount: () => desktopApi.request("cloud.account", {}),
-  appUpdateState: () => call<AppUpdateState>("get_app_update_state"),
-  getAppUpdateState: () => call<AppUpdateState>("get_app_update_state"),
+  appUpdateState: () => desktopApi.request("shell.app-update.state", {}),
+  getAppUpdateState: () => desktopApi.request("shell.app-update.state", {}),
   checkForAppUpdate: () =>
-    call<Record<string, unknown>>("check_for_app_update"),
-  downloadAppUpdate: () => call<Record<string, unknown>>("download_app_update"),
-  installAppUpdate: () => call<Record<string, unknown>>("install_app_update"),
-  openAppDownload: () => call<Record<string, unknown>>("open_app_download"),
-  openScheduler: () => call<SchedulerSnapshot>("open_scheduler"),
+    desktopApi.request("shell.app-update.check", {}) as Promise<
+      Record<string, unknown>
+    >,
+  downloadAppUpdate: () =>
+    desktopApi.request("shell.app-update.download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  installAppUpdate: () =>
+    desktopApi.request("shell.app-update.install", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openAppDownload: () =>
+    desktopApi.request("shell.app-update.open-download", {}) as Promise<
+      Record<string, unknown>
+    >,
+  openScheduler: () => desktopApi.request("shell.scheduler.open", {}),
   copyText: (text: string) => writeClipboardText(text),
   readText: () => readClipboardText(),
   pickProject: async () => {
@@ -465,22 +477,6 @@ export const desktopClient = {
     const selected = await openDialog({ directory: true, multiple: false });
     return typeof selected === "string" ? selected : null;
   },
-  streamTerminal: (
-    processId: string,
-    handler: (event: StreamEnvelope) => void,
-  ) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_terminal", {
-      request: { processId },
-      channel,
-    });
-  },
-  streamAgent: (handler: (event: StreamEnvelope) => void) => {
-    if (!isTauriRuntime()) return Promise.resolve();
-    const channel = new Channel<StreamEnvelope>(handler);
-    return call<void>("stream_agent", { channel });
-  },
   streamBrowser: async (handler: (event: StreamEnvelope) => void) => {
     await subscribe<BrowserFrame>("browser:preview-updated", (frame) =>
       handler({
@@ -499,17 +495,23 @@ export const desktopClient = {
   deleteBrowserAnnotation: (id: string) =>
     desktopApi.request("browser.annotation.delete", { id }),
   openTaskWindow: (threadId?: string | null) =>
-    call<void>("open_task_window", { threadId: threadId ?? null }),
+    desktopApi.request("shell.task-window.open", {
+      threadId: threadId ?? null,
+    }),
   pickImages: () =>
-    call<Record<string, unknown>>("pick_images", { request: {} }),
+    desktopApi.request("shell.images.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pickAttachments: () =>
-    call<Record<string, unknown>>("pick_attachments", { request: {} }),
+    desktopApi.request("shell.attachments.pick", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteImage: () =>
-    call<Record<string, unknown>>("paste_image", { request: {} }),
+    desktopApi.request("shell.image.paste", { paths: [] }) as Promise<
+      Record<string, unknown>
+    >,
   pasteFiles: async () => {
-    const result = await call<Record<string, unknown>>("paste_image", {
-      request: {},
-    });
+    const result = await desktopApi.request("shell.image.paste", { paths: [] });
     const selected = result.selected;
     return Array.isArray(selected)
       ? selected.filter((path): path is string => typeof path === "string")
@@ -521,17 +523,20 @@ export const desktopClient = {
       threadId: threadId ?? null,
     }) as Promise<Record<string, unknown>>,
   revealGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("reveal_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.reveal", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   copyGeneratedImage: (imagePath: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("copy_generated_image", {
-      request: { imagePath, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.generated-image.copy", {
+      imagePath,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   openLocalArtifact: (path: string, threadId?: string | null) =>
-    call<Record<string, unknown>>("open_local_artifact", {
-      request: { path, threadId: threadId ?? null },
-    }),
+    desktopApi.request("shell.local-artifact.open", {
+      path,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   previewLocalArtifact: (path: string, threadId?: string | null) =>
     desktopApi.request("file.artifact.preview", {
       path,
@@ -542,8 +547,9 @@ export const desktopClient = {
       Record<string, unknown>
     >,
   getProviderSettings: (type: ProviderKind, threadId?: string | null) =>
-    call<ProviderSettings>("get_provider_settings", {
-      request: { type, threadId: threadId ?? null },
+    desktopApi.request("provider.get", {
+      kind: type,
+      threadId: threadId ?? null,
     }),
   setThreadReasoningEffort: (
     threadId: string,
@@ -577,9 +583,13 @@ export const desktopClient = {
       Record<string, unknown>
     >,
   openCloudConsole: () =>
-    call<Record<string, unknown>>("open_cloud_console", { request: {} }),
+    desktopApi.request("shell.cloud-console.open", {}) as Promise<
+      Record<string, unknown>
+    >,
   openExternalUrl: (url: string) =>
-    call<Record<string, unknown>>("open_external_url", { request: { url } }),
+    desktopApi.request("shell.external-url.open", { url }) as Promise<
+      Record<string, unknown>
+    >,
   listCloudGroups: () =>
     desktopApi.request("cloud.groups", {}) as Promise<Record<string, unknown>>,
   selectCloudGroup: (groupId: string) =>
@@ -645,7 +655,9 @@ export const desktopClient = {
       model: model ?? null,
     }) as Promise<Record<string, unknown>>,
   revealThread: (threadId: string) =>
-    call<Record<string, unknown>>("reveal_thread", { request: { threadId } }),
+    desktopApi.request("shell.thread.reveal", { threadId }) as Promise<
+      Record<string, unknown>
+    >,
   showTerminalContextMenu: (payload: Record<string, unknown>) =>
     desktopApi.request("terminal.context-menu", {
       processId: String(payload.processId ?? ""),
@@ -663,9 +675,9 @@ export const desktopClient = {
       value: (value ?? null) as JsonValue,
     }) as Promise<Record<string, unknown>>,
   revealProject: (projectPath: string) =>
-    call<Record<string, unknown>>("reveal_project", {
-      request: { projectPath },
-    }),
+    desktopApi.request("shell.project.reveal", { projectPath }) as Promise<
+      Record<string, unknown>
+    >,
   archiveProjectTasks: (projectPath: string) =>
     desktopApi.request("project.archive-tasks", { projectPath }) as Promise<
       Record<string, unknown>
@@ -711,16 +723,20 @@ export const desktopClient = {
           : null,
     }) as Promise<Record<string, unknown>>,
   openEditor: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("open_editor", { request: payload }),
+    desktopApi.request("shell.editor.open", {
+      cwd: String(payload.cwd ?? ""),
+      path: String(payload.path ?? payload.filePath ?? ""),
+    }) as Promise<Record<string, unknown>>,
   restartRuntime: () => desktopApi.request("runtime.restart", {}),
   listExtensions: (cwd?: string | null) =>
-    call<Record<string, unknown>>("list_extensions", {
-      request: { cwd: cwd ?? null },
-    }),
+    desktopApi.request("extensions.list", { cwd: cwd ?? null }) as Promise<
+      Record<string, unknown>
+    >,
   setSkillEnabled: (skillPath: string, enabled: boolean) =>
-    call<Record<string, unknown>>("set_skill_enabled", {
-      request: { skillPath, enabled },
-    }),
+    desktopApi.request("extensions.skill.set-enabled", {
+      skillPath,
+      enabled,
+    }) as Promise<Record<string, unknown>>,
   installPlugin: (plugin: Record<string, unknown>) =>
     desktopApi.request("plugin.install", {
       plugin: jsonRecord(plugin),
@@ -760,11 +776,14 @@ export const desktopClient = {
       Record<string, unknown>
     >,
   discoverModels: () =>
-    call<Record<string, unknown>>("discover_models", { request: {} }),
+    desktopApi.request("models.discover", {}) as Promise<
+      Record<string, unknown>
+    >,
   validateModel: (providerType: string, modelId: string) =>
-    call<Record<string, unknown>>("validate_model", {
-      request: { providerType, modelId },
-    }),
+    desktopApi.request("models.validate", {
+      providerType,
+      modelId,
+    }) as Promise<Record<string, unknown>>,
   listAgentProfiles: () =>
     desktopApi.request("agent.profile.list", {}) as Promise<
       Record<string, unknown>
@@ -866,49 +885,66 @@ export const desktopClient = {
     const receipt = await taskQueueSteer(queueId, threadId);
     return legacyQueuedSteerResult(receipt);
   },
-  getPolicy: () => call<Record<string, unknown>>("get_policy", { request: {} }),
-  savePolicy: (threadId: string, policy: unknown) =>
-    call<Record<string, unknown>>("save_policy", {
-      request: { threadId, policy },
-    }),
+  getPolicy: () =>
+    desktopApi.request("policy.get", {}) as Promise<Record<string, unknown>>,
+  savePolicy: (threadId: string, policy: Policy) =>
+    desktopApi.request("policy.save", {
+      threadId,
+      policy,
+    }) as Promise<Record<string, unknown>>,
   pickDownloadDirectory: (path?: string | null) =>
-    call<Preferences>("pick_download_directory", {
-      request: { path: path ?? null },
+    desktopApi.request("shell.download-directory.pick", {
+      path: path ?? null,
     }),
   getEffectiveConfig: (payload: Record<string, unknown> = {}) =>
-    call<Record<string, unknown>>("get_effective_config", { request: payload }),
+    desktopApi.request("config.effective", {
+      cwd: typeof payload.cwd === "string" ? payload.cwd : null,
+    }) as Promise<Record<string, unknown>>,
   listMemories: (cwd?: string | null, threadId?: string | null) =>
-    call<Record<string, unknown>>("list_memories", {
-      request: { cwd: cwd ?? null, threadId: threadId ?? null },
-    }),
+    desktopApi.request("memory.list", {
+      cwd: cwd ?? null,
+      threadId: threadId ?? null,
+    }) as Promise<Record<string, unknown>>,
   saveMemory: (memory: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_memory", {
-      request: { entry: memory },
-    }),
+    desktopApi.request("memory.save", {
+      entry: jsonRecord(memory),
+      threadId: null,
+    }) as Promise<Record<string, unknown>>,
   deleteMemory: (memoryId: string) =>
-    call<Record<string, unknown>>("delete_memory", { request: { memoryId } }),
+    desktopApi.request("memory.delete", { memoryId }) as Promise<
+      Record<string, unknown>
+    >,
   saveMemorySettings: (settings: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_memory_settings", {
-      request: settings,
-    }),
+    desktopApi.request("memory.settings.save", {
+      settings: jsonRecord(settings),
+    }) as Promise<Record<string, unknown>>,
   getUsageLedger: () =>
-    call<Record<string, unknown>>("get_usage_ledger", { request: {} }),
+    desktopApi.request("usage.get", {}) as Promise<Record<string, unknown>>,
   saveUsagePrice: (key: string, price: number) =>
-    call<Record<string, unknown>>("save_usage_price", {
-      request: { key, price },
-    }),
+    desktopApi.request("usage.price.save", { key, price }) as Promise<
+      Record<string, unknown>
+    >,
   listSecrets: () =>
-    call<Record<string, unknown>>("list_secrets", { request: {} }),
+    desktopApi.request("secret.list", {}) as Promise<Record<string, unknown>>,
   saveSecret: (secret: Record<string, unknown>) =>
-    call<Record<string, unknown>>("save_secret", { request: { secret } }),
+    desktopApi.request("secret.save", {
+      secret: jsonRecord(secret),
+    }) as Promise<Record<string, unknown>>,
   deleteSecret: (secretId: string) =>
-    call<Record<string, unknown>>("delete_secret", { request: { secretId } }),
-  listHooks: (cwd: string) =>
-    call<Record<string, unknown>>("list_hooks", { request: { cwd } }),
+    desktopApi.request("secret.delete", { secretId }) as Promise<
+      Record<string, unknown>
+    >,
+  listHooks: (cwd: string) => desktopApi.request("hook.list", { cwd }),
   listLocalHooks: (cwd: string) =>
-    call<Record<string, unknown>>("list_local_hooks", { request: { cwd } }),
+    desktopApi.request("hook.local.list", { cwd }),
   createHook: (payload: Record<string, unknown>) =>
-    call<Record<string, unknown>>("create_hook", { request: payload }),
+    desktopApi.request("hook.create", {
+      cwd: String(payload.cwd ?? ""),
+      id: String(payload.id ?? ""),
+      event: String(payload.event ?? ""),
+      command: String(payload.command ?? ""),
+      enabled: payload.enabled !== false,
+    }) as Promise<Record<string, unknown>>,
   listScheduledTasks: () => desktopApi.request("scheduler.get", {}),
   createScheduledTaskFromText: (payload: Record<string, unknown>) =>
     desktopApi.request("scheduler.create-from-text", {

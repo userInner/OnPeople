@@ -334,4 +334,29 @@ describe("DesktopApiClient", () => {
       "git.state",
     ]);
   });
+
+  it("routes native effects through typed shell host methods", async () => {
+    const transport = vi.fn(async (request) => ({
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      ok: true,
+      result:
+        request.method === "shell.images.pick"
+          ? { selected: ["/tmp/image.png"] }
+          : { opened: true, url: "https://example.com" },
+    }));
+    const client = createDesktopApiClient(transport, () => "request-shell");
+
+    const opened = await client.request("shell.external-url.open", {
+      url: "https://example.com",
+    });
+    const picked = await client.request("shell.images.pick", { paths: [] });
+
+    expect(opened.url).toBe("https://example.com");
+    expect(picked.selected).toEqual(["/tmp/image.png"]);
+    expect(transport.mock.calls.map(([request]) => request.method)).toEqual([
+      "shell.external-url.open",
+      "shell.images.pick",
+    ]);
+  });
 });

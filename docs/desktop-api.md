@@ -92,6 +92,14 @@ Tauri currently calls `DesktopDispatcher` in process through the
 - `connector.oauth.start`
 - `connector.oauth.complete`
 - `connector.disconnect`
+- `provider.get`, `provider.save`
+- `models.discover`, `models.validate`
+- `extensions.list`, `extensions.skill.set-enabled`
+- `policy.get`, `policy.save`, `config.effective`
+- `usage.get`, `usage.price.save`
+- `memory.list`, `memory.save`, `memory.delete`, `memory.settings.save`
+- `secret.list`, `secret.save`, `secret.delete`
+- `hook.list`, `hook.local.list`, `hook.create`
 
 Legacy Tauri commands remain registered during the transition so releases can
 be rolled back without changing stored data or the existing browser host.
@@ -153,16 +161,36 @@ review submission, and worktree list/create/remove use `git.*`. Results that
 come directly from the Codex review protocol remain JSON values, but their
 request DTOs are strict and reject unknown fields.
 
-The following legacy commands remain shell-adapter responsibilities and are
-not falsely exposed as CoreRuntime methods:
+## Native shell host boundary
 
-- opening/revealing a file or generated image in the operating system;
-- copying image bytes to the native clipboard;
-- picking files/directories through a native dialog;
-- terminal output/exit streams and native menu event delivery.
+Operating-system effects use typed `shell.*` methods and the async
+`DesktopHost::shell` port. They never enter `CoreRuntime`, and headless callers
+receive `UNSUPPORTED` when no native host is attached.
 
-Tauri retains these commands during migration. Electron must implement the
-same adapter effects without changing the Desktop API protocol.
+- lifecycle/window: `shell.deep-links.activate`, `shell.frontend.ready`,
+  `shell.task-window.open`, `shell.scheduler.open`;
+- permissions/navigation: `shell.microphone.request`,
+  `shell.cloud-console.open`, `shell.external-url.open`, `shell.editor.open`,
+  `shell.local-artifact.open`;
+- native files: `shell.generated-image.reveal`,
+  `shell.generated-image.copy`, `shell.images.pick`,
+  `shell.attachments.pick`, `shell.image.paste`, `shell.thread.reveal`,
+  `shell.project.reveal`, `shell.download-directory.pick`;
+- updates: `shell.app-update.state`, `shell.app-update.check`,
+  `shell.app-update.download`, `shell.app-update.install`, and
+  `shell.app-update.open-download`.
+
+Requests and results have generated Rust/TypeScript DTOs. The Tauri adapter
+implements these effects with its existing native dialogs, updater, clipboard,
+window, and reveal helpers. Legacy Tauri commands remain registered during the
+migration so an older renderer can roll back without changing `CoreRuntime`.
+Electron must implement the same host port rather than copying Tauri behavior
+into the dispatcher.
+
+Worktree snapshot/handoff workflows and native menu/event delivery remain
+legacy adapter responsibilities. Terminal, agent, and live data continue to
+arrive through event listeners; the unused renderer-side `streamTerminal`,
+`streamAgent`, and `streamLive` channel wrappers were removed.
 
 ## Conversation, projects, agents, and worktrees
 
@@ -225,3 +253,24 @@ Plugins, industry plugins, MCP reload, remote catalog sync, and connector OAuth
 do not require a shell. Their stable methods dispatch directly to
 `CoreRuntime`, with typed plugin IDs, catalog URLs, and OAuth callback fields.
 Legacy Tauri commands stay registered for rollback and older renderers.
+
+## Configuration and data ownership
+
+Provider settings, model discovery, extensions, policy, effective
+configuration, usage, memory, secret metadata, and hooks are CoreRuntime-owned
+domains. The dispatcher only parses typed request DTOs and serializes typed
+results; it never reads metadata or storage directly.
+
+The facades for `policy.get`, `config.effective`, `usage.price.save`,
+`memory.save`, `memory.delete`, `secret.save`, and `secret.delete` also own the
+composition previously performed in the Tauri command router. Legacy commands
+delegate to those same facades, so rollback and stable Desktop API callers
+observe the same persisted state. Secret values never appear in list or delete
+responses; only `SecretMetadata` crosses the protocol boundary.
+
+`get_provider` and `get_provider_settings` intentionally converge on
+`provider.get`. Global and project hooks remain separate methods because they
+resolve different storage roots, but they share one generated request and
+result contract. Dynamic extension manifests and memory settings stay typed as
+bounded JSON fields inside otherwise strict DTOs; unknown top-level request
+fields are rejected.

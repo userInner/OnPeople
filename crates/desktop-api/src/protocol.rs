@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
-use onpeople_types::{AppError, EventEnvelope, EventKind};
+use onpeople_types::{
+    AppError, EventEnvelope, EventKind, ModelDescriptor, Policy, Preferences, ProviderSettings,
+    SecretMetadata,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::{Config, TS};
@@ -233,10 +236,96 @@ pub enum DesktopMethod {
     ConnectorOauthComplete,
     #[serde(rename = "connector.disconnect")]
     ConnectorDisconnect,
+    #[serde(rename = "provider.get")]
+    ProviderGet,
+    #[serde(rename = "provider.save")]
+    ProviderSave,
+    #[serde(rename = "models.discover")]
+    ModelsDiscover,
+    #[serde(rename = "models.validate")]
+    ModelsValidate,
+    #[serde(rename = "extensions.list")]
+    ExtensionsList,
+    #[serde(rename = "extensions.skill.set-enabled")]
+    ExtensionsSkillSetEnabled,
+    #[serde(rename = "policy.get")]
+    PolicyGet,
+    #[serde(rename = "policy.save")]
+    PolicySave,
+    #[serde(rename = "config.effective")]
+    ConfigEffective,
+    #[serde(rename = "usage.get")]
+    UsageGet,
+    #[serde(rename = "usage.price.save")]
+    UsagePriceSave,
+    #[serde(rename = "memory.list")]
+    MemoryList,
+    #[serde(rename = "memory.save")]
+    MemorySave,
+    #[serde(rename = "memory.delete")]
+    MemoryDelete,
+    #[serde(rename = "memory.settings.save")]
+    MemorySettingsSave,
+    #[serde(rename = "secret.list")]
+    SecretList,
+    #[serde(rename = "secret.save")]
+    SecretSave,
+    #[serde(rename = "secret.delete")]
+    SecretDelete,
+    #[serde(rename = "hook.list")]
+    HookList,
+    #[serde(rename = "hook.local.list")]
+    HookLocalList,
+    #[serde(rename = "hook.create")]
+    HookCreate,
+    #[serde(rename = "shell.deep-links.activate")]
+    ShellActivateDeepLinks,
+    #[serde(rename = "shell.frontend.ready")]
+    ShellFrontendReady,
+    #[serde(rename = "shell.task-window.open")]
+    ShellOpenTaskWindow,
+    #[serde(rename = "shell.microphone.request")]
+    ShellRequestMicrophoneAccess,
+    #[serde(rename = "shell.cloud-console.open")]
+    ShellOpenCloudConsole,
+    #[serde(rename = "shell.external-url.open")]
+    ShellOpenExternalUrl,
+    #[serde(rename = "shell.editor.open")]
+    ShellOpenEditor,
+    #[serde(rename = "shell.local-artifact.open")]
+    ShellOpenLocalArtifact,
+    #[serde(rename = "shell.generated-image.reveal")]
+    ShellRevealGeneratedImage,
+    #[serde(rename = "shell.generated-image.copy")]
+    ShellCopyGeneratedImage,
+    #[serde(rename = "shell.images.pick")]
+    ShellPickImages,
+    #[serde(rename = "shell.attachments.pick")]
+    ShellPickAttachments,
+    #[serde(rename = "shell.image.paste")]
+    ShellPasteImage,
+    #[serde(rename = "shell.thread.reveal")]
+    ShellRevealThread,
+    #[serde(rename = "shell.project.reveal")]
+    ShellRevealProject,
+    #[serde(rename = "shell.download-directory.pick")]
+    ShellPickDownloadDirectory,
+    #[serde(rename = "shell.scheduler.open")]
+    ShellOpenScheduler,
+    #[serde(rename = "shell.app-update.state")]
+    ShellAppUpdateState,
+    #[serde(rename = "shell.app-update.check")]
+    ShellAppUpdateCheck,
+    #[serde(rename = "shell.app-update.download")]
+    ShellAppUpdateDownload,
+    #[serde(rename = "shell.app-update.install")]
+    ShellAppUpdateInstall,
+    #[serde(rename = "shell.app-update.open-download")]
+    ShellAppUpdateOpenDownload,
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 111] = [
+    pub const ALL: [Self; 154] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -348,6 +437,49 @@ impl DesktopMethod {
         Self::ConnectorOauthStart,
         Self::ConnectorOauthComplete,
         Self::ConnectorDisconnect,
+        Self::ProviderGet,
+        Self::ProviderSave,
+        Self::ModelsDiscover,
+        Self::ModelsValidate,
+        Self::ExtensionsList,
+        Self::ExtensionsSkillSetEnabled,
+        Self::PolicyGet,
+        Self::PolicySave,
+        Self::ConfigEffective,
+        Self::UsageGet,
+        Self::UsagePriceSave,
+        Self::MemoryList,
+        Self::MemorySave,
+        Self::MemoryDelete,
+        Self::MemorySettingsSave,
+        Self::SecretList,
+        Self::SecretSave,
+        Self::SecretDelete,
+        Self::HookList,
+        Self::HookLocalList,
+        Self::HookCreate,
+        Self::ShellActivateDeepLinks,
+        Self::ShellFrontendReady,
+        Self::ShellOpenTaskWindow,
+        Self::ShellRequestMicrophoneAccess,
+        Self::ShellOpenCloudConsole,
+        Self::ShellOpenExternalUrl,
+        Self::ShellOpenEditor,
+        Self::ShellOpenLocalArtifact,
+        Self::ShellRevealGeneratedImage,
+        Self::ShellCopyGeneratedImage,
+        Self::ShellPickImages,
+        Self::ShellPickAttachments,
+        Self::ShellPasteImage,
+        Self::ShellRevealThread,
+        Self::ShellRevealProject,
+        Self::ShellPickDownloadDirectory,
+        Self::ShellOpenScheduler,
+        Self::ShellAppUpdateState,
+        Self::ShellAppUpdateCheck,
+        Self::ShellAppUpdateDownload,
+        Self::ShellAppUpdateInstall,
+        Self::ShellAppUpdateOpenDownload,
     ];
 
     #[must_use]
@@ -362,6 +494,28 @@ impl DesktopMethod {
                 | Self::BrowserAnnotationSave
                 | Self::BrowserAnnotationDelete
                 | Self::BrowserAction
+                | Self::ShellActivateDeepLinks
+                | Self::ShellFrontendReady
+                | Self::ShellOpenTaskWindow
+                | Self::ShellRequestMicrophoneAccess
+                | Self::ShellOpenCloudConsole
+                | Self::ShellOpenExternalUrl
+                | Self::ShellOpenEditor
+                | Self::ShellOpenLocalArtifact
+                | Self::ShellRevealGeneratedImage
+                | Self::ShellCopyGeneratedImage
+                | Self::ShellPickImages
+                | Self::ShellPickAttachments
+                | Self::ShellPasteImage
+                | Self::ShellRevealThread
+                | Self::ShellRevealProject
+                | Self::ShellPickDownloadDirectory
+                | Self::ShellOpenScheduler
+                | Self::ShellAppUpdateState
+                | Self::ShellAppUpdateCheck
+                | Self::ShellAppUpdateDownload
+                | Self::ShellAppUpdateInstall
+                | Self::ShellAppUpdateOpenDownload
         )
     }
 }
@@ -376,6 +530,188 @@ pub enum BrowserHostOperation {
     AnnotationSave,
     AnnotationDelete,
     Action,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellHostOperation {
+    ActivateDeepLinks,
+    FrontendReady,
+    OpenTaskWindow,
+    RequestMicrophoneAccess,
+    OpenCloudConsole,
+    OpenExternalUrl,
+    OpenEditor,
+    OpenLocalArtifact,
+    RevealGeneratedImage,
+    CopyGeneratedImage,
+    PickImages,
+    PickAttachments,
+    PasteImage,
+    RevealThread,
+    RevealProject,
+    PickDownloadDirectory,
+    OpenScheduler,
+    AppUpdateState,
+    AppUpdateCheck,
+    AppUpdateDownload,
+    AppUpdateInstall,
+    AppUpdateOpenDownload,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellOpenTaskWindowRequest {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellExternalUrlRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellEditorOpenRequest {
+    pub cwd: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellGeneratedImageRequest {
+    pub image_path: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellFileSelectionRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellThreadRequest {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellProjectRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ShellPickDownloadDirectoryRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellMicrophoneAccess {
+    pub granted: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedUrl {
+    pub opened: bool,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellOpenedPath {
+    pub opened: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageReveal {
+    pub revealed: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellGeneratedImageCopy {
+    pub copied: bool,
+    pub image: GeneratedImage,
+    pub clipboard: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellFileSelection {
+    pub selected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellThreadReveal {
+    pub thread_id: String,
+    pub cwd: String,
+    pub opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateCheck {
+    pub available: bool,
+    pub current_version: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateDownload {
+    pub available: bool,
+    #[serde(default)]
+    pub current_version: Option<String>,
+    #[serde(default)]
+    pub downloaded: Option<bool>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ShellAppUpdateInstall {
+    pub installed: bool,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -562,6 +898,258 @@ pub struct ConnectorOauthCompleteRequest {
     pub code: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ExtensionsListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SkillEnabledRequest {
+    pub skill_path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SkillEnabledState {
+    pub path: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExtensionsSnapshot {
+    pub skills: Vec<Value>,
+    pub plugins: Vec<Value>,
+    pub catalog: Vec<Value>,
+    pub catalog_status: Value,
+    #[serde(default)]
+    pub active_industry_plugin: Option<Value>,
+    pub mcp_servers: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelCatalog {
+    pub models: Vec<ModelDescriptor>,
+    pub providers: Vec<String>,
+    pub errors: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ModelValidationRequest {
+    pub provider_type: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelValidation {
+    pub valid: bool,
+    pub model_id: String,
+    pub vision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PolicyState {
+    pub policy: Policy,
+    pub audit: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PolicySaveRequest {
+    pub thread_id: String,
+    pub policy: Policy,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct EffectiveConfigRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EffectiveConfig {
+    pub source: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub provider: ProviderSettings,
+    pub policy: Policy,
+    pub preferences: Preferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct UsagePriceRequest {
+    pub key: String,
+    pub price: f64,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryListRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryLifecycle {
+    #[ts(type = "number")]
+    pub dismissed_count: u64,
+    #[ts(type = "number")]
+    pub expired_count: u64,
+    #[ts(type = "number")]
+    pub superseded_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemoryState {
+    pub entries: Vec<Value>,
+    pub candidates: Vec<Value>,
+    pub lifecycle: MemoryLifecycle,
+    pub settings: Value,
+    pub chat_settings: Value,
+    pub effective_settings: Value,
+    pub last_recall: Value,
+    #[serde(default)]
+    pub scope_cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySaveRequest {
+    pub entry: Value,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemorySaveResult {
+    pub entry: Value,
+    pub state: MemoryState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemoryDeleteRequest {
+    pub memory_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MemorySettingsRequest {
+    pub settings: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretList {
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretSaveRequest {
+    pub secret: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretSaveResult {
+    pub secret: Value,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SecretDeleteRequest {
+    pub secret_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SecretDeleteResult {
+    pub deleted: bool,
+    pub secrets: Vec<SecretMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookListRequest {
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HookDefinition {
+    pub id: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub local: Option<bool>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    #[serde(default)]
+    pub command: Option<Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct HookCreateRequest {
+    pub cwd: String,
+    pub id: String,
+    pub event: String,
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1461,6 +2049,51 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         PluginIdRequest,
         PluginCatalogSyncRequest,
         ConnectorOauthCompleteRequest,
+        ExtensionsListRequest,
+        SkillEnabledRequest,
+        SkillEnabledState,
+        ExtensionsSnapshot,
+        ModelCatalog,
+        ModelValidationRequest,
+        ModelValidation,
+        PolicyState,
+        PolicySaveRequest,
+        EffectiveConfigRequest,
+        EffectiveConfig,
+        UsagePriceRequest,
+        MemoryListRequest,
+        MemoryLifecycle,
+        MemoryState,
+        MemorySaveRequest,
+        MemorySaveResult,
+        MemoryDeleteRequest,
+        MemorySettingsRequest,
+        SecretList,
+        SecretSaveRequest,
+        SecretSaveResult,
+        SecretDeleteRequest,
+        SecretDeleteResult,
+        HookListRequest,
+        HookDefinition,
+        HookCreateRequest,
+        ShellOpenTaskWindowRequest,
+        ShellExternalUrlRequest,
+        ShellEditorOpenRequest,
+        ShellGeneratedImageRequest,
+        ShellFileSelectionRequest,
+        ShellThreadRequest,
+        ShellProjectRequest,
+        ShellPickDownloadDirectoryRequest,
+        ShellMicrophoneAccess,
+        ShellOpenedUrl,
+        ShellOpenedPath,
+        ShellGeneratedImageReveal,
+        ShellGeneratedImageCopy,
+        ShellFileSelection,
+        ShellThreadReveal,
+        ShellAppUpdateCheck,
+        ShellAppUpdateDownload,
+        ShellAppUpdateInstall,
     );
     Ok(())
 }
@@ -1557,6 +2190,41 @@ mod tests {
             serde_json::to_string(&BrowserAction::CaptureVisualSnapshot)
                 .expect("serialize browser action"),
             r#""captureVisualSnapshot""#
+        );
+    }
+
+    #[test]
+    fn serializes_config_and_data_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ProviderGet).expect("provider method"),
+            r#""provider.get""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::MemorySettingsSave).expect("memory method"),
+            r#""memory.settings.save""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::HookLocalList).expect("hook method"),
+            r#""hook.local.list""#
+        );
+    }
+
+    #[test]
+    fn serializes_native_shell_contract_names() {
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenLocalArtifact)
+                .expect("serialize shell method"),
+            r#""shell.local-artifact.open""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellAppUpdateDownload)
+                .expect("serialize update method"),
+            r#""shell.app-update.download""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DesktopMethod::ShellOpenCloudConsole)
+                .expect("serialize cloud console method"),
+            r#""shell.cloud-console.open""#
         );
     }
 

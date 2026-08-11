@@ -29,6 +29,10 @@ import type { EventReplay } from "../bindings/EventReplay";
 import type { EventReplayRequest } from "../bindings/EventReplayRequest";
 import type { Goal } from "../bindings/Goal";
 import type { GoalUpdateRequest } from "../bindings/GoalUpdateRequest";
+import type { EffectiveConfig } from "../bindings/EffectiveConfig";
+import type { EffectiveConfigRequest } from "../bindings/EffectiveConfigRequest";
+import type { ExtensionsListRequest } from "../bindings/ExtensionsListRequest";
+import type { ExtensionsSnapshot } from "../bindings/ExtensionsSnapshot";
 import type { AuthorizedProjectAction } from "../bindings/AuthorizedProjectAction";
 import type { FileListRequest } from "../bindings/FileListRequest";
 import type { FilePreview } from "../bindings/FilePreview";
@@ -48,7 +52,34 @@ import type { NewTaskRequest } from "../bindings/NewTaskRequest";
 import type { ProjectPathRequest } from "../bindings/ProjectPathRequest";
 import type { ProjectUpdateRequest } from "../bindings/ProjectUpdateRequest";
 import type { QuickLauncherRequest } from "../bindings/QuickLauncherRequest";
+import type { HookCreateRequest } from "../bindings/HookCreateRequest";
+import type { HookDefinition } from "../bindings/HookDefinition";
+import type { HookListRequest } from "../bindings/HookListRequest";
+import type { MemoryDeleteRequest } from "../bindings/MemoryDeleteRequest";
+import type { MemoryListRequest } from "../bindings/MemoryListRequest";
+import type { MemorySaveRequest } from "../bindings/MemorySaveRequest";
+import type { MemorySaveResult } from "../bindings/MemorySaveResult";
+import type { MemorySettingsRequest } from "../bindings/MemorySettingsRequest";
+import type { MemoryState } from "../bindings/MemoryState";
+import type { ModelCatalog } from "../bindings/ModelCatalog";
+import type { ModelValidation } from "../bindings/ModelValidation";
+import type { ModelValidationRequest } from "../bindings/ModelValidationRequest";
+import type { Policy } from "../bindings/Policy";
+import type { PolicySaveRequest } from "../bindings/PolicySaveRequest";
+import type { PolicyState } from "../bindings/PolicyState";
 import type { ProjectActionAuthorizeRequest } from "../bindings/ProjectActionAuthorizeRequest";
+import type { ProviderRequest } from "../bindings/ProviderRequest";
+import type { ProviderSettings } from "../bindings/ProviderSettings";
+import type { SaveProviderRequest } from "../bindings/SaveProviderRequest";
+import type { SecretDeleteRequest } from "../bindings/SecretDeleteRequest";
+import type { SecretDeleteResult } from "../bindings/SecretDeleteResult";
+import type { SecretList } from "../bindings/SecretList";
+import type { SecretSaveRequest } from "../bindings/SecretSaveRequest";
+import type { SecretSaveResult } from "../bindings/SecretSaveResult";
+import type { SkillEnabledRequest } from "../bindings/SkillEnabledRequest";
+import type { SkillEnabledState } from "../bindings/SkillEnabledState";
+import type { UsagePriceRequest } from "../bindings/UsagePriceRequest";
+import type { UsageSnapshot } from "../bindings/UsageSnapshot";
 import type { TerminalFocusRequest } from "../bindings/TerminalFocusRequest";
 import type { TerminalFocusState } from "../bindings/TerminalFocusState";
 import type { TerminalReadyState } from "../bindings/TerminalReadyState";
@@ -77,6 +108,25 @@ import type { ScheduledTaskMutationRequest } from "../bindings/ScheduledTaskMuta
 import type { ScheduledTaskRequest } from "../bindings/ScheduledTaskRequest";
 import type { SchedulerMarkReadRequest } from "../bindings/SchedulerMarkReadRequest";
 import type { SchedulerSnapshot } from "../bindings/SchedulerSnapshot";
+import type { AppUpdateState } from "../bindings/AppUpdateState";
+import type { ShellAppUpdateCheck } from "../bindings/ShellAppUpdateCheck";
+import type { ShellAppUpdateDownload } from "../bindings/ShellAppUpdateDownload";
+import type { ShellAppUpdateInstall } from "../bindings/ShellAppUpdateInstall";
+import type { ShellEditorOpenRequest } from "../bindings/ShellEditorOpenRequest";
+import type { ShellExternalUrlRequest } from "../bindings/ShellExternalUrlRequest";
+import type { ShellFileSelection } from "../bindings/ShellFileSelection";
+import type { ShellFileSelectionRequest } from "../bindings/ShellFileSelectionRequest";
+import type { ShellGeneratedImageCopy } from "../bindings/ShellGeneratedImageCopy";
+import type { ShellGeneratedImageRequest } from "../bindings/ShellGeneratedImageRequest";
+import type { ShellGeneratedImageReveal } from "../bindings/ShellGeneratedImageReveal";
+import type { ShellMicrophoneAccess } from "../bindings/ShellMicrophoneAccess";
+import type { ShellOpenedPath } from "../bindings/ShellOpenedPath";
+import type { ShellOpenedUrl } from "../bindings/ShellOpenedUrl";
+import type { ShellOpenTaskWindowRequest } from "../bindings/ShellOpenTaskWindowRequest";
+import type { ShellPickDownloadDirectoryRequest } from "../bindings/ShellPickDownloadDirectoryRequest";
+import type { ShellProjectRequest } from "../bindings/ShellProjectRequest";
+import type { ShellThreadRequest } from "../bindings/ShellThreadRequest";
+import type { ShellThreadReveal } from "../bindings/ShellThreadReveal";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import type { ThreadFilters } from "../bindings/ThreadFilters";
 import type { ThreadList } from "../bindings/ThreadList";
@@ -421,6 +471,142 @@ export interface DesktopMethodMap {
   "connector.disconnect": {
     params: PluginIdRequest;
     result: JsonValue;
+  };
+  "provider.get": { params: ProviderRequest; result: ProviderSettings };
+  "provider.save": {
+    params: SaveProviderRequest;
+    result: ProviderSettings;
+  };
+  "models.discover": {
+    params: Record<string, never>;
+    result: ModelCatalog;
+  };
+  "models.validate": {
+    params: ModelValidationRequest;
+    result: ModelValidation;
+  };
+  "extensions.list": {
+    params: ExtensionsListRequest;
+    result: ExtensionsSnapshot;
+  };
+  "extensions.skill.set-enabled": {
+    params: SkillEnabledRequest;
+    result: SkillEnabledState;
+  };
+  "policy.get": { params: Record<string, never>; result: PolicyState };
+  "policy.save": { params: PolicySaveRequest; result: Policy };
+  "config.effective": {
+    params: EffectiveConfigRequest;
+    result: EffectiveConfig;
+  };
+  "usage.get": { params: Record<string, never>; result: UsageSnapshot };
+  "usage.price.save": {
+    params: UsagePriceRequest;
+    result: UsageSnapshot;
+  };
+  "memory.list": { params: MemoryListRequest; result: MemoryState };
+  "memory.save": { params: MemorySaveRequest; result: MemorySaveResult };
+  "memory.delete": { params: MemoryDeleteRequest; result: JsonValue };
+  "memory.settings.save": {
+    params: MemorySettingsRequest;
+    result: JsonValue;
+  };
+  "secret.list": { params: Record<string, never>; result: SecretList };
+  "secret.save": { params: SecretSaveRequest; result: SecretSaveResult };
+  "secret.delete": {
+    params: SecretDeleteRequest;
+    result: SecretDeleteResult;
+  };
+  "hook.list": { params: HookListRequest; result: HookDefinition[] };
+  "hook.local.list": { params: HookListRequest; result: HookDefinition[] };
+  "hook.create": { params: HookCreateRequest; result: HookDefinition };
+  "shell.deep-links.activate": {
+    params: Record<string, never>;
+    result: string[];
+  };
+  "shell.frontend.ready": {
+    params: Record<string, never>;
+    result: void;
+  };
+  "shell.task-window.open": {
+    params: ShellOpenTaskWindowRequest;
+    result: void;
+  };
+  "shell.microphone.request": {
+    params: Record<string, never>;
+    result: ShellMicrophoneAccess;
+  };
+  "shell.cloud-console.open": {
+    params: Record<string, never>;
+    result: ShellOpenedUrl;
+  };
+  "shell.external-url.open": {
+    params: ShellExternalUrlRequest;
+    result: ShellOpenedUrl;
+  };
+  "shell.editor.open": {
+    params: ShellEditorOpenRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.local-artifact.open": {
+    params: LocalArtifactRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.generated-image.reveal": {
+    params: ShellGeneratedImageRequest;
+    result: ShellGeneratedImageReveal;
+  };
+  "shell.generated-image.copy": {
+    params: ShellGeneratedImageRequest;
+    result: ShellGeneratedImageCopy;
+  };
+  "shell.images.pick": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.attachments.pick": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.image.paste": {
+    params: ShellFileSelectionRequest;
+    result: ShellFileSelection;
+  };
+  "shell.thread.reveal": {
+    params: ShellThreadRequest;
+    result: ShellThreadReveal;
+  };
+  "shell.project.reveal": {
+    params: ShellProjectRequest;
+    result: ShellOpenedPath;
+  };
+  "shell.download-directory.pick": {
+    params: ShellPickDownloadDirectoryRequest;
+    result: Preferences;
+  };
+  "shell.scheduler.open": {
+    params: Record<string, never>;
+    result: SchedulerSnapshot;
+  };
+  "shell.app-update.state": {
+    params: Record<string, never>;
+    result: AppUpdateState;
+  };
+  "shell.app-update.check": {
+    params: Record<string, never>;
+    result: ShellAppUpdateCheck;
+  };
+  "shell.app-update.download": {
+    params: Record<string, never>;
+    result: ShellAppUpdateDownload;
+  };
+  "shell.app-update.install": {
+    params: Record<string, never>;
+    result: ShellAppUpdateInstall;
+  };
+  "shell.app-update.open-download": {
+    params: Record<string, never>;
+    result: ShellOpenedUrl;
   };
 }
 

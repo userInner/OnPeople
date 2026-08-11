@@ -3939,6 +3939,27 @@ impl CoreRuntime {
         }))
     }
 
+    pub fn save_memory(&self, entry: &Value, thread_id: Option<&str>) -> Result<Value, AppError> {
+        let saved = self.save_memory_from_payload(entry)?;
+        Ok(json!({
+            "entry": saved,
+            "state": self.memory_state(
+                entry.get("cwd").and_then(Value::as_str),
+                thread_id,
+            )?,
+        }))
+    }
+
+    pub fn delete_memory(&self, memory_id: &str) -> Result<Value, AppError> {
+        if memory_id.trim().is_empty() {
+            return Err(AppError::invalid("缺少 memoryId"));
+        }
+        Ok(json!({
+            "deleted": self.storage.delete_document("memories", memory_id)?,
+            "id": memory_id,
+        }))
+    }
+
     pub fn save_memory_from_payload(&self, payload: &Value) -> Result<Value, AppError> {
         let scope = payload
             .get("scope")
@@ -4020,6 +4041,33 @@ impl CoreRuntime {
         self.storage.list_secret_metadata()
     }
 
+    pub fn save_secret(&self, secret: &Value) -> Result<Value, AppError> {
+        let saved = self.save_secret_from_payload(secret)?;
+        Ok(json!({ "secret": saved, "secrets": self.list_secrets()? }))
+    }
+
+    pub fn delete_secret(&self, secret_id: &str) -> Result<Value, AppError> {
+        if secret_id.trim().is_empty() {
+            return Err(AppError::invalid("缺少 secretId"));
+        }
+        Ok(json!({
+            "deleted": self.storage.delete_secret(secret_id)?,
+            "secrets": self.list_secrets()?,
+        }))
+    }
+
+    pub fn policy_state(&self) -> Result<Value, AppError> {
+        Ok(json!({
+            "policy": self.agent_status()?.policy,
+            "audit": self
+                .storage
+                .metadata_prefix("audit.")?
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+        }))
+    }
+
     pub async fn save_policy(&self, value: Value) -> Result<Policy, AppError> {
         let policy = normalize_policy(serde_json::from_value(value).map_err(AppError::invalid)?);
         self.state.write().policy = policy.clone();
@@ -4059,6 +4107,30 @@ impl CoreRuntime {
             .storage
             .get_metadata("usage.snapshot")?
             .unwrap_or_else(|| json!({ "totals": {}, "prices": {}, "days": [] })))
+    }
+
+    pub fn save_usage_price(&self, key: &str, price: f64) -> Result<Value, AppError> {
+        if key.trim().is_empty() {
+            return Err(AppError::invalid("缺少价格键"));
+        }
+        if !price.is_finite() || price < 0.0 {
+            return Err(AppError::invalid("价格必须是非负数"));
+        }
+        let mut usage = self.usage_snapshot()?;
+        usage["prices"][key] = json!(price);
+        self.storage.put_metadata("usage.snapshot", &usage)?;
+        Ok(usage)
+    }
+
+    pub fn effective_config(&self, cwd: Option<&str>) -> Result<Value, AppError> {
+        let status = self.agent_status()?;
+        Ok(json!({
+            "source": "onpeople.db",
+            "cwd": cwd,
+            "provider": status.provider,
+            "policy": status.policy,
+            "preferences": self.preferences()?,
+        }))
     }
 
     pub async fn interrupt(&self, payload: &Value) -> Result<Value, AppError> {
