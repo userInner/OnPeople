@@ -103,7 +103,6 @@ export interface LocalArtifactPreview extends Record<string, unknown> {
 
 export type PrimaryView =
   | "tasks"
-  | "browser"
   | "pull-requests"
   | "scheduled"
   | "plugins";

@@ -28,9 +28,9 @@ import { ManagementCenter } from "./tools/ManagementCenter";
 const views: Array<{ id: ToolView; label: string; icon: typeof CircleDot }> = [
   { id: "activity", label: "输出", icon: CircleDot },
   { id: "browser", label: "浏览器", icon: Globe2 },
-  { id: "git", label: "Git", icon: GitBranch },
+  { id: "git", label: "审阅", icon: GitBranch },
   { id: "files", label: "文件", icon: Files },
-  { id: "manage", label: "管理", icon: LayoutDashboard },
+  { id: "manage", label: "详情", icon: LayoutDashboard },
 ];
 
 interface UtilityPaneProps {

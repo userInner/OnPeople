@@ -335,7 +335,6 @@ export function App() {
     () =>
       browserBridge.receiveAgentCommands(() => {
         // Keep the task visible while its shared browser opens beside it.
-        // The standalone Sites workspace remains available for manual use.
         setPrimaryView("tasks");
         setToolView("browser");
       }),
@@ -959,8 +958,6 @@ function TaskMenu({
 
 function viewTitle(view: PrimaryView): string {
   switch (view) {
-    case "browser":
-      return "站点";
     case "pull-requests":
       return "拉取请求";
     case "scheduled":
@@ -1049,6 +1046,18 @@ function CommandPalette({
           const store = useWorkbenchStore.getState();
           store.setPrimaryView("plugins");
           store.setUtilityOpen(false);
+        },
+      },
+      {
+        id: "browser-panel",
+        group: "工具",
+        label: "打开浏览器侧面板",
+        hint: "工具舱",
+        keywords: "browser web site 网页 浏览器",
+        run: () => {
+          const store = useWorkbenchStore.getState();
+          store.setPrimaryView("tasks");
+          store.setToolView("browser");
         },
       },
       {

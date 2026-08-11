@@ -10,7 +10,6 @@ import {
   Folder,
   GitFork,
   GitPullRequest,
-  Globe2,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
@@ -46,11 +45,10 @@ type SidebarContextMenu =
     };
 
 const primaryLinks: Array<{
-  id: PrimaryView;
+  id: Exclude<PrimaryView, "tasks">;
   label: string;
   icon: typeof GitPullRequest;
 }> = [
-  { id: "browser", label: "站点", icon: Globe2 },
   { id: "pull-requests", label: "拉取请求", icon: GitPullRequest },
   { id: "scheduled", label: "已安排", icon: CalendarClock },
   { id: "plugins", label: "插件", icon: Puzzle },
@@ -203,7 +201,7 @@ export function Sidebar() {
     newTask(path);
   };
 
-  const openPrimary = (view: PrimaryView) => {
+  const openPrimary = (view: Exclude<PrimaryView, "tasks">) => {
     setPrimaryView(view);
     setUtilityOpen(false);
   };
