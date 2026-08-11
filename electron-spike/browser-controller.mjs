@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 const DEFAULT_IDLE_DESTROY_MS = 60_000;
+const BROWSER_INSPECT_TIMEOUT_MS = 8_000;
 
 export function isSafeBrowserUrl(value) {
   try {
@@ -43,6 +44,20 @@ function routeState(routeId, threadId, url) {
 function pushBounded(values, value, limit = 100) {
   values.push(value);
   if (values.length > limit) values.splice(0, values.length - limit);
+}
+
+async function withTimeout(promise, milliseconds, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export class ElectronBrowserController {
@@ -590,7 +605,11 @@ export class ElectronBrowserController {
   async #evaluate(routeId, expression) {
     const contents = (await this.#ensureView(this.#requireRoute(routeId)))
       .webContents;
-    return contents.executeJavaScript(String(expression), true);
+    return withTimeout(
+      contents.executeJavaScript(String(expression), true),
+      BROWSER_INSPECT_TIMEOUT_MS,
+      "浏览器页面响应超时，请重新加载页面后重试",
+    );
   }
 
   async #queryAction(routeId, selector, action) {
@@ -632,7 +651,11 @@ export class ElectronBrowserController {
   async #visualSnapshot(routeId) {
     const contents = (await this.#ensureView(this.#requireRoute(routeId)))
       .webContents;
-    const image = await contents.capturePage();
+    const image = await withTimeout(
+      contents.capturePage(),
+      BROWSER_INSPECT_TIMEOUT_MS,
+      "浏览器视觉快照超时，请重新加载页面后重试",
+    );
     const size = image.getSize();
     return {
       routeId,
@@ -647,16 +670,20 @@ export class ElectronBrowserController {
     const contents = (await this.#ensureView(route)).webContents;
     let network = [];
     try {
-      network = await contents.executeJavaScript(
-        `performance.getEntriesByType("resource").slice(-100).map((entry) => ({
+      network = await withTimeout(
+        contents.executeJavaScript(
+          `performance.getEntriesByType("resource").slice(-100).map((entry) => ({
           name: entry.name,
           initiatorType: entry.initiatorType,
           duration: Math.round(entry.duration * 100) / 100,
           transferSize: entry.transferSize || 0,
           encodedBodySize: entry.encodedBodySize || 0,
           decodedBodySize: entry.decodedBodySize || 0
-        }))`,
-        true,
+          }))`,
+          true,
+        ),
+        BROWSER_INSPECT_TIMEOUT_MS,
+        "开发检查超时，请重新加载页面后重试",
       );
       if (!Array.isArray(network)) network = [];
     } catch {

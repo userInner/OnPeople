@@ -773,9 +773,11 @@ function DesktopBrowserPane() {
                     ? frame.routeId === routeId
                       ? `${frame.width} × ${frame.height}`
                       : "正在连接当前标签页"
-                    : visualSnapshot
-                      ? "浏览器画面已连接"
-                      : "等待浏览器画面"}
+                    : activeTab
+                      ? "页面已连接"
+                      : visualSnapshot
+                        ? "浏览器画面已连接"
+                        : "等待浏览器画面"}
               </span>
             </div>
           ) : null}
