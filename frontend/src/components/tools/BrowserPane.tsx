@@ -22,12 +22,7 @@ import { desktopClient } from "../../lib/desktopClient";
 import { constrainedBrowserSurfaceBounds } from "../../lib/browserSurfaceBounds";
 import { errorMessage } from "../../lib/errors";
 import { useWorkbenchStore } from "../../store/workbenchStore";
-import type {
-  BrowserAnnotation,
-  BrowserDeveloperState,
-  BrowserFrame,
-  StreamEnvelope,
-} from "../../types";
+import type { BrowserAnnotation, BrowserDeveloperState } from "../../types";
 import { IconButton } from "../IconButton";
 import { LocalArtifactBrowserPreview } from "./LocalArtifactBrowserPreview";
 
@@ -75,7 +70,6 @@ function DesktopBrowserPane() {
   const [address, setAddress] = useState("");
   const [addressRouteId, setAddressRouteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [frame, setFrame] = useState<BrowserFrame | null>(null);
   const [visualSnapshot, setVisualSnapshot] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<
     "snapshot" | "developer" | "annotations" | "session" | null
@@ -107,23 +101,6 @@ function DesktopBrowserPane() {
     [],
   );
 
-  useEffect(() => {
-    let mounted = true;
-    const handleStream = (event: StreamEnvelope) => {
-      if (!mounted || event.kind !== "browser-frame") return;
-      const value = event.payload as unknown as Partial<BrowserFrame> & {
-        kind?: string;
-      };
-      if (value.routeId && value.surfaceKind) {
-        setFrame(value as BrowserFrame);
-      }
-    };
-    void desktopClient.streamBrowser(handleStream).catch(() => undefined);
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const threadTabs = useMemo(() => {
     if (!browser) return [];
     return browser.tabs.filter(
@@ -153,6 +130,7 @@ function DesktopBrowserPane() {
     `route-${(selectedThreadId ?? "main").replace(/[^a-zA-Z0-9_.-]/g, "")}`;
   const activeTabRouteId = activeTab?.routeId ?? null;
   const activeTabUrl = activeTab?.url ?? null;
+  const activePhase = (activeTab as { phase?: string } | null)?.phase;
   const showBrowserHome = !activeTab || activeTab.url === "about:blank";
 
   useEffect(() => {
@@ -797,15 +775,15 @@ function DesktopBrowserPane() {
               <span className="browser-overflow-status">
                 {detailBusy
                   ? "正在读取浏览器数据…"
-                  : frame
-                    ? frame.routeId === routeId
-                      ? `${frame.width} × ${frame.height}`
-                      : "正在连接当前标签页"
-                    : activeTab
-                      ? "页面已连接"
-                      : visualSnapshot
-                        ? "浏览器画面已连接"
-                        : "等待浏览器画面"}
+                  : !activeTab
+                    ? "等待浏览器标签页"
+                    : activePhase === "loading" || activeTab.loading
+                      ? "页面加载中"
+                      : activePhase === "crashed"
+                        ? "页面已崩溃，可重新加载"
+                        : activePhase === "unknown"
+                          ? "页面状态未知，可重新加载"
+                          : "页面已连接"}
               </span>
             </div>
           ) : null}
@@ -1088,7 +1066,11 @@ function BrowserDetailPanel({
     session: "登录与浏览器数据",
   }[view];
   return (
-    <section className="browser-detail-panel" aria-label={title}>
+    <section
+      className="browser-detail-panel"
+      aria-label={title}
+      data-native-surface-occluder="true"
+    >
       <header>
         <strong>{title}</strong>
         {busy ? <LoaderCircle className="spin" size={13} /> : null}

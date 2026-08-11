@@ -119,7 +119,9 @@ async function bootstrap() {
 
   const dataRoot = path.join(
     app.getPath("appData"),
-    app.isPackaged ? "internal-agent-workbench" : "internal-agent-workbench-dev",
+    app.isPackaged
+      ? "internal-agent-workbench"
+      : "internal-agent-workbench-dev",
   );
   await mkdir(dataRoot, { recursive: true });
   const transport =
@@ -276,7 +278,11 @@ async function bootstrap() {
       if (browserMethods.has(request.method)) {
         return responseSuccess(
           request,
-          await browserController.handle(request.method, request.params ?? {}),
+          await browserController.handle(
+            request.method,
+            request.params ?? {},
+            request.requestId,
+          ),
         );
       }
       if (String(request.method).startsWith("shell.")) {
@@ -392,7 +398,10 @@ async function metrics(rustBridge, includeHistory = true) {
 async function persistMetrics(rustBridge) {
   const output = process.env.ONPEOPLE_ELECTRON_METRICS_FILE;
   if (!output) return;
-  await writeFile(output, `${JSON.stringify(await metrics(rustBridge), null, 2)}\n`);
+  await writeFile(
+    output,
+    `${JSON.stringify(await metrics(rustBridge), null, 2)}\n`,
+  );
 }
 
 let nextDownloadResolver = null;
@@ -415,7 +424,7 @@ async function runAcceptanceProbe({ controller, browserSession, rustBridge }) {
       params: {},
     });
     const methods = capabilitiesResponse.ok
-      ? capabilitiesResponse.result?.methods ?? []
+      ? (capabilitiesResponse.result?.methods ?? [])
       : [];
     acceptance.desktopMethodCount = methods.length;
     acceptance.uniqueDesktopMethodCount = new Set(methods).size;
@@ -455,10 +464,12 @@ async function runAcceptanceProbe({ controller, browserSession, rustBridge }) {
       interactive: false,
     });
     acceptance.loginPersistence =
-      (await browserSession.cookies.get({
-        url: fixture.url,
-        name: "onpeople_session",
-      })).at(0)?.value === "persisted";
+      (
+        await browserSession.cookies.get({
+          url: fixture.url,
+          name: "onpeople_session",
+        })
+      ).at(0)?.value === "persisted";
 
     const contents = controller.webContents(routeId);
     if (!contents) throw new Error("acceptance WebContentsView 未创建");
@@ -472,7 +483,9 @@ async function runAcceptanceProbe({ controller, browserSession, rustBridge }) {
     const downloadPromise = new Promise((resolve) => {
       nextDownloadResolver = resolve;
     });
-    await contents.executeJavaScript(`document.querySelector("#download").click()`);
+    await contents.executeJavaScript(
+      `document.querySelector("#download").click()`,
+    );
     const download = await Promise.race([
       downloadPromise,
       sleep(8_000).then(() => null),
@@ -579,7 +592,7 @@ async function runAcceptanceProbe({ controller, browserSession, rustBridge }) {
     }
   } catch (error) {
     acceptance.featureErrors.push(
-      error instanceof Error ? error.stack ?? error.message : String(error),
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
   } finally {
     await controller.forceDestroy(routeId, false);
@@ -632,7 +645,9 @@ async function startFixtureServer() {
     }
     if (request.url === "/popup") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end("<!doctype html><title>OnPeople Popup</title><p>popup ready</p>");
+      response.end(
+        "<!doctype html><title>OnPeople Popup</title><p>popup ready</p>",
+      );
       return;
     }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

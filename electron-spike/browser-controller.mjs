@@ -4,6 +4,7 @@ import path from "node:path";
 const DEFAULT_IDLE_DESTROY_MS = 60_000;
 const BROWSER_INSPECT_TIMEOUT_MS = 8_000;
 const BROWSER_LOAD_TIMEOUT_MS = 8_000;
+const BROWSER_ACTION_TIMEOUT_MS = 10_000;
 
 export function isSafeBrowserUrl(value) {
   try {
@@ -30,6 +31,12 @@ function routeState(routeId, threadId, url) {
     title: url === "about:blank" ? "新标签页" : url,
     faviconUrl: null,
     loading: false,
+    // Codex keeps browser lifecycle separate from the rendered surface.  A
+    // missing frame therefore must not be interpreted as a disconnected
+    // browser.  Keep an explicit phase so the renderer can distinguish a
+    // suspended native view from a page that is actually unavailable.
+    phase: "creating",
+    lastError: null,
     canGoBack: false,
     canGoForward: false,
     crashed: false,
@@ -47,13 +54,19 @@ function pushBounded(values, value, limit = 100) {
   if (values.length > limit) values.splice(0, values.length - limit);
 }
 
-async function withTimeout(promise, milliseconds, message) {
+async function withTimeout(promise, milliseconds, message, onTimeout) {
   let timer;
   try {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), milliseconds);
+        timer = setTimeout(() => {
+          try {
+            onTimeout?.();
+          } finally {
+            reject(new Error(message));
+          }
+        }, milliseconds);
       }),
     ]);
   } finally {
@@ -75,6 +88,7 @@ export class ElectronBrowserController {
   #crashCount = 0;
   #recoveryCount = 0;
   #destroyCount = 0;
+  #routeQueues = new Map();
 
   constructor({
     window,
@@ -132,14 +146,26 @@ export class ElectronBrowserController {
     return this.state();
   }
 
-  async handle(method, params = {}) {
+  async handle(method, params = {}, requestId = null) {
+    const operation = this.#handle(method, params, requestId);
+    // Every browser request has a deadline at the browser host boundary. It
+    // is deliberately independent from the Rust Desktop API timeout so a
+    // renderer cannot leave the Electron main process waiting forever.
+    return withTimeout(
+      operation,
+      this.#timeoutFor(method),
+      `浏览器操作超时: ${method}`,
+    );
+  }
+
+  async #handle(method, params = {}, requestId = null) {
     switch (method) {
       case "browser.state":
         return this.state();
       case "browser.restart":
         return this.restart();
       case "browser.command":
-        return this.#command(params.command);
+        return this.#command(params.command, requestId);
       case "browser.surface.bounds":
         return this.#surfaceBounds(params);
       case "browser.annotation.list":
@@ -173,10 +199,47 @@ export class ElectronBrowserController {
     return true;
   }
 
-  async #command(command) {
+  #timeoutFor(method) {
+    if (method === "browser.state" || method === "browser.surface.bounds") {
+      return 2_000;
+    }
+    if (method === "browser.command") {
+      return BROWSER_ACTION_TIMEOUT_MS;
+    }
+    if (method === "browser.action") return BROWSER_ACTION_TIMEOUT_MS;
+    return BROWSER_INSPECT_TIMEOUT_MS;
+  }
+
+  async #command(command, requestId = null) {
     if (!command || typeof command !== "object") {
       throw new Error("browser.command 缺少命令");
     }
+    const routeId = command.payload?.routeId;
+    if (typeof routeId === "string" && routeId) {
+      return this.#enqueueRoute(routeId, () =>
+        this.#executeCommand(command, requestId),
+      );
+    }
+    return this.#executeCommand(command, requestId);
+  }
+
+  #enqueueRoute(routeId, task) {
+    const previous = this.#routeQueues.get(routeId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(task);
+    const settled = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    settled.then(() => {
+      if (this.#routeQueues.get(routeId) === settled) {
+        this.#routeQueues.delete(routeId);
+      }
+    });
+    this.#routeQueues.set(routeId, settled);
+    return current;
+  }
+
+  async #executeCommand(command, requestId = null) {
     const payload = command.payload ?? {};
     switch (command.command) {
       case "createRoute": {
@@ -197,19 +260,21 @@ export class ElectronBrowserController {
       case "reload": {
         const route = this.#requireRoute(payload.routeId);
         const contents = (await this.#ensureView(route)).webContents;
+        const stopped = this.#waitForStop(contents);
         if (
           command.command === "back" &&
           contents.navigationHistory.canGoBack()
         ) {
-          contents.navigationHistory.goBack();
+          await contents.navigationHistory.goBack();
         } else if (
           command.command === "forward" &&
           contents.navigationHistory.canGoForward()
         ) {
-          contents.navigationHistory.goForward();
+          await contents.navigationHistory.goForward();
         } else if (command.command === "reload") {
           contents.reload();
         }
+        await stopped;
         return this.#publicRoute(route);
       }
       case "resize":
@@ -246,7 +311,7 @@ export class ElectronBrowserController {
       case "evaluate":
         return this.#evaluate(payload.routeId, payload.expression);
       case "domSnapshot":
-        return this.#domSnapshot(payload.routeId);
+        return this.#domSnapshot(payload.routeId, requestId);
       case "visualSnapshot":
         return this.#visualSnapshot(payload.routeId);
       case "developerInspect":
@@ -347,6 +412,13 @@ export class ElectronBrowserController {
       view.setBounds(route.bounds);
       view.setVisible(true);
       view.webContents.setAudioMuted(false);
+      if (
+        !route.crashed &&
+        !route.loading &&
+        (route.phase === "creating" || route.phase === "loading")
+      ) {
+        route.phase = "ready";
+      }
       this.#cancelDestroy(route);
     } else {
       this.#suspend(route);
@@ -389,12 +461,22 @@ export class ElectronBrowserController {
     this.#activate(route);
     route.url = url;
     route.crashed = false;
+    route.phase = "loading";
+    route.lastError = null;
+    route.loading = true;
     const contents = (await this.#ensureView(route)).webContents;
     if (contents.getURL() !== url) {
       await withTimeout(
         contents.loadURL(url),
         BROWSER_LOAD_TIMEOUT_MS,
         "浏览器页面加载超时，请重新加载页面后重试",
+        () => {
+          contents.stop();
+          route.loading = false;
+          route.phase = "unknown";
+          route.lastError = "页面加载超时";
+          this.#publishState();
+        },
       );
     }
     this.#syncRoute(route);
@@ -416,6 +498,8 @@ export class ElectronBrowserController {
       },
     });
     route.view = view;
+    route.phase = route.url === "about:blank" ? "ready" : "loading";
+    route.lastError = null;
     route.generation += 1;
     this.#window.contentView.addChildView(view);
     view.setBackgroundColor("#ffffff");
@@ -452,11 +536,14 @@ export class ElectronBrowserController {
     });
     contents.on("did-start-loading", () => {
       route.loading = true;
+      route.phase = "loading";
+      route.lastError = null;
       route.crashed = false;
       this.#publishState();
     });
     contents.on("did-stop-loading", () => {
       this.#syncRoute(route);
+      if (!route.crashed) route.phase = "ready";
       this.#publishState();
     });
     contents.on("did-navigate", (_event, url) => {
@@ -488,6 +575,8 @@ export class ElectronBrowserController {
       this.#crashCount += 1;
       route.crashed = true;
       route.loading = false;
+      route.phase = "crashed";
+      route.lastError = `渲染进程退出: ${details.reason ?? "unknown"}`;
       const recoveryUrl = route.url;
       const bounds = route.bounds;
       const visible = route.visible;
@@ -504,13 +593,19 @@ export class ElectronBrowserController {
               recovered.webContents.loadURL(recoveryUrl),
               BROWSER_LOAD_TIMEOUT_MS,
               "浏览器页面恢复超时，请重新加载页面后重试",
+              () => recovered.webContents.stop(),
             );
           }
           route.crashed = false;
+          route.phase = "ready";
+          route.lastError = null;
           this.#recoveryCount += 1;
           this.#publishState();
         } catch (error) {
           route.crashed = true;
+          route.phase = "crashed";
+          route.lastError =
+            error instanceof Error ? error.message : String(error);
           this.#emit("browser:event", {
             kind: "recovery-failed",
             routeId: route.routeId,
@@ -525,6 +620,13 @@ export class ElectronBrowserController {
         contents.loadURL(route.url),
         BROWSER_LOAD_TIMEOUT_MS,
         "浏览器页面加载超时，请重新加载页面后重试",
+        () => {
+          contents.stop();
+          route.loading = false;
+          route.phase = "unknown";
+          route.lastError = "页面加载超时";
+          this.#publishState();
+        },
       );
     }
     return view;
@@ -538,10 +640,28 @@ export class ElectronBrowserController {
     route.title = contents.getTitle() || "新标签页";
     route.canGoBack = contents.navigationHistory.canGoBack();
     route.canGoForward = contents.navigationHistory.canGoForward();
+    if (route.crashed) route.phase = "crashed";
+    else if (route.loading) route.phase = "loading";
+    else if (route.phase === "loading" || route.phase === "creating") {
+      route.phase = "ready";
+    }
+  }
+
+  #waitForStop(contents) {
+    if (!contents.isLoading()) return Promise.resolve();
+    return withTimeout(
+      new Promise((resolve) => {
+        contents.once("did-stop-loading", resolve);
+      }),
+      BROWSER_LOAD_TIMEOUT_MS,
+      "浏览器页面重新加载超时，请重试",
+      () => contents.stop(),
+    );
   }
 
   #suspend(route) {
     route.visible = false;
+    if (!route.crashed) route.phase = "suspended";
     if (route.view && !route.view.webContents.isDestroyed()) {
       route.view.setVisible(false);
       route.view.webContents.setAudioMuted(true);
@@ -569,6 +689,7 @@ export class ElectronBrowserController {
     this.#cancelDestroy(route);
     const view = route.view;
     route.view = null;
+    if (!route.crashed) route.phase = route.visible ? "unknown" : "suspended";
     if (!view) return;
     if (!this.#window.isDestroyed()) {
       try {
@@ -604,6 +725,8 @@ export class ElectronBrowserController {
       canGoBack: route.canGoBack,
       canGoForward: route.canGoForward,
       crashed: route.crashed,
+      phase: route.phase,
+      lastError: route.lastError,
     };
   }
 
@@ -658,10 +781,38 @@ export class ElectronBrowserController {
     return { selected };
   }
 
-  async #domSnapshot(routeId) {
+  async #domSnapshot(routeId, requestId = null) {
+    const visibleDom = await this.#evaluate(
+      routeId,
+      `(() => {
+        const visible = (node) => {
+          const rect = node.getBoundingClientRect();
+          const style = window.getComputedStyle(node);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const name = (node) => String(node.getAttribute("aria-label") || node.getAttribute("alt") || node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 240);
+        const result = [];
+        let index = 0;
+        for (const node of document.querySelectorAll("body *")) {
+          if (!visible(node)) continue;
+          const rect = node.getBoundingClientRect();
+          const role = node.getAttribute("role") || node.tagName.toLowerCase();
+          const text = name(node);
+          if (!text && !["input", "textarea", "select", "button", "a"].includes(node.tagName.toLowerCase())) continue;
+          result.push({ nodeId: "n" + (++index), tag: node.tagName.toLowerCase(), role, name: text, value: node.value ?? null, rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) } });
+          if (result.length >= 500) break;
+        }
+        return { url: location.href, title: document.title, nodes: result };
+      })()`,
+    );
     return {
       routeId,
+      requestId,
+      // Keep html for existing callers, while nodes is the authoritative
+      // interaction-oriented snapshot (the same split Codex exposes through
+      // DOM/Playwright and DOM-CUA surfaces).
       html: await this.#evaluate(routeId, "document.documentElement.outerHTML"),
+      visibleDom,
     };
   }
 
