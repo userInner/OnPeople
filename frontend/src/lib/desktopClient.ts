@@ -45,6 +45,7 @@ import type {
   TerminalSession,
 } from "../types";
 import type { BrowserAction } from "../bindings/BrowserAction";
+import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
 import type { JsonValue } from "../bindings/serde_json/JsonValue";
 import {
   createDesktopApiClient,
@@ -52,73 +53,7 @@ import {
   legacySteerResult,
 } from "./desktopApi";
 
-export type BrowserCommand =
-  | {
-      command: "createRoute";
-      payload: { routeId: string; threadId: string; url: string };
-    }
-  | { command: "navigate"; payload: { routeId: string; url: string } }
-  | {
-      command:
-        | "back"
-        | "forward"
-        | "reload"
-        | "domSnapshot"
-        | "visualSnapshot"
-        | "developerInspect"
-        | "closeRoute";
-      payload: { routeId: string };
-    }
-  | {
-      command: "resize";
-      payload: {
-        routeId: string;
-        width: number;
-        height: number;
-        scaleFactor: number;
-        visible: boolean;
-      };
-    }
-  | {
-      command: "click" | "hover";
-      payload: { routeId: string; selector: string };
-    }
-  | {
-      command: "fill";
-      payload: { routeId: string; selector: string; value: string };
-    }
-  | {
-      command: "select";
-      payload: { routeId: string; selector: string; value: string };
-    }
-  | { command: "press"; payload: { routeId: string; key: string } }
-  | { command: "scroll"; payload: { routeId: string; x: number; y: number } }
-  | { command: "evaluate"; payload: { routeId: string; expression: string } }
-  | {
-      command: "pointer";
-      payload: {
-        routeId: string;
-        kind: "move" | "down" | "up" | "wheel" | "leave";
-        x: number;
-        y: number;
-        deltaX: number;
-        deltaY: number;
-        button: number;
-        clickCount: number;
-        modifiers: number;
-      };
-    }
-  | {
-      command: "key";
-      payload: {
-        routeId: string;
-        kind: "down" | "up";
-        keyCode: number;
-        nativeKeyCode: number;
-        character: string;
-        modifiers: number;
-      };
-    };
+export type BrowserCommand = DesktopBrowserCommand;
 
 export interface TerminalOutput {
   processId: string;
@@ -519,9 +454,9 @@ export const desktopClient = {
   browserState: () => desktopApi.request("browser.state", {}),
   restartBrowserHost: () => desktopApi.request("browser.restart", {}),
   browserCommand: (command: BrowserCommand) =>
-    desktopApi.request("browser.command", {
-      command: command as unknown as JsonValue,
-    }) as Promise<Record<string, unknown>>,
+    desktopApi.request("browser.command", { command }) as Promise<
+      Record<string, unknown>
+    >,
   browserSurfaceBounds: (request: BrowserBoundsRequest) =>
     desktopApi.request("browser.surface.bounds", request) as Promise<
       Record<string, unknown>

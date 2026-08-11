@@ -163,7 +163,105 @@ pub enum BrowserHostOperation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct BrowserCommandRequest {
-    pub command: Value,
+    pub command: DesktopBrowserCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "command",
+    content = "payload"
+)]
+#[ts(export)]
+pub enum DesktopBrowserCommand {
+    CreateRoute {
+        route_id: String,
+        thread_id: String,
+        url: String,
+    },
+    Navigate {
+        route_id: String,
+        url: String,
+    },
+    Back {
+        route_id: String,
+    },
+    Forward {
+        route_id: String,
+    },
+    Reload {
+        route_id: String,
+    },
+    Resize {
+        route_id: String,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        visible: bool,
+    },
+    Click {
+        route_id: String,
+        selector: String,
+    },
+    Fill {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Select {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Press {
+        route_id: String,
+        key: String,
+    },
+    Scroll {
+        route_id: String,
+        x: f64,
+        y: f64,
+    },
+    Hover {
+        route_id: String,
+        selector: String,
+    },
+    Evaluate {
+        route_id: String,
+        expression: String,
+    },
+    DomSnapshot {
+        route_id: String,
+    },
+    VisualSnapshot {
+        route_id: String,
+    },
+    DeveloperInspect {
+        route_id: String,
+    },
+    Pointer {
+        route_id: String,
+        kind: String,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        button: i32,
+        click_count: i32,
+        modifiers: u32,
+    },
+    Key {
+        route_id: String,
+        kind: String,
+        key_code: i32,
+        native_key_code: i32,
+        character: String,
+        modifiers: u32,
+    },
+    CloseRoute {
+        route_id: String,
+    },
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
@@ -723,6 +821,7 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         TaskInputResolveRequest,
         TaskInputResolution,
         BrowserCommandRequest,
+        DesktopBrowserCommand,
         BrowserRouteRequest,
         BrowserAnnotationDeleteRequest,
         BrowserAction,

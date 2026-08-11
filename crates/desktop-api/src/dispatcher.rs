@@ -310,7 +310,12 @@ impl DesktopDispatcher {
             }
             DesktopMethod::BrowserCommand => {
                 let request: BrowserCommandRequest = parse_params(params)?;
-                call_host(host, BrowserHostOperation::Command, request.command).await
+                call_host(
+                    host,
+                    BrowserHostOperation::Command,
+                    to_value(request.command)?,
+                )
+                .await
             }
             DesktopMethod::BrowserSurfaceBounds => {
                 let request: onpeople_types::BrowserBoundsRequest = parse_params(params)?;

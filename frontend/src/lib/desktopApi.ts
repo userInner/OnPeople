@@ -8,6 +8,7 @@ import type { BrowserState } from "../bindings/BrowserState";
 import type { ConnectorOauthCompleteRequest } from "../bindings/ConnectorOauthCompleteRequest";
 import type { QueuedTaskMessage } from "../bindings/QueuedTaskMessage";
 import type { DesktopCapabilities } from "../bindings/DesktopCapabilities";
+import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
 import type { DesktopEvent } from "../bindings/DesktopEvent";
 import type { DesktopMethod } from "../bindings/DesktopMethod";
 import type { DesktopRequest } from "../bindings/DesktopRequest";
@@ -139,7 +140,7 @@ export interface DesktopMethodMap {
     result: BrowserState;
   };
   "browser.command": {
-    params: { command: JsonValue };
+    params: { command: DesktopBrowserCommand };
     result: JsonValue;
   };
   "browser.surface.bounds": {
