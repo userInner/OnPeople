@@ -445,26 +445,14 @@ function DesktopBrowserPane() {
       });
   };
 
-  const toggleOverflow = async () => {
+  const toggleOverflow = () => {
     if (overflowOpen) {
       setOverflowOpen(false);
       return;
     }
-    // Open synchronously. A visual capture can take a round trip through the
-    // Rust host; waiting for it here made the three-dot button look dead.
+    // Open synchronously. Never make the toolbar depend on a browser capture:
+    // a slow native page must not turn a simple menu click into a busy cursor.
     setOverflowOpen(true);
-    // The native WebContentsView must be hidden while the menu is open so its
-    // surface cannot eat menu clicks. Keep the page visible underneath by
-    // refreshing the lightweight visual fallback first.
-    try {
-      const value = await desktopClient.captureBrowserVisualSnapshot(routeId);
-      const imageBase64 =
-        typeof value.imageBase64 === "string" ? value.imageBase64 : null;
-      if (imageBase64)
-        setVisualSnapshot(`data:image/png;base64,${imageBase64}`);
-    } catch {
-      // The menu remains usable even when a page snapshot is unavailable.
-    }
   };
 
   const sendPointer = (
