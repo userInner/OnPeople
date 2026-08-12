@@ -135,6 +135,7 @@ export function BrowserWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [zoomFactor, setZoomFactor] = useState(1);
   const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
+  const [applicationModalOpen, setApplicationModalOpen] = useState(false);
   const addressInput = useRef<HTMLInputElement>(null);
   const overflow = useRef<HTMLDivElement>(null);
   const processedAgentCommands = useRef(new Set<string>());
@@ -307,6 +308,19 @@ export function BrowserWorkspace({
       window.removeEventListener("keydown", escape);
     };
   }, [overflowOpen]);
+
+  useEffect(() => {
+    const update = () => {
+      const modal = document.querySelector<HTMLElement>(
+        '[role="dialog"][aria-modal="true"]',
+      );
+      setApplicationModalOpen(Boolean(modal));
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true });
+    update();
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -559,6 +573,8 @@ export function BrowserWorkspace({
             visible={
               visible &&
               !inspector &&
+              !overflowOpen &&
+              !applicationModalOpen &&
               !activeTab.crashed &&
               activeTab.url !== "about:blank"
             }
