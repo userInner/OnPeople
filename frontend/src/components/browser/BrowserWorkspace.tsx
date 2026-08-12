@@ -36,18 +36,13 @@ import {
   browserBridge,
   normalizeBrowserAddress,
 } from "../../browser/browserBridge";
-import type {
-  BrowserDownload,
-  BrowserTabState,
-  BrowserWebviewElement,
-} from "../../browser/types";
+import type { BrowserDownload, BrowserTabState } from "../../browser/types";
 import { errorMessage } from "../../lib/errors";
 import { IconButton } from "../IconButton";
 
 const PARTITION = "persist:onpeople-browser";
 const STORAGE_KEY = "onpeople.browser.tabs.v2";
 const DEFAULT_TITLE = "新标签页";
-const MAX_RESIDENT_TABS = 3;
 
 type InspectorView = "dom" | "visual" | "session" | "downloads" | null;
 
@@ -148,18 +143,19 @@ export function BrowserWorkspace({
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!,
     [activeTabId, tabs],
   );
-  const residentTabs = useMemo(() => {
-    const residentIds = new Set(
-      [...tabs]
-        .filter((tab) => tab.id !== activeTab.id)
-        .sort((left, right) => right.lastActiveAt - left.lastActiveAt)
-        .slice(0, MAX_RESIDENT_TABS - 1)
-        .map((tab) => tab.id),
-    );
-    residentIds.add(activeTab.id);
-    return tabs.filter((tab) => residentIds.has(tab.id));
-  }, [activeTab, tabs]);
+  const activeTabIdRef = useRef(activeTab.id);
 
+  useEffect(() => {
+    const previous = activeTabIdRef.current;
+    activeTabIdRef.current = activeTab.id;
+    if (previous === activeTab.id) return;
+    void browserBridge
+      .invoke("activate", {
+        routeId: activeTab.id,
+        threadId: "browser",
+      })
+      .catch(() => undefined);
+  }, [activeTab.id]);
   const updateTab = useCallback(
     (tabId: string, patch: Partial<BrowserTabState>) => {
       setTabs((current) =>
@@ -169,8 +165,8 @@ export function BrowserWorkspace({
     [],
   );
 
-  const addTab = useCallback((url = "about:blank") => {
-    const tab = createTab(url);
+  const addTab = useCallback((url = "about:blank", routeId?: string) => {
+    const tab = { ...createTab(url), id: routeId || crypto.randomUUID() };
     setTabs((current) => [...current, tab]);
     setActiveTabId(tab.id);
     setInspector(null);
@@ -198,6 +194,21 @@ export function BrowserWorkspace({
           setActiveTabId(activeTab.id);
           return;
         }
+        if (command.routeId) {
+          setTabs((current) => {
+            const existing = current.find((tab) => tab.id === command.routeId);
+            if (existing) {
+              return current.map((tab) =>
+                tab.id === command.routeId
+                  ? { ...tab, url, loading: true, lastActiveAt: Date.now() }
+                  : tab,
+              );
+            }
+            return [...current, { ...createTab(url), id: command.routeId! }];
+          });
+          setActiveTabId(command.routeId);
+          return;
+        }
         addTab(url);
       }),
     [activeTab.id, activeTab.url, addTab, updateTab],
@@ -209,9 +220,37 @@ export function BrowserWorkspace({
     setAddress(activeTab.url === "about:blank" ? "" : activeTab.url);
     setZoomFactor(1);
     void browserBridge
-      .invoke("activate", { tabId: activeTab.id })
+      .invoke("create", {
+        routeId: activeTab.id,
+        threadId: "browser",
+        url: activeTab.url,
+      })
       .catch(() => undefined);
   }, [activeTab.id, activeTab.url]);
+
+  useEffect(
+    () =>
+      browserBridge.onState((state) => {
+        setTabs((current) =>
+          current.map((tab) => {
+            const route = state.tabs.find((item) => item.routeId === tab.id);
+            return route
+              ? {
+                  ...tab,
+                  url: route.url,
+                  title: route.title,
+                  faviconUrl: route.faviconUrl,
+                  loading: route.loading,
+                  canGoBack: route.canGoBack,
+                  canGoForward: route.canGoForward,
+                  crashed: route.crashed,
+                }
+              : tab;
+          }),
+        );
+      }),
+    [],
+  );
 
   useEffect(() => {
     const unsubscribe = browserBridge.onEvent((event) => {
@@ -328,6 +367,10 @@ export function BrowserWorkspace({
         return;
       }
       updateTab(activeTab.id, { url, loading: true, crashed: false });
+      await browserBridge.invoke("navigate", {
+        routeId: activeTab.id,
+        url,
+      });
     },
     [activeTab.id, updateTab],
   );
@@ -352,7 +395,9 @@ export function BrowserWorkspace({
         }
         return next;
       });
-      void browserBridge.invoke("unregister", { tabId }).catch(() => undefined);
+      void browserBridge
+        .invoke("unregister", { routeId: tabId })
+        .catch(() => undefined);
     },
     [activeTabId],
   );
@@ -509,16 +554,15 @@ export function BrowserWorkspace({
 
       <div className={`browser-stage ${inspector ? "has-inspector" : ""}`}>
         <div className="browser-guest-stack">
-          {residentTabs
-            .filter((tab) => tab.url !== "about:blank")
-            .map((tab) => (
-              <BrowserGuest
-                active={tab.id === activeTab.id}
-                key={tab.id}
-                tab={tab}
-                onState={updateTab}
-              />
-            ))}
+          <BrowserNativeSurface
+            activeTab={activeTab}
+            visible={
+              visible &&
+              !inspector &&
+              !activeTab.crashed &&
+              activeTab.url !== "about:blank"
+            }
+          />
           {activeTab.url === "about:blank" ? (
             <BrowserHome onNavigate={navigate} />
           ) : null}
@@ -551,133 +595,65 @@ export function BrowserWorkspace({
   );
 }
 
-function BrowserGuest({
-  tab,
-  active,
-  onState,
+function BrowserNativeSurface({
+  activeTab,
+  visible,
 }: {
-  tab: BrowserTabState;
-  active: boolean;
-  onState: (tabId: string, patch: Partial<BrowserTabState>) => void;
+  activeTab: BrowserTabState;
+  visible: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const guestRef = useRef<BrowserWebviewElement | null>(null);
-  const guestReadyRef = useRef(false);
-  const targetUrlRef = useRef(tab.url);
-  const initialUrl = useRef(tab.url);
-  const activeRef = useRef(active);
-
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-
-  useEffect(() => {
-    targetUrlRef.current = tab.url;
-    const guest = guestRef.current;
-    if (!guest || !guestReadyRef.current) return;
-    loadGuestUrl(guest, tab.url, (message) =>
-      onState(tab.id, { loading: false, title: message }),
-    );
-  }, [onState, tab.id, tab.url]);
 
   useLayoutEffect(() => {
-    const container = host.current;
-    if (!container) return;
-    const guest = document.createElement("webview") as BrowserWebviewElement;
-    guestRef.current = guest;
-    guest.className = "browser-webview";
-    guest.setAttribute("partition", PARTITION);
-    guest.setAttribute("src", initialUrl.current);
-    guest.setAttribute(
-      "webpreferences",
-      "contextIsolation=yes,sandbox=yes,nodeIntegration=no",
-    );
-
-    const didAttach = () => {
-      void browserBridge
-        .invoke("register", {
-          tabId: tab.id,
-          webContentsId: guest.getWebContentsId(),
-        })
-        .then((value) => onState(tab.id, value as Partial<BrowserTabState>))
-        .then(() =>
-          activeRef.current
-            ? browserBridge.invoke("activate", { tabId: tab.id })
-            : undefined,
-        )
-        .catch((cause) =>
-          onState(tab.id, {
-            loading: false,
-            crashed: true,
-            title: errorMessage(cause),
-          }),
-        );
-    };
-    const domReady = () => {
-      guestReadyRef.current = true;
-      loadGuestUrl(guest, targetUrlRef.current, (message) =>
-        onState(tab.id, { loading: false, title: message }),
-      );
-    };
-    const start = () => onState(tab.id, { loading: true, crashed: false });
-    const stop = () => onState(tab.id, { loading: false });
-    const navigate = (event: Event) => {
-      const value = event as Event & { url?: string };
-      onState(tab.id, {
-        url: value.url || guest.getURL(),
+    const element = host.current;
+    if (!element) return;
+    let animationFrame = 0;
+    const publishBounds = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(() => {
+        const rect = element.getBoundingClientRect();
+        void browserBridge
+          .invoke("surface-bounds", {
+            routeId: activeTab.id,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            scaleFactor: window.devicePixelRatio || 1,
+            visible,
+            interactive: visible,
+          })
+          .catch(() => undefined);
       });
     };
-    const title = (event: Event) => {
-      const value = event as Event & { title?: string };
-      onState(tab.id, { title: value.title || guest.getTitle() });
-    };
-    const favicon = (event: Event) => {
-      const value = event as Event & { favicons?: string[] };
-      onState(tab.id, { faviconUrl: value.favicons?.[0] ?? null });
-    };
-    const crashed = () => onState(tab.id, { crashed: true, loading: false });
-
-    guest.addEventListener("did-attach", didAttach);
-    guest.addEventListener("dom-ready", domReady);
-    guest.addEventListener("did-start-loading", start);
-    guest.addEventListener("did-stop-loading", stop);
-    guest.addEventListener("did-navigate", navigate);
-    guest.addEventListener("did-navigate-in-page", navigate);
-    guest.addEventListener("page-title-updated", title);
-    guest.addEventListener("page-favicon-updated", favicon);
-    guest.addEventListener("render-process-gone", crashed);
-    container.append(guest);
-
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(publishBounds);
+    observer?.observe(element);
+    window.addEventListener("resize", publishBounds);
+    window.addEventListener("scroll", publishBounds, true);
+    publishBounds();
     return () => {
-      guestRef.current = null;
-      guestReadyRef.current = false;
-      guest.remove();
+      observer?.disconnect();
+      cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", publishBounds);
+      window.removeEventListener("scroll", publishBounds, true);
       void browserBridge
-        .invoke("unregister", { tabId: tab.id })
+        .invoke("surface-bounds", {
+          routeId: activeTab.id,
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          visible: false,
+          interactive: false,
+        })
         .catch(() => undefined);
     };
-  }, [onState, tab.id]);
+  }, [activeTab.id, visible]);
 
-  return (
-    <div
-      ref={host}
-      className={`browser-guest ${active ? "is-active" : ""}`}
-      aria-hidden={!active}
-    />
-  );
-}
-
-function loadGuestUrl(
-  guest: BrowserWebviewElement,
-  url: string,
-  onError: (message: string) => void,
-) {
-  try {
-    if (guest.getURL() === url) return;
-    void guest.loadURL(url).catch((cause) => onError(errorMessage(cause)));
-  } catch (cause) {
-    onError(errorMessage(cause));
-  }
+  return <div ref={host} className="browser-guest is-active" />;
 }
 
 function BrowserHome({

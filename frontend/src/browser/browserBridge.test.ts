@@ -49,6 +49,34 @@ describe("normalizeBrowserAddress", () => {
     stopReceiver();
   });
 
+  it("preserves the native route id supplied by the main-process browser", () => {
+    let deliver: ((payload: unknown) => void) | undefined;
+    window.onpeopleBrowser = {
+      invoke: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      onAgentCommand: vi.fn((handler) => {
+        deliver = handler as (payload: unknown) => void;
+        return () => undefined;
+      }),
+    };
+
+    const stopReceiver = browserBridge.receiveAgentCommands(() => undefined);
+    const listener = vi.fn();
+    const stopListener = browserBridge.onAgentCommand(listener);
+    deliver?.({
+      id: "agent-command",
+      kind: "open",
+      routeId: "native-route",
+      url: "https://example.com/weather",
+    });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ routeId: "native-route" }),
+    );
+    stopListener();
+    stopReceiver();
+  });
+
   it("deduplicates retried agent commands while the browser workspace mounts", () => {
     let deliver: ((payload: unknown) => void) | undefined;
     window.onpeopleBrowser = {

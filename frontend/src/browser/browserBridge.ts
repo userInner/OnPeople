@@ -1,11 +1,35 @@
 import type { BrowserHostEvent } from "./types";
 import { desktopApi } from "../lib/desktopClient";
 import type { BrowserAction } from "../bindings/BrowserAction";
+import type { DesktopBrowserCommand } from "../bindings/DesktopBrowserCommand";
 
 export interface BrowserAgentCommand {
   id?: string;
   kind: "open";
+  routeId?: string;
   url: string;
+}
+
+export interface BrowserNativeRoute {
+  routeId: string;
+  threadId: string;
+  url: string;
+  title: string;
+  faviconUrl: string | null;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  crashed: boolean;
+}
+
+export interface BrowserNativeState {
+  hostReady: boolean;
+  hostStatus: string;
+  hostError: string | null;
+  hostErrorKind: string | null;
+  activeRouteId: string | null;
+  tabs: BrowserNativeRoute[];
+  profilePath: string;
 }
 
 const pendingAgentCommands: BrowserAgentCommand[] = [];
@@ -40,7 +64,7 @@ async function withTimeout<T>(
 
 export const browserBridge = {
   available(): boolean {
-    return typeof window.onpeopleBrowser?.invoke === "function";
+    return window.onpeopleElectron?.isElectron === true;
   },
 
   invoke<T>(
@@ -57,8 +81,12 @@ export const browserBridge = {
       "session-status": "sessionStatus",
       "clear-site-data": "clearSession",
       "clear-all-data": "clearAllData",
+      downloads: "downloads",
+      "show-download": "showDownload",
+      "open-external": "openExternal",
+      zoom: "zoom",
+      recover: "recover",
       activate: "activateTab",
-      unregister: "detachTab",
     };
     const action = actionByCommand[command];
     if (action) {
@@ -70,15 +98,75 @@ export const browserBridge = {
         timeoutMs,
       );
     }
-    if (!window.onpeopleBrowser) return Promise.reject(unavailable());
+    const routeId = String(payload.routeId ?? payload.tabId ?? "");
+    if (command === "state") {
+      return withTimeout(
+        desktopApi.request("browser.state", {}) as Promise<T>,
+        timeoutMs,
+      );
+    }
+    if (command === "restart") {
+      return withTimeout(
+        desktopApi.request("browser.restart", {}) as Promise<T>,
+        timeoutMs,
+      );
+    }
+    if (command === "surface-bounds") {
+      return withTimeout(
+        desktopApi.request("browser.surface.bounds", {
+          routeId,
+          x: Number(payload.x) || 0,
+          y: Number(payload.y) || 0,
+          width: Number(payload.width) || 1,
+          height: Number(payload.height) || 1,
+          scaleFactor: Number(payload.scaleFactor) || 1,
+          visible: payload.visible === true,
+          interactive: payload.interactive !== false,
+        }) as Promise<T>,
+        timeoutMs,
+      );
+    }
+    const commandName = {
+      create: "createRoute",
+      navigate: "navigate",
+      stop: "stop",
+      unregister: "closeRoute",
+      "dom-snapshot": "domSnapshot",
+      "visual-snapshot": "visualSnapshot",
+      "developer-tools": "developerInspect",
+    }[command];
+    if (!commandName) return Promise.reject(unavailable());
+    const browserCommand = {
+      command: commandName,
+      payload:
+        commandName === "createRoute"
+          ? {
+              routeId,
+              threadId: String(payload.threadId ?? "browser"),
+              url: String(payload.url ?? "about:blank"),
+            }
+          : commandName === "navigate"
+            ? { routeId, url: String(payload.url ?? "about:blank") }
+            : { routeId },
+    } as DesktopBrowserCommand;
     return withTimeout(
-      window.onpeopleBrowser.invoke(command, payload) as Promise<T>,
+      desktopApi.request("browser.command", {
+        command: browserCommand,
+      }) as Promise<T>,
       timeoutMs,
     );
   },
 
   onEvent(handler: (event: BrowserHostEvent) => void): () => void {
     return window.onpeopleBrowser?.onEvent(handler) ?? (() => undefined);
+  },
+
+  onState(handler: (state: BrowserNativeState) => void): () => void {
+    return (
+      window.onpeopleElectron?.on("browser:state", (payload) =>
+        handler(payload as BrowserNativeState),
+      ) ?? (() => undefined)
+    );
   },
 
   receiveAgentCommands(

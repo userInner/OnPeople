@@ -8,8 +8,7 @@ files:
   - electron-spike/main.mjs
   - electron-spike/preload.cjs
   - electron-spike/browser-agent-bridge.mjs
-  - electron-spike/browser-host.mjs
-  - electron-spike/browser-page-preload.cjs
+  - electron-spike/browser-controller.mjs
   - electron-spike/rust-bridge.mjs
   - electron-spike/shell-adapter.mjs
   - package.json

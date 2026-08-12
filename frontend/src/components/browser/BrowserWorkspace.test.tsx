@@ -49,4 +49,11 @@ describe("BrowserWorkspace", () => {
     expect(screen.getByRole("tab")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "地址和搜索" })).toBeVisible();
   });
+
+  it("does not mount a renderer webview for browser pages", () => {
+    render(<BrowserWorkspace onBack={() => undefined} />);
+
+    expect(document.querySelector("webview")).toBeNull();
+    expect(document.querySelector(".browser-guest")).toBeInTheDocument();
+  });
 });

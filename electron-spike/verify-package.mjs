@@ -18,7 +18,6 @@ const archivePath = path.join(
 const sourceEntries = [
   path.join(moduleRoot, "main.mjs"),
   path.join(moduleRoot, "preload.cjs"),
-  path.join(moduleRoot, "browser-page-preload.cjs"),
 ];
 
 if (!existsSync(archivePath)) {

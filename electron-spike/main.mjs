@@ -5,16 +5,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  session,
+  shell,
+  WebContentsView,
+} from "electron";
 
 import {
-  ElectronBrowserHost,
+  browserProfilePath,
+  ElectronBrowserController,
   normalizeBrowserAddress,
-} from "./browser-host.mjs";
-import {
-  BrowserAgentBridge,
-  waitForBrowserPage,
-} from "./browser-agent-bridge.mjs";
+} from "./browser-controller.mjs";
+import { BrowserAgentBridge } from "./browser-agent-bridge.mjs";
 import { RustBridge } from "./rust-bridge.mjs";
 import { ElectronShellAdapter } from "./shell-adapter.mjs";
 
@@ -34,7 +39,7 @@ const STARTUP_REQUEST_TIMEOUT_MS = 12_000;
 let appReadyMs = null;
 let rendererReadyMs = null;
 let mainWindow = null;
-let browserHost = null;
+let browserController = null;
 let windowCrashCount = 0;
 let browserAgentRendererReady = false;
 const pendingBrowserAgentCommands = [];
@@ -110,35 +115,50 @@ async function bootstrap() {
   };
   const browserAgentBridge = new BrowserAgentBridge({
     handler: async (request) => {
-      if (!browserHost) throw new Error("内嵌浏览器尚未就绪");
+      if (!browserController) throw new Error("内嵌浏览器尚未就绪");
       const command = String(request?.command ?? "");
       const payload = request?.payload ?? {};
       if (command === "open") {
         const url = normalizeBrowserAddress(payload.urlOrQuery ?? payload.url);
+        const routeId = `browser-${randomUUID()}`;
+        await browserController.handle("browser.command", {
+          command: {
+            command: "createRoute",
+            payload: { routeId, threadId: "agent", url },
+          },
+        });
         const browserCommand = {
           id: `browser-open-${randomUUID()}`,
           kind: "open",
+          routeId,
           url,
         };
         deliverBrowserAgentCommand(browserCommand);
-        const page = await waitForBrowserPage(browserHost, url, 12_000, () =>
-          deliverBrowserAgentCommand(browserCommand),
-        );
-        return browserHost.handle("dom-snapshot", { tabId: page.tabId });
+        return browserController.handle("browser.command", {
+          command: { command: "domSnapshot", payload: { routeId } },
+        });
       }
-      const state = browserHost.state();
-      const tabId = String(payload.tabId ?? state.activeTabId ?? "");
-      if (!tabId) throw new Error("请先打开一个内嵌浏览器页面");
+      const state = browserController.state();
+      const routeId = String(
+        payload.routeId ?? payload.tabId ?? state.activeRouteId ?? "",
+      );
+      if (!routeId) throw new Error("请先打开一个内嵌浏览器页面");
       const mapped = {
-        state: "state",
-        dom_snapshot: "dom-snapshot",
-        click: "agent-click",
-        type: "agent-type",
-        back: "back",
-        reload: "reload",
+        dom_snapshot: { command: "domSnapshot", payload: { routeId } },
+        click: {
+          command: "click",
+          payload: { routeId, selector: payload.selector },
+        },
+        type: {
+          command: "fill",
+          payload: { routeId, selector: payload.selector, value: payload.text },
+        },
+        back: { command: "back", payload: { routeId } },
+        reload: { command: "reload", payload: { routeId } },
       }[command];
+      if (command === "state") return state;
       if (!mapped) throw new Error(`不支持的 Agent 浏览器操作: ${command}`);
-      return browserHost.handle(mapped, { tabId, ...payload });
+      return browserController.handle("browser.command", { command: mapped });
     },
   });
   process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE = await browserAgentBridge.start();
@@ -154,6 +174,49 @@ async function bootstrap() {
   });
   await rustBridge.start();
   rustBridge.onEvent((event) => emit("desktop:event", event));
+
+  const browserPartition = "persist:onpeople-browser";
+  const browserSession = session.fromPartition(browserPartition);
+  browserSession.setPermissionRequestHandler(
+    (_contents, permission, callback) =>
+      callback(permission === "clipboard-sanitized-write"),
+  );
+  const browserDownloads = new Map();
+  browserSession.on("will-download", (_event, item, contents) => {
+    const id = randomUUID();
+    const downloadDirectory =
+      process.env.ONPEOPLE_BROWSER_DOWNLOAD_DIR || app.getPath("downloads");
+    item.setSavePath(path.join(downloadDirectory, item.getFilename()));
+    const startedAt = Date.now();
+    const snapshot = (state = item.getState()) => ({
+      id,
+      tabId:
+        browserController
+          ?.state()
+          .tabs.find((tab) => browserController.webContents(tab.routeId) === contents)
+          ?.routeId ?? null,
+      filename: item.getFilename(),
+      url: item.getURL(),
+      path: item.getSavePath() || null,
+      state,
+      receivedBytes: item.getReceivedBytes(),
+      totalBytes: item.getTotalBytes(),
+      startedAt,
+      updatedAt: Date.now(),
+    });
+    browserDownloads.set(id, snapshot());
+    emit("browser:event", { kind: "download-started", download: snapshot() });
+    item.on("updated", () => {
+      const download = snapshot();
+      browserDownloads.set(id, download);
+      emit("browser:event", { kind: "download-progress", download });
+    });
+    item.once("done", (_doneEvent, state) => {
+      const download = { ...snapshot(state), path: item.getSavePath() || null };
+      browserDownloads.set(id, download);
+      emit("browser:event", { kind: "download-finished", download });
+    });
+  });
 
   let shellAdapter = null;
   const createWindow = () => {
@@ -171,7 +234,7 @@ async function bootstrap() {
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
-        webviewTag: true,
+        webviewTag: false,
       },
     });
     window.webContents.setWindowOpenHandler(({ url }) => {
@@ -208,13 +271,16 @@ async function bootstrap() {
   const attachDesktopWindow = () => {
     browserAgentRendererReady = false;
     mainWindow = createWindow();
-    browserHost?.close();
-    browserHost = new ElectronBrowserHost({
+    browserController?.close();
+    browserController = new ElectronBrowserController({
       window: mainWindow,
+      WebContentsView,
+      partition: browserPartition,
+      profilePath: browserProfilePath(app.getPath("userData")),
       emit,
-      preloadPath: path.join(moduleRoot, "browser-page-preload.cjs"),
+      idleDestroyMs:
+        Number(process.env.ONPEOPLE_BROWSER_IDLE_DESTROY_MS) || 60_000,
     });
-    browserHost.start();
     shellAdapter = new ElectronShellAdapter({
       window: mainWindow,
       requestRust: (request) => rustBridge.request(request),
@@ -253,76 +319,29 @@ async function bootstrap() {
       return responseFailure(request, error);
     }
   };
-
-  const routeId = (value = {}) =>
-    String(value.routeId ?? value.tabId ?? browserHost?.state().activeTabId ?? "");
-  const handleBrowserCommand = async (command) => {
-    const kind = String(command?.command ?? "");
-    const payload = command?.payload ?? {};
-    const tabId = routeId(payload);
-    const mapped = {
-      createRoute: ["navigate", { tabId: payload.routeId, url: payload.url }],
-      navigate: ["navigate", { tabId, url: payload.url }],
-      back: ["back", { tabId }],
-      forward: ["forward", { tabId }],
-      reload: ["reload", { tabId }],
-      resize: ["surface-bounds", { ...payload, tabId }],
-      click: ["agent-click", { tabId, selector: payload.selector }],
-      fill: ["agent-type", { tabId, selector: payload.selector, text: payload.value }],
-      select: ["select", { tabId, selector: payload.selector, value: payload.value }],
-      press: ["press", { tabId, key: payload.key }],
-      scroll: ["scroll", { tabId, x: payload.x, y: payload.y }],
-      hover: ["hover", { tabId, selector: payload.selector }],
-      evaluate: ["evaluate", { tabId, expression: payload.expression }],
-      domSnapshot: ["dom-snapshot", { tabId }],
-      visualSnapshot: ["visual-snapshot", { tabId }],
-      developerInspect: ["developer-tools", { tabId }],
-      closeRoute: ["unregister", { tabId }],
-    }[kind];
-    if (!mapped) throw new Error(`不支持的 Desktop 浏览器命令: ${kind}`);
-    return browserHost.handle(mapped[0], mapped[1]);
-  };
-  const handleBrowserAction = async ({ action, payload = {} }) => {
-    const tabId = routeId(payload);
-    const mapped = {
-      navigate: ["navigate", { tabId, url: payload.url }],
-      back: ["back", { tabId }],
-      forward: ["forward", { tabId }],
-      reload: ["reload", { tabId }],
-      captureVisualSnapshot: ["visual-snapshot", { tabId }],
-      inspectDeveloperState: ["developer-tools", { tabId }],
-      sessionStatus: ["session-status", { tabId }],
-      clearSession: ["clear-site-data", { tabId }],
-      clearAllData: ["clear-all-data", {}],
-      clearSettingsData: ["clear-all-data", {}],
-      activateTab: ["activate", { tabId }],
-      detachTab: ["unregister", { tabId }],
-    }[String(action ?? "")];
-    if (!mapped) throw new Error(`浏览器动作尚未实现: ${action}`);
-    return browserHost.handle(mapped[0], mapped[1]);
-  };
   const handleBrowserDesktopRequest = async (method, params) => {
-    if (!browserHost) throw new Error("浏览器服务尚未就绪");
-    switch (method) {
-      case "browser.state":
-        return browserHost.state();
-      case "browser.restart":
-        return browserHost.handle("restart");
-      case "browser.command":
-        return handleBrowserCommand(params.command);
-      case "browser.surface.bounds":
-        return browserHost.handle("surface-bounds", params);
-      case "browser.annotation.list":
-        return browserHost.handle("annotation-list", params);
-      case "browser.annotation.save":
-        return browserHost.handle("annotation-save", params);
-      case "browser.annotation.delete":
-        return browserHost.handle("annotation-delete", params);
-      case "browser.action":
-        return handleBrowserAction(params);
-      default:
-        throw new Error(`不支持的浏览器 Desktop API: ${method}`);
+    if (!browserController) throw new Error("浏览器服务尚未就绪");
+    if (method === "browser.action") {
+      const action = String(params.action ?? "");
+      if (action === "openExternal") {
+        const result = await browserController.handle(method, params);
+        if (safeExternalUrl(result.url)) await shell.openExternal(result.url);
+        return { ...result, opened: true };
+      }
+      if (action === "downloads") return [...browserDownloads.values()];
+      if (action === "showDownload") {
+        const download = browserDownloads.get(String(params.payload?.id ?? ""));
+        if (download?.path) shell.showItemInFolder(download.path);
+        return { shown: Boolean(download?.path) };
+      }
+      if (action === "inspectDeveloperState") {
+        const result = await browserController.handle(method, params);
+        const routeId = String(params.payload?.routeId ?? "");
+        browserController.webContents(routeId)?.openDevTools({ mode: "detach" });
+        return result;
+      }
     }
+    return browserController.handle(method, params);
   };
 
   ipcMain.handle("onpeople:metrics", () => metrics(rustBridge));
@@ -334,11 +353,47 @@ async function bootstrap() {
     }
   });
   ipcMain.handle("onpeople:browser", async (_event, command, payload = {}) => {
-    if (!browserHost) throw new Error("浏览器服务尚未就绪");
-    return browserHost.handle(command, payload);
-  });
-  ipcMain.on("onpeople:browser-page-event", (event, payload) => {
-    browserHost?.pageEvent(event.sender.id, payload);
+    if (!browserController) throw new Error("浏览器服务尚未就绪");
+    if (command === "state") return browserController.state();
+    const routeId = String(
+      payload.routeId ??
+        payload.tabId ??
+        browserController.state().activeRouteId ??
+        "",
+    );
+    const commandMap = {
+      "dom-snapshot": "domSnapshot",
+      "visual-snapshot": "visualSnapshot",
+      "developer-tools": "developerInspect",
+      back: "back",
+      forward: "forward",
+      reload: "reload",
+      stop: "stop",
+      unregister: "closeRoute",
+    };
+    if (commandMap[command]) {
+      return browserController.handle("browser.command", {
+        command: { command: commandMap[command], payload: { routeId } },
+      });
+    }
+    const actionMap = {
+      "session-status": "sessionStatus",
+      "clear-site-data": "clearSession",
+      "clear-all-data": "clearAllData",
+      downloads: "downloads",
+      "show-download": "showDownload",
+      "open-external": "openExternal",
+      zoom: "zoom",
+      recover: "recover",
+      activate: "activateTab",
+    };
+    if (actionMap[command]) {
+      return handleBrowserDesktopRequest("browser.action", {
+        action: actionMap[command],
+        payload: { ...payload, routeId },
+      });
+    }
+    throw new Error(`旧浏览器 IPC 不支持操作: ${command}`);
   });
   ipcMain.handle("onpeople:invoke", async (_event, command, args = {}) => {
     if (command === "desktop_request") return desktopRequest(args.request);
@@ -352,7 +407,7 @@ async function bootstrap() {
   const stopServices = () => {
     if (servicesStopped) return;
     servicesStopped = true;
-    browserHost?.close();
+    browserController?.close();
     browserAgentBridge.close();
     rustBridge.stop();
   };
@@ -417,7 +472,7 @@ async function metrics(rustBridge) {
     rustTransport: rustBridge.transport,
     rustHostRestartCount: rustBridge.restartCount,
     windowCrashCount,
-    browser: browserHost?.state() ?? null,
+    browser: browserController?.state() ?? null,
     processes,
   };
 }

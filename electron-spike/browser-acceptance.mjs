@@ -196,9 +196,23 @@ try {
   await electronApp.evaluate(({ webContents }, webContentsId) => {
     webContents.fromId(webContentsId)?.forcefullyCrashRenderer();
   }, originalAfterCycles.webContentsId);
-  await page.getByText("页面没有正常响应").waitFor();
-  await page.getByRole("button", { name: "重新加载页面" }).click();
-  await page.getByRole("tab", { name: /OnPeople Browser Test/ }).waitFor();
+  await page.waitForFunction(async () => {
+    const value = await window.onpeopleBrowser.invoke("state");
+    return value.crashCount === 1;
+  });
+  const crashedState = await browserInvoke(page, "state");
+  if (crashedState.recoveryCount === 0) {
+    await browserInvoke(page, "recover", {
+      tabId: originalAfterCycles.tabId,
+    });
+  }
+  await page.waitForFunction(async () => {
+    const value = await window.onpeopleBrowser.invoke("state");
+    return value.recoveryCount === 1;
+  });
+  await page
+    .getByRole("tab", { name: /OnPeople Browser Test/, selected: true })
+    .waitFor();
 
   const finalMetrics = await page.evaluate(() =>
     window.onpeopleElectron.metrics(),

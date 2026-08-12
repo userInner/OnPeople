@@ -748,6 +748,9 @@ pub enum DesktopBrowserCommand {
     Reload {
         route_id: String,
     },
+    Stop {
+        route_id: String,
+    },
     Resize {
         route_id: String,
         width: u32,
@@ -886,6 +889,11 @@ pub enum BrowserAction {
     Attach,
     ActivateTab,
     DetachTab,
+    Downloads,
+    ShowDownload,
+    OpenExternal,
+    Zoom,
+    Recover,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

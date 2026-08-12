@@ -38,19 +38,3 @@ export interface BrowserHostEvent {
   download?: BrowserDownload;
   payload?: Record<string, unknown>;
 }
-
-export interface BrowserWebviewElement extends HTMLElement {
-  src: string;
-  loadURL(url: string): Promise<void>;
-  getWebContentsId(): number;
-  focus(): void;
-  reload(): void;
-  stop(): void;
-  goBack(): void;
-  goForward(): void;
-  canGoBack(): boolean;
-  canGoForward(): boolean;
-  getURL(): string;
-  getTitle(): string;
-  setZoomFactor(factor: number): void;
-}

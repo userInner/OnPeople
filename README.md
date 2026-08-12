@@ -1,6 +1,6 @@
 # OnPeople Desktop 0.30.0
 
-OnPeople 0.30.0 的默认生产壳是 Electron 42：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 核心，SQLite WAL 数据层，以及稳定的 154 方法 Desktop API。Electron 通过 JSONL stdio/Unix Socket 调用 Rust sidecar；内置浏览器由 Electron 的隔离持久会话承载，普通外部链接仍可交给系统默认浏览器。Tauri 2.11 生产分支永久保留作为回退目标。
+OnPeople 0.30.0 的默认生产壳是 Electron 42：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 核心，SQLite WAL 数据层，以及稳定的 154 方法 Desktop API。Electron 通过 JSONL stdio/Unix Socket 调用 Rust sidecar；内置浏览器页面由主进程 `WebContentsView` 和隔离持久会话承载，React 只管理标签、地址栏与工具状态，普通外部链接仍可交给系统默认浏览器。Tauri 2.11 生产分支永久保留作为回退目标。
 
 ## 架构
 

@@ -29,7 +29,7 @@ desktop user.
 | Activity trace | Reasoning, commands, tools, files, approvals, input and errors use semantic rows with expandable receipts | `Timeline` | No raw MCP envelope in the default view; Unicode and exit metadata are preserved |
 | Side panel | Task-scoped tabs for browser, review/diff, files/details and output | `UtilityPane` | Opening a browser tool keeps the conversation visible and selects the Browser tab |
 | Bottom panel | Persistent terminal with resize, reopen and process continuity | `TerminalPane` | Output/exit events survive panel hide/show and task switching |
-| Browser | Chromium guest, tabs, navigation, login/session, upload/download, popups, inspection, crash recovery | `BrowserWorkspace`, Electron browser host | Agent and user share the same visible tab/session; no opaque connection spinner |
+| Browser | Main-process Chromium view, tabs, navigation, login/session, upload/download, popups, inspection, crash recovery | `BrowserWorkspace`, `ElectronBrowserController`, `WebContentsView` | Agent and user share one native route/session; React never mounts a second `<webview>` and no opaque connection spinner is shown |
 | Files and diff | Clickable local artifacts, text/image/PDF/media preview, per-file diff and summary | `FilesPane`, `LocalArtifactPreview`, `GitPane` | Local links open in-app first; binary fallback is explicit |
 | Git and review | Status, hunks, commit/push, PR preparation and review submission | `GitPane`, Desktop API | Mutations require clear scope and report the resulting repository state |
 | Approval and input | Inline approval/request cards anchored at the correct chronological position | `Timeline`, task interaction API | Resolution is idempotent and remains correct after reconnect |
@@ -44,4 +44,3 @@ desktop user.
 - Performance is recorded for cold start, idle memory, active task memory, and
   browser-open memory before deciding whether Electron replaces Tauri.
 - The Tauri branch and last known-good tag are never deleted or overwritten.
-
