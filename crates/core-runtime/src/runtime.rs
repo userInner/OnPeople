@@ -5027,7 +5027,7 @@ impl CoreRuntime {
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             };
-            let payload = match event {
+            let mut payload = match event {
                 AppServerEvent::Notification(value) => value,
                 AppServerEvent::ServerRequest(request) => {
                     let event_type = if request.get("method").and_then(Value::as_str)
@@ -5048,6 +5048,7 @@ impl CoreRuntime {
                     "signal": signal,
                 }),
             };
+            normalize_active_turn_ownership(&state, &mut payload);
             update_runtime_state_from_event(&state, &storage, &payload);
             finish_scheduled_run_from_event(&scheduler, &payload);
             update_agent_task_from_event(&storage, &payload);
@@ -5134,6 +5135,48 @@ fn event_thread_id(payload: &Value) -> Option<String> {
                 .and_then(Value::as_str)
         })
         .map(ToOwned::to_owned)
+}
+
+fn normalize_active_turn_ownership(state: &Arc<RwLock<RuntimeInner>>, payload: &mut Value) {
+    let method = payload.get("method").and_then(Value::as_str);
+    if !matches!(
+        method,
+        Some(
+            "item/started"
+                | "item/completed"
+                | "item/agentMessage/delta"
+                | "agent/message/delta"
+                | "item/reasoning/summaryTextDelta"
+                | "item/reasoning/textDelta"
+                | "item/commandExecution/outputDelta"
+                | "command/exec/outputDelta"
+                | "turn/plan/updated"
+        )
+    ) {
+        return;
+    }
+    let Some(event_thread_id) = event_thread_id(payload) else {
+        return;
+    };
+    let active_turn_id = {
+        let current = state.read();
+        if current.runtime_state != "working"
+            || current.current_thread_id.as_deref() != Some(event_thread_id.as_str())
+        {
+            return;
+        }
+        current.current_turn_id.clone()
+    };
+    let Some(active_turn_id) = active_turn_id else {
+        return;
+    };
+    let Some(params) = payload.get_mut("params").and_then(Value::as_object_mut) else {
+        return;
+    };
+    params.insert("turnId".to_owned(), Value::String(active_turn_id.clone()));
+    if let Some(item) = params.get_mut("item").and_then(Value::as_object_mut) {
+        item.insert("turnId".to_owned(), Value::String(active_turn_id));
+    }
 }
 
 fn persist_timeline_item_from_event(
@@ -6498,12 +6541,20 @@ async fn timeline_items_from_rollout(path: &Path, codex_home: &Path) -> Vec<Valu
             }
             continue;
         }
-        let turn_id = payload
-            .pointer("/internal_chat_message_metadata_passthrough/turn_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&current_turn_id)
-            .to_owned();
+        // `task_started` and `turn_context` define the authoritative active
+        // turn. Some Codex app-server builds leak the previous turn id through
+        // response-item passthrough metadata during a queued follow-up. Using
+        // that stale value moves new assistant output above the new user
+        // message when history is restored.
+        let turn_id = if current_turn_id.is_empty() {
+            payload
+                .pointer("/internal_chat_message_metadata_passthrough/turn_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        } else {
+            current_turn_id.clone()
+        };
         let item = match payload_type {
             "message" => rollout_message_item(payload),
             "reasoning" => {
@@ -6897,11 +6948,11 @@ mod tests {
         CoreRuntime, EventBus, EventHistory, MAX_EVENT_REPLAY_LIMIT, apply_turn_policy,
         bundled_connector_catalog, format_review_prompt, github_compare_url, goal_from_app_server,
         is_supported_local_artifact_extension, legacy_exec_items_from_rollout,
-        native_agent_summary, normalize_policy, parse_diff_hunks, persist_timeline_item_from_event,
-        plugin_catalog, policy_request_fields, read_industry_plugin_instructions,
-        rollout_message_item, serialized_event_size, task_capability_instructions,
-        timeline_items_from_rollout, update_agent_task_from_event, validate_external_https_url,
-        validate_remote_catalog_entries,
+        native_agent_summary, normalize_active_turn_ownership, normalize_policy, parse_diff_hunks,
+        persist_timeline_item_from_event, plugin_catalog, policy_request_fields,
+        read_industry_plugin_instructions, rollout_message_item, serialized_event_size,
+        task_capability_instructions, timeline_items_from_rollout, update_agent_task_from_event,
+        validate_external_https_url, validate_remote_catalog_entries,
     };
 
     #[test]
@@ -7199,6 +7250,60 @@ mod tests {
             "tools.exec_command({cmd:\"npm test\"})"
         );
         assert_eq!(items[0]["result"], "secret output");
+    }
+
+    #[test]
+    fn normalizes_stale_stream_item_turn_to_the_active_turn() {
+        let directory = tempdir().expect("temporary directory");
+        let storage = Storage::open_empty(directory.path().join("data")).expect("storage");
+        let runtime = CoreRuntime::new(storage, directory.path().join("runtime")).expect("runtime");
+        {
+            let mut state = runtime.state.write();
+            state.runtime_state = "working".to_owned();
+            state.current_thread_id = Some("thread-weather".to_owned());
+            state.current_turn_id = Some("turn-current".to_owned());
+        }
+        let mut payload = json!({
+            "method": "item/started",
+            "params": {
+                "threadId": "thread-weather",
+                "turnId": "turn-previous",
+                "item": {
+                    "id": "assistant-weather",
+                    "type": "agentMessage",
+                    "turnId": "turn-previous",
+                    "text": "我查一下北京今天的天气。"
+                }
+            }
+        });
+
+        normalize_active_turn_ownership(&runtime.state, &mut payload);
+
+        assert_eq!(payload["params"]["turnId"], "turn-current");
+        assert_eq!(payload["params"]["item"]["turnId"], "turn-current");
+    }
+
+    #[tokio::test]
+    async fn rollout_history_uses_task_started_turn_over_stale_item_metadata() {
+        let directory = tempdir().expect("temporary directory");
+        let codex_home = directory.path().join("codex-home");
+        let sessions = codex_home.join("sessions/2026/08/12");
+        std::fs::create_dir_all(&sessions).expect("session directory");
+        let rollout = sessions.join("rollout-stale-turn.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-current\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"user-current\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"北京\"}],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-current\"}}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"assistant-current\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"我查一下北京今天的天气。\"}],\"phase\":\"commentary\",\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-previous\"}}}\n"
+            ),
+        )
+        .expect("rollout");
+
+        let items = timeline_items_from_rollout(&rollout, &codex_home).await;
+
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|item| item["turnId"] == "turn-current"));
     }
 
     #[tokio::test]
