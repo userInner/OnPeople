@@ -1,10 +1,11 @@
 import { ArrowRight, Check, LoaderCircle, Mail, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { desktopClient } from "../lib/desktopClient";
 import { isCloudAccountState } from "../lib/cloudAccount";
 import { errorMessage } from "../lib/errors";
+import { useDialogFocus } from "../lib/dialogFocus";
 import type { CloudAccountState } from "../types";
 
 type AuthMode = "login" | "register";
@@ -16,6 +17,7 @@ export function AccountAuthPopover({
   onClose: () => void;
   onSuccess: (state: CloudAccountState) => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,6 +25,7 @@ export function AccountAuthPopover({
   const [busy, setBusy] = useState<"submit" | "code" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useDialogFocus(dialogRef, onClose);
 
   useEffect(() => {
     const appRoot = document.getElementById("root");
@@ -105,10 +108,12 @@ export function AccountAuthPopover({
   return createPortal(
     <div className="account-auth-layer" onPointerDown={onClose}>
       <div
+        ref={dialogRef}
         className="account-auth-popover"
         role="dialog"
         aria-label="登录或注册 OnPeople"
         aria-modal="true"
+        tabIndex={-1}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="account-auth-heading">
@@ -201,10 +206,12 @@ export function AccountAuthPopover({
         ) : null}
 
         {error ? (
-          <p className="account-auth-message is-error">{error}</p>
+          <p className="account-auth-message is-error" role="alert">
+            {error}
+          </p>
         ) : null}
         {message ? (
-          <p className="account-auth-message is-success">
+          <p className="account-auth-message is-success" role="status">
             <Check size={13} aria-hidden="true" />
             {message}
           </p>

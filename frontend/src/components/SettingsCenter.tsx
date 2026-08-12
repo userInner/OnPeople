@@ -24,10 +24,11 @@ import {
   Webhook,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { desktopClient } from "../lib/desktopClient";
 import { errorMessage } from "../lib/errors";
+import { useDialogFocus } from "../lib/dialogFocus";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import type {
   AppUpdateState,
@@ -207,6 +208,7 @@ const interactiveSettingsRoutes = new Set<SettingsRoute>([
 ]);
 
 export function SettingsCenter() {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const open = useWorkbenchStore((state) => state.settingsOpen);
   const preferences = useWorkbenchStore((state) => state.preferences);
   const savePreferences = useWorkbenchStore((state) => state.savePreferences);
@@ -232,6 +234,7 @@ export function SettingsCenter() {
     () => useWorkbenchStore.getState().setSettingsOpen(false),
     [],
   );
+  useDialogFocus(dialogRef, close, open);
 
   const applyUpdateState = useCallback((state: AppUpdateState) => {
     const status = state.status.toLocaleLowerCase();
@@ -278,12 +281,7 @@ export function SettingsCenter() {
     if (!open) return;
     setDraft(preferences);
     setSaveState("idle");
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [close, open, preferences]);
+  }, [open, preferences]);
 
   const loadRoute = useCallback(async () => {
     if (!open) return;
@@ -470,10 +468,12 @@ export function SettingsCenter() {
 
   return (
     <div
+      ref={dialogRef}
       className="settings-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="OnPeople 设置"
+      tabIndex={-1}
     >
       <aside className="settings-sidebar">
         <button className="settings-back" type="button" onClick={close}>
@@ -483,6 +483,7 @@ export function SettingsCenter() {
         <label className="settings-search">
           <Search size={14} aria-hidden="true" />
           <input
+            autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索设置…"

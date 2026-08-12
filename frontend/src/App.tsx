@@ -39,6 +39,7 @@ import { TerminalPane } from "./components/tools/TerminalPane";
 import { UtilityPane } from "./components/UtilityPane";
 import { browserBridge } from "./browser/browserBridge";
 import { parseDeepLinkActions } from "./lib/deepLinks";
+import { useDialogFocus } from "./lib/dialogFocus";
 import { desktopClient } from "./lib/desktopClient";
 import { runtimeIssuePresentation } from "./lib/runtimeIssue";
 import { threadForNumberShortcut } from "./lib/threadShortcuts";
@@ -692,7 +693,7 @@ export function App() {
               {error && runtimeIssue ? (
                 <div
                   className={`runtime-warning is-${runtimeIssue.kind}`}
-                  role="status"
+                  role={runtimeIssue.kind === "account" ? "status" : "alert"}
                 >
                   {runtimeIssue.kind === "account" ? (
                     <LogIn size={16} aria-hidden="true" />
@@ -998,8 +999,10 @@ function CommandPalette({
   onToggleSidebar: () => void;
   onToggleUtility: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  useDialogFocus(dialogRef, onClose);
   const actions = useMemo(
     () => [
       {
@@ -1199,10 +1202,12 @@ function CommandPalette({
   return (
     <div className="command-overlay" role="presentation" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
         className="command-palette"
         role="dialog"
         aria-modal="true"
         aria-label="命令面板"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="command-input">
