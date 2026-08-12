@@ -47,7 +47,20 @@ const child = execFile(
     if (error) process.stderr.write(`${error.message}\n`);
   },
 );
-const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+const exitCode = await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    child.kill("SIGTERM");
+    reject(new Error("Electron metrics run did not exit within 30 seconds"));
+  }, 30_000);
+  child.once("error", (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+  child.once("exit", (code) => {
+    clearTimeout(timer);
+    resolve(code);
+  });
+});
 if (exitCode !== 0)
   throw new Error(`Electron app exited with code ${exitCode}`);
 

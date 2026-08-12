@@ -271,11 +271,15 @@ async function bootstrap() {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) attachDesktopWindow();
   });
-  app.on("before-quit", () => {
+  let servicesStopped = false;
+  const stopServices = () => {
+    if (servicesStopped) return;
+    servicesStopped = true;
     browserHost?.close();
     browserAgentBridge.close();
     rustBridge.stop();
-  });
+  };
+  app.on("before-quit", stopServices);
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
@@ -285,7 +289,8 @@ async function bootstrap() {
     setTimeout(
       async () => {
         await persistMetrics(rustBridge);
-        app.quit();
+        stopServices();
+        app.exit(0);
       },
       Number.isFinite(delay) ? delay : 30_000,
     );

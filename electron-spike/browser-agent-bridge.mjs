@@ -6,6 +6,7 @@ const MAX_REQUEST_BYTES = 256 * 1024;
 
 export class BrowserAgentBridge {
   #server = null;
+  #sockets = new Set();
   #handler;
   #address = null;
   #token = randomBytes(32).toString("hex");
@@ -25,6 +26,8 @@ export class BrowserAgentBridge {
   async start() {
     if (this.#server) return this.#address;
     const server = createServer((socket) => {
+      this.#sockets.add(socket);
+      socket.once("close", () => this.#sockets.delete(socket));
       let received = 0;
       let handled = false;
       const lines = createInterface({ input: socket, crlfDelay: Infinity });
@@ -76,6 +79,8 @@ export class BrowserAgentBridge {
   }
 
   close() {
+    for (const socket of this.#sockets) socket.destroy();
+    this.#sockets.clear();
     this.#server?.close();
     this.#server = null;
     this.#address = null;

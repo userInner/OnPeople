@@ -27,3 +27,21 @@ the three-tab resident budget, 30 create/navigate/destroy cycles, Rust host
 stability, renderer stability, and bounded memory growth. `npm run
 electron:measure` records renderer readiness, process memory, package size,
 renderer crashes, and Rust host restarts.
+
+## Latest packaged validation
+
+Validated on 2026-08-12 with the unsigned macOS arm64 package:
+
+- Renderer ready: 266 ms (1,500 ms gate passed).
+- Idle Electron working set: 471.2 MiB; Rust host: 13.4 MiB; total: 484.6 MiB.
+- Browser first-open increment: 130.1 MiB. After 30 create/navigate/destroy
+  cycles, the working set was 39.2 MiB below its first-open value.
+- Zip: 258.1 MiB; installed app: 701.8 MiB.
+- Rust host restarts: 0; main renderer crashes: 0.
+- Browser acceptance: persistent cookies, upload, download, popup, DOM and
+  visual snapshots, deliberate guest crash and recovery, and 30 lifecycle
+  cycles all passed. The deliberate guest crash produced exactly one recovery.
+
+The package step also walks the Electron main/preload dependency closure inside
+`app.asar`. Packaging fails if a locally imported runtime module is absent,
+preventing a missing-module startup dialog from reaching a release artifact.
