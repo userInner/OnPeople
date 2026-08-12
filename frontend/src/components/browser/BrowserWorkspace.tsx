@@ -46,6 +46,18 @@ const DEFAULT_TITLE = "新标签页";
 
 type InspectorView = "dom" | "visual" | "session" | "downloads" | null;
 
+function browserLoadErrorMessage(event: {
+  errorCode?: number;
+  errorDescription?: string;
+  url?: string;
+}): string {
+  const description = event.errorDescription || "ERR_FAILED";
+  const code =
+    typeof event.errorCode === "number" ? ` (${event.errorCode})` : "";
+  const target = event.url ? ` loading '${event.url}'` : "";
+  return `${description}${code}${target}`;
+}
+
 function createTab(url = "about:blank"): BrowserTabState {
   return {
     id: crypto.randomUUID(),
@@ -145,6 +157,8 @@ export function BrowserWorkspace({
     [activeTabId, tabs],
   );
   const activeTabIdRef = useRef(activeTab.id);
+  const activeTabUrlRef = useRef(activeTab.url);
+  activeTabUrlRef.current = activeTab.url;
 
   useEffect(() => {
     const previous = activeTabIdRef.current;
@@ -220,14 +234,17 @@ export function BrowserWorkspace({
   useEffect(() => {
     setAddress(activeTab.url === "about:blank" ? "" : activeTab.url);
     setZoomFactor(1);
+  }, [activeTab.url]);
+
+  useEffect(() => {
     void browserBridge
       .invoke("create", {
         routeId: activeTab.id,
         threadId: "browser",
-        url: activeTab.url,
+        url: activeTabUrlRef.current,
       })
       .catch(() => undefined);
-  }, [activeTab.id, activeTab.url]);
+  }, [activeTab.id]);
 
   useEffect(
     () =>
@@ -267,6 +284,13 @@ export function BrowserWorkspace({
         return;
       }
       if (!event.tabId) return;
+      if (event.kind === "load-failed") {
+        if (event.tabId === activeTabIdRef.current) {
+          setError(browserLoadErrorMessage(event));
+        }
+        updateTab(event.tabId, { loading: false });
+        return;
+      }
       const patch: Partial<BrowserTabState> = {};
       if (typeof event.url === "string" && event.url) patch.url = event.url;
       if (typeof event.title === "string" && event.title)
@@ -371,6 +395,7 @@ export function BrowserWorkspace({
   const navigate = useCallback(
     async (value: string) => {
       const url = normalizeBrowserAddress(value);
+      setError(null);
       if (url === "about:blank") {
         updateTab(activeTab.id, {
           url,

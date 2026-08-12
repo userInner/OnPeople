@@ -18,8 +18,22 @@ const downloadRoot = path.join(temporaryRoot, "downloads");
 const uploadPath = path.join(temporaryRoot, "upload.txt");
 await mkdir(downloadRoot, { recursive: true });
 await writeFile(uploadPath, "OnPeople upload acceptance\n");
+let redirectRequestCount = 0;
 
 const server = createServer((request, response) => {
+  if (request.url === "/redirect") {
+    redirectRequestCount += 1;
+    response.writeHead(302, { Location: "/redirected" });
+    response.end();
+    return;
+  }
+  if (request.url === "/redirected") {
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    response.end(
+      "<!doctype html><html><head><title>Redirect complete</title></head><body><h1>Redirect complete</h1></body></html>",
+    );
+    return;
+  }
   if (request.url === "/download.txt") {
     response.writeHead(200, {
       "Content-Type": "text/plain; charset=utf-8",
@@ -123,6 +137,19 @@ try {
   assert(
     domSnapshot.nodes.some((node) => node.name === "OnPeople Browser Test"),
   );
+
+  await navigate(page, `${fixtureUrl}redirect`, "Redirect complete");
+  assert.equal(
+    await page.locator(".browser-error").count(),
+    0,
+    "a successful server redirect must not surface ERR_ABORTED",
+  );
+  assert.equal(
+    redirectRequestCount,
+    1,
+    "creating a native browser view must not navigate to the redirect source twice",
+  );
+  await navigate(page, fixtureUrl);
 
   const visualSnapshot = await browserInvoke(page, "visual-snapshot", {
     tabId: active.tabId,
@@ -291,14 +318,14 @@ try {
   await rm(temporaryRoot, { recursive: true, force: true });
 }
 
-async function navigate(page, url) {
+async function navigate(page, url, expectedTitle = "OnPeople Browser Test") {
   const addressInput = page.getByLabel("地址和搜索");
   await addressInput.fill(url);
   await addressInput.evaluate((input) => input.form?.requestSubmit());
   try {
     await page
       .getByRole("tab", { selected: true })
-      .filter({ hasText: "OnPeople Browser Test" })
+      .filter({ hasText: expectedTitle })
       .waitFor({ timeout: 5_000 });
   } catch (error) {
     process.stderr.write(

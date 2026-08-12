@@ -2,6 +2,57 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 const DEFAULT_IDLE_DESTROY_MS = 60_000;
+const NAVIGATION_PENDING_RETRY_MS = 50;
+const NAVIGATION_PENDING_RETRY_LIMIT = 3;
+
+function normalizedNetworkError(value) {
+  return String(value ?? "")
+    .replace(/^net::/i, "")
+    .trim()
+    .toUpperCase();
+}
+
+export function shouldIgnoreBrowserLoadFailure({
+  errorCode,
+  errorDescription,
+  isMainFrame,
+}) {
+  const description = normalizedNetworkError(errorDescription);
+  return (
+    !isMainFrame ||
+    Number(errorCode) === -3 ||
+    description === "ERR_ABORTED" ||
+    description === "ERR_BLOCKED_BY_CLIENT"
+  );
+}
+
+export function isExpectedBrowserNavigationCancellation(error) {
+  if (!(error instanceof Error)) return false;
+  return (
+    /ERR_ABORTED|\(-3\) loading '/.test(error.message) ||
+    error.message === "Navigation failed with error code -3."
+  );
+}
+
+export function isBrowserNavigationPending(error) {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes("navigation is already pending")
+  );
+}
+
+function isBrowserNetworkLoadError(error) {
+  return (
+    error instanceof Error &&
+    (/\bERR_[A-Z_]+\b/.test(error.message) ||
+      /\(-?\d+\) loading '/.test(error.message) ||
+      /^Navigation failed with error code -?\d+\.$/.test(error.message))
+  );
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 export function isSafeBrowserUrl(value) {
   try {
@@ -47,6 +98,9 @@ function routeState(routeId, threadId, url) {
     interactive: false,
     destroyTimer: null,
     generation: 0,
+    navigationVersion: 0,
+    pendingUrl: null,
+    loadErrorKey: null,
     lastActiveAt: Date.now(),
   };
 }
@@ -460,11 +514,56 @@ export class ElectronBrowserController {
   async #navigate(route, url) {
     this.#activate(route);
     route.url = url;
+    route.pendingUrl = url;
+    route.loadErrorKey = null;
+    route.navigationVersion += 1;
     route.crashed = false;
+    const hadLiveView = Boolean(
+      route.view && !route.view.webContents.isDestroyed(),
+    );
     const contents = (await this.#ensureView(route)).webContents;
-    if (contents.getURL() !== url) await contents.loadURL(url);
+    if (hadLiveView && contents.getURL() !== url) {
+      await this.#loadUrl(route, contents, url, route.navigationVersion);
+    }
     this.#syncRoute(route);
     this.#publishState();
+  }
+
+  async #loadUrl(route, contents, url, navigationVersion, attempt = 0) {
+    try {
+      await contents.loadURL(url);
+      return true;
+    } catch (error) {
+      if (
+        isExpectedBrowserNavigationCancellation(error) ||
+        route.navigationVersion !== navigationVersion
+      ) {
+        return false;
+      }
+      if (
+        isBrowserNavigationPending(error) &&
+        attempt < NAVIGATION_PENDING_RETRY_LIMIT
+      ) {
+        await delay(NAVIGATION_PENDING_RETRY_MS);
+        if (
+          contents.isDestroyed() ||
+          route.navigationVersion !== navigationVersion
+        ) {
+          return false;
+        }
+        return this.#loadUrl(
+          route,
+          contents,
+          url,
+          navigationVersion,
+          attempt + 1,
+        );
+      }
+      // Electron reports real network failures through did-fail-load with
+      // structured fields. Do not leak its raw loadURL rejection into React.
+      if (isBrowserNetworkLoadError(error)) return false;
+      throw error;
+    }
   }
 
   async #ensureView(route) {
@@ -530,6 +629,13 @@ export class ElectronBrowserController {
       route.crashed = false;
       this.#publishState();
     });
+    contents.on("did-start-navigation", (details) => {
+      if (details?.isMainFrame === false) return;
+      route.pendingUrl = details?.url || route.pendingUrl || route.url;
+      route.loadErrorKey = null;
+      route.loading = true;
+      this.#publishState();
+    });
     contents.on("did-stop-loading", () => {
       this.#syncRoute(route);
       this.#publishState();
@@ -542,6 +648,50 @@ export class ElectronBrowserController {
       route.url = url;
       this.#publishState();
     });
+    contents.on("did-redirect-navigation", (details) => {
+      if (details?.isMainFrame === false) return;
+      route.pendingUrl = details?.url || route.pendingUrl;
+      if (details?.url) route.url = details.url;
+      route.loadErrorKey = null;
+      this.#publishState();
+    });
+    contents.on(
+      "did-fail-load",
+      (
+        _event,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      ) => {
+        if (
+          shouldIgnoreBrowserLoadFailure({
+            errorCode,
+            errorDescription,
+            isMainFrame,
+          })
+        ) {
+          return;
+        }
+        const failedUrl =
+          validatedURL || route.pendingUrl || route.url || contents.getURL();
+        if (!failedUrl || failedUrl === "about:blank") return;
+        const loadErrorKey = `${errorCode}:${errorDescription}:${failedUrl}`;
+        if (route.loadErrorKey === loadErrorKey) return;
+        route.loadErrorKey = loadErrorKey;
+        route.pendingUrl = null;
+        route.loading = false;
+        this.#emit("browser:event", {
+          kind: "load-failed",
+          tabId: route.routeId,
+          url: failedUrl,
+          errorCode,
+          errorDescription: normalizedNetworkError(errorDescription),
+          isMainFrame: true,
+        });
+        this.#publishState();
+      },
+    );
     contents.on("page-title-updated", (_event, title) => {
       route.title = title || "新标签页";
       this.#publishState();
@@ -592,7 +742,16 @@ export class ElectronBrowserController {
         }
       }, 250);
     });
-    if (route.url !== "about:blank") await contents.loadURL(route.url);
+    if (route.url !== "about:blank") {
+      route.navigationVersion += 1;
+      route.pendingUrl = route.url;
+      await this.#loadUrl(
+        route,
+        contents,
+        route.url,
+        route.navigationVersion,
+      );
+    }
     return view;
   }
 
@@ -601,6 +760,7 @@ export class ElectronBrowserController {
     if (!contents || contents.isDestroyed()) return;
     route.loading = contents.isLoading();
     route.url = contents.getURL() || route.url || "about:blank";
+    if (!route.loading && route.url !== "about:blank") route.pendingUrl = null;
     route.title = contents.getTitle() || "新标签页";
     route.canGoBack = contents.navigationHistory.canGoBack();
     route.canGoForward = contents.navigationHistory.canGoForward();

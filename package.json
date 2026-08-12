@@ -38,6 +38,7 @@
     "electron:package": "npm run electron:rust:release && npm run build && npm run electron:stage && electron-builder --config electron-spike/electron-builder.yml --mac dir zip && npm run electron:package:verify",
     "electron:package:verify": "node electron-spike/verify-package.mjs",
     "electron:measure": "node electron-spike/measure.mjs",
+    "electron:browser:test": "node --test electron-spike/browser-controller.test.mjs",
     "electron:browser:acceptance": "node electron-spike/browser-acceptance.mjs",
     "check": "npm run check:core && npm run test:e2e",
     "check:core": "npm run audit && npm run format:check && npm run lint && npm run test && npm run test:eval-harness && npm run build && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",

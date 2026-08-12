@@ -12,6 +12,7 @@ export default mergeConfig(
         "**/node_modules/**",
         "**/dist/**",
         "frontend/e2e/**",
+        "electron-spike/**/*.test.mjs",
         "scripts/**/*.test.mjs",
       ],
     },

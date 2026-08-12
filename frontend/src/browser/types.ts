@@ -35,6 +35,9 @@ export interface BrowserHostEvent {
   faviconUrl?: string | null;
   requestedUrl?: string;
   reason?: string;
+  errorCode?: number;
+  errorDescription?: string;
+  isMainFrame?: boolean;
   download?: BrowserDownload;
   payload?: Record<string, unknown>;
 }
