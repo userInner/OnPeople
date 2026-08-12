@@ -7914,33 +7914,26 @@ button.activity-row:hover {
   background: var(--surface-muted);
 }
 
-/* In the normal task side panel an inspector replaces the guest instead of
-   squeezing two browser surfaces into a width that cannot hold them. Expanded
-   mode restores the split inspection layout. */
+/* In the normal task side panel inspection keeps the live page visible above
+   a bounded result tray. Expanded mode uses a wider side-by-side workbench. */
 .utility-browser .browser-stage.has-inspector {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.utility-browser .browser-stage.has-inspector .browser-guest-stack {
-  display: none;
+  grid-template-rows: minmax(220px, 58%) minmax(180px, 42%);
 }
 
 .utility-browser .browser-inspector {
+  min-height: 0;
+  border-top: 1px solid var(--line);
   border-left: 0;
 }
 
 .app-shell.utility-expanded .utility-browser .browser-stage.has-inspector {
   grid-template-columns: minmax(360px, 1fr) minmax(300px, 34%);
-}
-
-.app-shell.utility-expanded
-  .utility-browser
-  .browser-stage.has-inspector
-  .browser-guest-stack {
-  display: block;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .app-shell.utility-expanded .utility-browser .browser-inspector {
+  border-top: 0;
   border-left: 1px solid var(--line);
 }
 

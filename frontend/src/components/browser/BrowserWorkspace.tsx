@@ -606,7 +606,6 @@ export function BrowserWorkspace({
             activeTab={activeTab}
             visible={
               visible &&
-              !inspector &&
               !overflowOpen &&
               !applicationModalOpen &&
               !activeTab.crashed &&

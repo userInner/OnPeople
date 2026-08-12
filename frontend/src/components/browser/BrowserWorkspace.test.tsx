@@ -34,6 +34,28 @@ describe("BrowserWorkspace", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("keeps the native page surface mounted while inspecting", () => {
+    window.onpeopleBrowser = {
+      invoke: vi.fn().mockResolvedValue({
+        title: "Example",
+        url: "https://example.com/",
+        html: "<h1>Example</h1>",
+      }),
+      onAgentCommand: vi.fn(() => () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+    };
+    render(<BrowserWorkspace onBack={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "浏览器工具" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /DOM 快照/ }));
+
+    expect(screen.getByLabelText("DOM 快照")).toBeVisible();
+    expect(document.querySelector(".browser-guest-stack")).toBeInTheDocument();
+    expect(document.querySelector(".browser-stage")).toHaveClass(
+      "has-inspector",
+    );
+  });
+
   it("recovers invalid persisted tab URLs instead of crashing the workbench", () => {
     localStorage.setItem(
       "onpeople.browser.tabs.v2",

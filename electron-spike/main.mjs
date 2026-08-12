@@ -26,6 +26,8 @@ import { ElectronShellAdapter } from "./shell-adapter.mjs";
 const moduleRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(moduleRoot, "..");
 const processStartedAt = process.hrtime.bigint();
+const developmentIdentity = !app.isPackaged;
+const applicationName = developmentIdentity ? "OnPeople Dev" : "OnPeople";
 const execFileAsync = promisify(execFile);
 const startupMethods = new Set([
   "runtime.status",
@@ -36,6 +38,14 @@ const startupMethods = new Set([
 ]);
 const STARTUP_REQUEST_TIMEOUT_MS = 12_000;
 
+app.setName(applicationName);
+if (developmentIdentity) {
+  app.setPath(
+    "userData",
+    path.join(app.getPath("appData"), "onpeople-desktop-dev"),
+  );
+}
+
 let appReadyMs = null;
 let rendererReadyMs = null;
 let mainWindow = null;
@@ -43,6 +53,18 @@ let browserController = null;
 let windowCrashCount = 0;
 let browserAgentRendererReady = false;
 const pendingBrowserAgentCommands = [];
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 
 const elapsedMs = () =>
   Number(process.hrtime.bigint() - processStartedAt) / 1_000_000;
@@ -228,7 +250,7 @@ async function bootstrap() {
       minHeight: 680,
       show: false,
       backgroundColor: "#f7f7f5",
-      title: "OnPeople",
+      title: applicationName,
       webPreferences: {
         preload: path.join(moduleRoot, "preload.cjs"),
         contextIsolation: true,
@@ -259,6 +281,11 @@ async function bootstrap() {
     });
     window.webContents.on("did-start-loading", () => {
       if (mainWindow === window) browserAgentRendererReady = false;
+    });
+    window.webContents.on("page-title-updated", (event) => {
+      if (!developmentIdentity) return;
+      event.preventDefault();
+      window.setTitle(applicationName);
     });
     window.once("ready-to-show", () => window.show());
     if (process.env.ONPEOPLE_VITE_URL) {
@@ -465,6 +492,8 @@ async function metrics(rustBridge) {
     0,
   );
   return {
+    applicationName,
+    userDataPath: app.getPath("userData"),
     appReadyMs,
     rendererReadyMs,
     elapsedMs: elapsedMs(),
@@ -493,10 +522,12 @@ async function persistMetrics(rustBridge) {
   );
 }
 
-app
-  .whenReady()
-  .then(bootstrap)
-  .catch((error) => {
-    console.error(error);
-    app.exit(1);
-  });
+if (hasSingleInstanceLock) {
+  app
+    .whenReady()
+    .then(bootstrap)
+    .catch((error) => {
+      console.error(error);
+      app.exit(1);
+    });
+}

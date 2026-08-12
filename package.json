@@ -33,7 +33,7 @@
     "tauri:release": "npm run runtime:prepare && npm run runtime:sign && tauri build && npm run release:gate",
     "electron:rust:build": "cargo build -p onpeople-desktop-host",
     "electron:rust:release": "cargo build --release -p onpeople-desktop-host",
-    "electron:dev": "npm run electron:rust:build && npm run build && electron electron-spike/main.mjs",
+    "electron:dev": "npm run electron:rust:build && npm run build && node electron-spike/run-dev.mjs",
     "electron:stage": "node electron-spike/stage-runtime.mjs",
     "electron:package": "npm run electron:rust:release && npm run build && npm run electron:stage && electron-builder --config electron-spike/electron-builder.yml --mac dir zip && npm run electron:package:verify",
     "electron:package:verify": "node electron-spike/verify-package.mjs",
