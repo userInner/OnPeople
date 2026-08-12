@@ -98,8 +98,10 @@ export async function waitForBrowserPage(
   browserHost,
   expectedUrl,
   timeoutMs = 12_000,
+  remindRenderer = null,
 ) {
   const deadline = Date.now() + timeoutMs;
+  let nextReminderAt = Date.now() + 400;
   while (Date.now() < deadline) {
     const state = browserHost?.state();
     const page = state?.attachedPages?.find(
@@ -108,6 +110,10 @@ export async function waitForBrowserPage(
         pageMatchesExpectedUrl(candidate.url, expectedUrl),
     );
     if (page) return page;
+    if (remindRenderer && Date.now() >= nextReminderAt) {
+      remindRenderer();
+      nextReminderAt = Date.now() + 400;
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("内嵌浏览器页面尚未准备好");

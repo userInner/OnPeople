@@ -67,12 +67,10 @@ try {
   const idleMetrics = await page.evaluate(() =>
     window.onpeopleElectron.metrics(),
   );
-  const agentBridge = await electronApp.evaluate(
-    () => ({
-      address: process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE,
-      token: process.env.ONPEOPLE_BROWSER_AGENT_TOKEN,
-    }),
-  );
+  const agentBridge = await electronApp.evaluate(() => ({
+    address: process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE,
+    token: process.env.ONPEOPLE_BROWSER_AGENT_TOKEN,
+  }));
   assert(agentBridge.address, "browser agent bridge address was not published");
   assert(agentBridge.token, "browser agent bridge token was not published");
   const agentSnapshot = await mcpBrowserCall(
@@ -164,10 +162,27 @@ try {
     .click();
 
   for (let index = 0; index < 30; index += 1) {
-    await page.getByRole("button", { name: "新建标签页" }).click();
-    await navigate(page, `${fixtureUrl}?cycle=${index}`);
-    const selected = page.getByRole("tab", { selected: true });
-    await selected.getByRole("button", { name: /关闭/ }).click();
+    try {
+      await page.getByRole("button", { name: "新建标签页" }).click();
+      await navigate(page, `${fixtureUrl}?cycle=${index}`);
+      const selected = page.locator(".browser-tab.is-active");
+      await selected.getByRole("button", { name: /^关闭 / }).click();
+    } catch (error) {
+      process.stderr.write(`browser cycle ${index + 1}/30 failed\n`);
+      process.stderr.write(
+        `${JSON.stringify(await browserInvoke(page, "state"), null, 2)}\n`,
+      );
+      process.stderr.write(
+        `${JSON.stringify(await page.evaluate(() => window.onpeopleElectron.metrics()), null, 2)}\n`,
+      );
+      process.stderr.write(
+        `${(await page.locator("body").innerText()).slice(0, 8_000)}\n`,
+      );
+      await page.screenshot({
+        path: path.join(os.tmpdir(), "onpeople-browser-cycle-failure.png"),
+      });
+      throw error;
+    }
   }
 
   const cycleState = await browserInvoke(page, "state");

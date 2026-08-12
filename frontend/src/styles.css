@@ -5386,11 +5386,24 @@ body.account-auth-open > #root {
   height: 34px;
   flex: 0 1 224px;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px 0 11px;
+  padding: 0 5px 0 0;
   border: 1px solid transparent;
   border-radius: 9px;
   color: var(--ink-soft);
+  background: transparent;
+  text-align: left;
+}
+
+.browser-tab-select {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 0 11px;
+  border-radius: inherit;
+  color: inherit;
   background: transparent;
   text-align: left;
 }
@@ -5406,15 +5419,15 @@ body.account-auth-open > #root {
   box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 
-.browser-tab > img,
-.browser-tab > svg:first-child {
+.browser-tab-select > img,
+.browser-tab-select > svg:first-child {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   border-radius: 3px;
 }
 
-.browser-tab > span:nth-child(2) {
+.browser-tab-select > span:nth-child(2) {
   min-width: 0;
   flex: 1;
   overflow: hidden;

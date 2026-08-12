@@ -10,6 +10,7 @@ describe("BrowserWorkspace", () => {
     render(<BrowserWorkspace onBack={() => undefined} />);
 
     expect(screen.getByRole("tab", { name: /新标签页/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "关闭 新标签页" })).toBeVisible();
     expect(screen.getByRole("button", { name: "新建标签页" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "地址和搜索" })).toBeVisible();
     expect(screen.getByText("共享浏览器")).toBeVisible();

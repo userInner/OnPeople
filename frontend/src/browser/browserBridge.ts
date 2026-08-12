@@ -1,11 +1,13 @@
 import type { BrowserHostEvent } from "./types";
 
 export interface BrowserAgentCommand {
+  id?: string;
   kind: "open";
   url: string;
 }
 
 const pendingAgentCommands: BrowserAgentCommand[] = [];
+const pendingAgentCommandIds = new Set<string>();
 const agentCommandListeners = new Set<(command: BrowserAgentCommand) => void>();
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -62,8 +64,13 @@ export const browserBridge = {
       window.onpeopleBrowser?.onAgentCommand((payload) => {
         const command = payload as BrowserAgentCommand;
         if (command.kind !== "open" || typeof command.url !== "string") return;
-        if (agentCommandListeners.size === 0)
+        if (
+          agentCommandListeners.size === 0 &&
+          (!command.id || !pendingAgentCommandIds.has(command.id))
+        ) {
           pendingAgentCommands.push(command);
+          if (command.id) pendingAgentCommandIds.add(command.id);
+        }
         for (const listener of agentCommandListeners) listener(command);
         handler(command);
       }) ?? (() => undefined)
@@ -72,7 +79,10 @@ export const browserBridge = {
 
   onAgentCommand(handler: (command: BrowserAgentCommand) => void): () => void {
     agentCommandListeners.add(handler);
-    for (const command of pendingAgentCommands.splice(0)) handler(command);
+    for (const command of pendingAgentCommands.splice(0)) {
+      if (command.id) pendingAgentCommandIds.delete(command.id);
+      handler(command);
+    }
     return () => agentCommandListeners.delete(handler);
   },
 };

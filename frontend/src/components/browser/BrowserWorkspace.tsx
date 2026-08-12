@@ -136,6 +136,7 @@ export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
   const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
   const addressInput = useRef<HTMLInputElement>(null);
   const overflow = useRef<HTMLDivElement>(null);
+  const processedAgentCommands = useRef(new Set<string>());
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!,
@@ -174,6 +175,9 @@ export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
   useEffect(
     () =>
       browserBridge.onAgentCommand((command) => {
+        if (command.id && processedAgentCommands.current.has(command.id))
+          return;
+        if (command.id) processedAgentCommands.current.add(command.id);
         const url = normalizeBrowserAddress(command.url);
         setInspector(null);
         setError(null);
@@ -383,37 +387,36 @@ export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
         <IconButton icon={PanelLeft} label="返回工作区" onClick={onBack} />
         <div className="browser-tabs" role="tablist" aria-label="浏览器标签页">
           {tabs.map((tab) => (
-            <button
+            <div
               className={`browser-tab ${tab.id === activeTab.id ? "is-active" : ""}`}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === activeTab.id}
               key={tab.id}
-              onClick={() => {
-                setActiveTabId(tab.id);
-                setInspector(null);
-                updateTab(tab.id, { lastActiveAt: Date.now() });
-              }}
             >
-              <TabIcon tab={tab} />
-              <span>{tabTitle(tab)}</span>
-              <span
+              <button
+                className="browser-tab-select"
+                type="button"
+                role="tab"
+                aria-selected={tab.id === activeTab.id}
+                onClick={() => {
+                  setActiveTabId(tab.id);
+                  setInspector(null);
+                  updateTab(tab.id, { lastActiveAt: Date.now() });
+                }}
+              >
+                <TabIcon tab={tab} />
+                <span>{tabTitle(tab)}</span>
+              </button>
+              <button
                 className="browser-tab-close"
-                role="button"
-                tabIndex={0}
+                type="button"
                 aria-label={`关闭 ${tabTitle(tab)}`}
                 onClick={(event) => {
                   event.stopPropagation();
                   closeTab(tab.id);
                 }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ")
-                    closeTab(tab.id);
-                }}
               >
                 <X size={13} />
-              </span>
-            </button>
+              </button>
+            </div>
           ))}
         </div>
         <IconButton icon={Plus} label="新建标签页" onClick={() => addTab()} />

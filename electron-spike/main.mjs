@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,8 +115,15 @@ async function bootstrap() {
       const payload = request?.payload ?? {};
       if (command === "open") {
         const url = normalizeBrowserAddress(payload.urlOrQuery ?? payload.url);
-        deliverBrowserAgentCommand({ kind: "open", url });
-        const page = await waitForBrowserPage(browserHost, url);
+        const browserCommand = {
+          id: `browser-open-${randomUUID()}`,
+          kind: "open",
+          url,
+        };
+        deliverBrowserAgentCommand(browserCommand);
+        const page = await waitForBrowserPage(browserHost, url, 12_000, () =>
+          deliverBrowserAgentCommand(browserCommand),
+        );
         return browserHost.handle("dom-snapshot", { tabId: page.tabId });
       }
       const state = browserHost.state();
@@ -133,8 +141,7 @@ async function bootstrap() {
       return browserHost.handle(mapped, { tabId, ...payload });
     },
   });
-  process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE =
-    await browserAgentBridge.start();
+  process.env.ONPEOPLE_BROWSER_AGENT_BRIDGE = await browserAgentBridge.start();
   process.env.ONPEOPLE_BROWSER_AGENT_TOKEN = browserAgentBridge.token;
 
   const rustBridge = new RustBridge({
