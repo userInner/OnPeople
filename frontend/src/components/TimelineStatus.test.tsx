@@ -1141,6 +1141,113 @@ describe("Timeline activity status", () => {
     expect(screen.queryByText(/_meta/)).not.toBeInTheDocument();
   });
 
+  it("collapses recoverable browser startup retries after the page succeeds", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-browser-retry",
+      runtime: null,
+      timeline: [
+        {
+          id: "user-browser-retry",
+          turnId: "turn-browser-retry",
+          role: "user",
+          kind: "message",
+          text: "打开内嵌浏览器查询天气",
+        },
+        {
+          id: "browser-open-wrapper",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command:
+            'tools.mcp__internal_browser__browser_open({urlOrQuery:"weather near me"})',
+          text: "Script completed",
+          status: "已完成",
+        },
+        {
+          id: "browser-open-failure-one",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "tool",
+          title: "internal_browser · browser_open",
+          text: "内嵌浏览器页面尚未准备好",
+          status: "失败",
+        },
+        {
+          id: "browser-wait-one",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "tool",
+          title: "wait",
+          text: "",
+          status: "已完成",
+        },
+        {
+          id: "browser-retry-commentary",
+          turnId: "turn-browser-retry",
+          role: "assistant",
+          kind: "message",
+          phase: "commentary",
+          text: "浏览器首次加载尚未就绪，我正在重试。",
+        },
+        {
+          id: "browser-open-failure-two",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "tool",
+          title: "internal_browser · browser_open",
+          text: "内嵌浏览器页面尚未准备好",
+          status: "失败",
+        },
+        {
+          id: "browser-wait-two",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "tool",
+          title: "wait",
+          text: "",
+          status: "已完成",
+        },
+        {
+          id: "browser-snapshot-success",
+          turnId: "turn-browser-retry",
+          role: "tool",
+          kind: "tool",
+          title: "internal_browser · browser_dom_snapshot",
+          text: "东京天气 27°C",
+          status: "已完成",
+        },
+        {
+          id: "browser-final",
+          turnId: "turn-browser-retry",
+          role: "assistant",
+          kind: "message",
+          phase: "final_answer",
+          text: "东京今天多云，约 27°C。",
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: { "turn-browser-retry": 56 },
+    });
+
+    const view = render(<Timeline />);
+
+    expect(screen.queryByText("内嵌浏览器打开失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("wait")).not.toBeInTheDocument();
+    expect(screen.queryByText("运行了命令")).not.toBeInTheDocument();
+    expect(view.container.querySelectorAll(".activity-summary")).toHaveLength(
+      1,
+    );
+    expect(
+      view.container.querySelector(".activity-summary > summary strong"),
+    ).toHaveTextContent("使用了内嵌浏览器");
+    expect(
+      screen.getByText("浏览器首次加载尚未就绪，我正在重试。"),
+    ).toBeVisible();
+    expect(screen.getByText("东京今天多云，约 27°C。")).toBeVisible();
+  });
+
   it("stops following streaming output after the user scrolls upward", () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;

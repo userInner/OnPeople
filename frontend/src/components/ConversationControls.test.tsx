@@ -371,6 +371,52 @@ describe("Codex conversation controls", () => {
     expect(input).toHaveValue("你是使用sub");
   });
 
+  it("does not send a delayed macOS IME candidate Enter", () => {
+    const sendPrompt = vi.fn().mockResolvedValue(undefined);
+    const performanceNow = vi.spyOn(performance, "now");
+    performanceNow.mockReturnValue(1_000);
+    useWorkbenchStore.setState({
+      runtime: {
+        state: "ready",
+        threadId: "thread-main",
+        turnId: null,
+        queuedMessages: 0,
+        pendingApprovals: 0,
+        context: null,
+      },
+      sendPrompt,
+    });
+
+    render(<Composer />);
+    const input = screen.getByLabelText("任务输入");
+    fireEvent.change(input, { target: { value: "发送到九分裤" } });
+    fireEvent.compositionStart(input);
+    fireEvent.compositionEnd(input);
+
+    performanceNow.mockReturnValue(1_800);
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+    });
+
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(input).toHaveValue("发送到九分裤");
+
+    performanceNow.mockReturnValue(2_600);
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+    });
+
+    expect(sendPrompt).toHaveBeenCalledWith(
+      "发送到九分裤",
+      expect.objectContaining({ mode: "agent" }),
+    );
+    performanceNow.mockRestore();
+  });
+
   it("sends on the next Enter when the IME Enter arrived before compositionend", () => {
     const sendPrompt = vi.fn().mockResolvedValue(undefined);
     useWorkbenchStore.setState({

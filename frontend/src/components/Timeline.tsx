@@ -70,7 +70,9 @@ export function Timeline() {
   const displayTimeline = orderCompletedTurnActivities(
     suppressRedundantReasoningPlaceholders(
       collapseDuplicateTurnNarration(
-        collapseDuplicateCommandTraces(inferMissingTurnIds(timeline)),
+        normalizeTurnActivityTraces(
+          collapseDuplicateCommandTraces(inferMissingTurnIds(timeline)),
+        ),
       ),
     ),
     runtimeWorking,
@@ -349,6 +351,71 @@ function collapseDuplicateCommandTraces(items: TimelineItem[]): TimelineItem[] {
   }
 
   return collapsed;
+}
+
+function normalizeTurnActivityTraces(items: TimelineItem[]): TimelineItem[] {
+  const directBrowserOperations = new Map<string, Set<string>>();
+  const successfulBrowserTurns = new Set<string>();
+
+  for (const item of items) {
+    const operation = browserOperation(item);
+    if (!operation || !item.turnId) continue;
+    if (item.kind === "tool") {
+      const operations = directBrowserOperations.get(item.turnId) ?? new Set();
+      operations.add(operation);
+      directBrowserOperations.set(item.turnId, operations);
+    }
+    if (item.kind === "tool" && !hasFailed(item)) {
+      successfulBrowserTurns.add(item.turnId);
+    }
+  }
+
+  return items.filter((item) => {
+    const operation = browserOperation(item);
+    if (
+      operation &&
+      item.turnId &&
+      item.kind === "command" &&
+      directBrowserOperations.get(item.turnId)?.has(operation)
+    ) {
+      // app-server history contains both the outer exec wrapper and the direct
+      // MCP item. Codex renders the semantic browser operation once.
+      return false;
+    }
+    if (
+      operation &&
+      item.turnId &&
+      hasFailed(item) &&
+      successfulBrowserTurns.has(item.turnId)
+    ) {
+      // A browser startup retry is an intermediate state once the same turn
+      // successfully reads or operates the page.
+      return false;
+    }
+    if (
+      item.turnId &&
+      isWaitTrace(item) &&
+      successfulBrowserTurns.has(item.turnId)
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function browserOperation(item: TimelineItem): string | undefined {
+  const identity =
+    `${item.title ?? ""} ${item.meta ?? ""} ${item.command ?? ""}`.toLowerCase();
+  return identity.match(
+    /browser_(open|dom_snapshot|click|type|back|reload|state)/u,
+  )?.[1];
+}
+
+function isWaitTrace(item: TimelineItem): boolean {
+  if (item.kind !== "tool" || hasFailed(item)) return false;
+  return /^(?:wait|等待)$/iu.test(
+    `${item.title ?? ""} ${item.meta ?? ""}`.trim(),
+  );
 }
 
 function collapseDuplicateTurnNarration(items: TimelineItem[]): TimelineItem[] {

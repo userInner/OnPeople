@@ -127,7 +127,12 @@ type ModelMenuPage = "root" | "model" | "effort" | "speed";
 // macOS WebKit does not guarantee whether the Enter that confirms an IME
 // candidate arrives before or after compositionend. Keep a short, one-shot
 // guard for the latter order; a second deliberate Enter still sends normally.
-const IME_ENTER_GUARD_MS = 250;
+// Electron/macOS can deliver the Enter that accepts a Chinese/Japanese IME
+// candidate after compositionend, especially while the candidate window is
+// animating. Codex rejects composing/229 key events first; this longer one-shot
+// guard covers Electron's delayed post-composition Enter without changing the
+// normal second-Enter-to-send behavior.
+const IME_ENTER_GUARD_MS = 1_500;
 
 const visibleOnPeopleModels = [
   { id: "gpt-5.6-sol", name: "GPT5.6 sol" },
@@ -1170,10 +1175,15 @@ export function Composer() {
             }}
             onKeyDown={(event) => {
               const now = performance.now();
+              const nativeKey = event.nativeEvent as KeyboardEvent;
               const nativeImeEnter =
                 composing.current ||
-                event.nativeEvent.isComposing ||
-                event.keyCode === 229;
+                nativeKey.isComposing ||
+                event.keyCode === 229 ||
+                nativeKey.keyCode === 229 ||
+                nativeKey.which === 229 ||
+                event.key === "Process" ||
+                event.code === "Process";
 
               if (nativeImeEnter) {
                 lastImeEnterAt.current = now;
