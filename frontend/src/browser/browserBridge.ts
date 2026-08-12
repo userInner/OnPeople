@@ -87,6 +87,7 @@ export const browserBridge = {
       zoom: "zoom",
       recover: "recover",
       activate: "activateTab",
+      focus: "focus",
     };
     const action = actionByCommand[command];
     if (action) {

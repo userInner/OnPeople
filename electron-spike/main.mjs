@@ -193,8 +193,9 @@ async function bootstrap() {
       tabId:
         browserController
           ?.state()
-          .tabs.find((tab) => browserController.webContents(tab.routeId) === contents)
-          ?.routeId ?? null,
+          .tabs.find(
+            (tab) => browserController.webContents(tab.routeId) === contents,
+          )?.routeId ?? null,
       filename: item.getFilename(),
       url: item.getURL(),
       path: item.getSavePath() || null,
@@ -306,7 +307,10 @@ async function bootstrap() {
       if (String(request.method).startsWith("browser.")) {
         return responseSuccess(
           request,
-          await handleBrowserDesktopRequest(request.method, request.params ?? {}),
+          await handleBrowserDesktopRequest(
+            request.method,
+            request.params ?? {},
+          ),
         );
       }
       return await rustBridge.request(
@@ -337,7 +341,9 @@ async function bootstrap() {
       if (action === "inspectDeveloperState") {
         const result = await browserController.handle(method, params);
         const routeId = String(params.payload?.routeId ?? "");
-        browserController.webContents(routeId)?.openDevTools({ mode: "detach" });
+        browserController
+          .webContents(routeId)
+          ?.openDevTools({ mode: "detach" });
         return result;
       }
     }
@@ -386,6 +392,7 @@ async function bootstrap() {
       zoom: "zoom",
       recover: "recover",
       activate: "activateTab",
+      focus: "focus",
     };
     if (actionMap[command]) {
       return handleBrowserDesktopRequest("browser.action", {

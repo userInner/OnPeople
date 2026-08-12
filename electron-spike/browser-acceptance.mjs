@@ -38,6 +38,8 @@ const server = createServer((request, response) => {
       <h1>OnPeople Browser Test</h1>
       <a id="popup" target="_blank" href="/popup">Open popup</a>
       <a id="download" href="/download.txt" download>Download fixture</a>
+      <label for="text-input">Text input</label>
+      <input id="text-input" type="text" />
       <input id="upload" type="file" />
     </body></html>`);
 });
@@ -127,6 +129,41 @@ try {
   });
   assert(visualSnapshot.width > 0 && visualSnapshot.height > 0);
   assert(visualSnapshot.dataUrl.startsWith("data:image/png;base64,"));
+
+  const firstText = await focusAndTypeInGuest(
+    electronApp,
+    active.webContentsId,
+    "#text-input",
+    "first",
+  );
+  assert.equal(
+    firstText.focused,
+    true,
+    "browser guest did not own keyboard focus",
+  );
+  assert.equal(firstText.value, "first");
+
+  await page.getByLabel("地址和搜索").click();
+  await page.waitForFunction(
+    async (webContentsId) =>
+      !(await window.onpeopleBrowser.invoke("state")).attachedPages.find(
+        (item) => item.webContentsId === webContentsId,
+      )?.focused,
+    active.webContentsId,
+  );
+
+  const resumedText = await focusAndTypeInGuest(
+    electronApp,
+    active.webContentsId,
+    "#text-input",
+    "-second",
+  );
+  assert.equal(
+    resumedText.focused,
+    true,
+    "browser guest did not reclaim focus after using the address bar",
+  );
+  assert.equal(resumedText.value, "first-second");
 
   await setUploadFile(electronApp, active.webContentsId, uploadPath);
   const uploadName = await executeInGuest(
@@ -361,6 +398,49 @@ async function executeInGuest(appHandle, webContentsId, expression) {
         .fromId(input.webContentsId)
         ?.executeJavaScript(input.expression),
     { webContentsId, expression },
+  );
+}
+
+async function focusAndTypeInGuest(appHandle, webContentsId, selector, text) {
+  return appHandle.evaluate(
+    async ({ webContents }, input) => {
+      const guest = webContents.fromId(input.webContentsId);
+      if (!guest) throw new Error("browser guest not found");
+      const serializedSelector = JSON.stringify(input.selector);
+      const rect = await guest.executeJavaScript(
+        `(() => {
+          const node = document.querySelector(${serializedSelector});
+          if (!node) return null;
+          const box = node.getBoundingClientRect();
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        })()`,
+      );
+      if (!rect) throw new Error(`browser input not found: ${input.selector}`);
+      const x = Math.round(rect.x + rect.width / 2);
+      const y = Math.round(rect.y + rect.height / 2);
+      guest.sendInputEvent({
+        type: "mouseDown",
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+      });
+      guest.sendInputEvent({
+        type: "mouseUp",
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+      });
+      guest.insertText(input.text);
+      return {
+        focused: guest.isFocused(),
+        value: await guest.executeJavaScript(
+          `document.querySelector(${serializedSelector})?.value ?? ""`,
+        ),
+      };
+    },
+    { webContentsId, selector, text },
   );
 }
 

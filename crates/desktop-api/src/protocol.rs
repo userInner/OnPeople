@@ -889,6 +889,7 @@ pub enum BrowserAction {
     Attach,
     ActivateTab,
     DetachTab,
+    Focus,
     Downloads,
     ShowDownload,
     OpenExternal,

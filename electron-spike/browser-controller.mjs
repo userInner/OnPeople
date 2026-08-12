@@ -44,6 +44,7 @@ function routeState(routeId, threadId, url) {
     view: null,
     bounds: null,
     visible: false,
+    interactive: false,
     destroyTimer: null,
     generation: 0,
     lastActiveAt: Date.now(),
@@ -157,7 +158,33 @@ export class ElectronBrowserController {
   }
 
   webContents(routeId = this.#activeRouteId) {
-    return routeId ? this.#routes.get(routeId)?.view?.webContents ?? null : null;
+    return routeId
+      ? (this.#routes.get(routeId)?.view?.webContents ?? null)
+      : null;
+  }
+
+  focusActive(routeId = this.#activeRouteId) {
+    if (!routeId) return false;
+    const route = this.#routes.get(routeId);
+    const contents = route?.view?.webContents;
+    if (
+      !route ||
+      !route.visible ||
+      !route.interactive ||
+      route.crashed ||
+      !contents ||
+      contents.isDestroyed()
+    ) {
+      return false;
+    }
+    contents.focus();
+    return contents.isFocused();
+  }
+
+  focusChrome() {
+    if (this.#closed || this.#window.isDestroyed()) return false;
+    this.#window.webContents.focus();
+    return this.#window.webContents.isFocused();
   }
 
   async forceDestroy(routeId, keepRoute = true) {
@@ -177,11 +204,7 @@ export class ElectronBrowserController {
     switch (command.command) {
       case "createRoute": {
         const url = this.#validateUrl(payload.url);
-        const route = this.#upsertRoute(
-          payload.routeId,
-          payload.threadId,
-          url,
-        );
+        const route = this.#upsertRoute(payload.routeId, payload.threadId, url);
         this.#activate(route);
         if (url !== "about:blank") await this.#navigate(route, url);
         this.#publishState();
@@ -224,17 +247,17 @@ export class ElectronBrowserController {
       case "select":
         return this.#select(payload.routeId, payload.selector, payload.value);
       case "press": {
-        const contents = (await this.#ensureView(
-          this.#requireRoute(payload.routeId),
-        )).webContents;
+        const contents = (
+          await this.#ensureView(this.#requireRoute(payload.routeId))
+        ).webContents;
         contents.sendInputEvent({ type: "keyDown", keyCode: payload.key });
         contents.sendInputEvent({ type: "keyUp", keyCode: payload.key });
         return { pressed: true };
       }
       case "scroll": {
-        const contents = (await this.#ensureView(
-          this.#requireRoute(payload.routeId),
-        )).webContents;
+        const contents = (
+          await this.#ensureView(this.#requireRoute(payload.routeId))
+        ).webContents;
         contents.sendInputEvent({
           type: "mouseWheel",
           x: 1,
@@ -344,6 +367,14 @@ export class ElectronBrowserController {
         this.#suspend(route);
         return { detached: true, routeId };
       }
+      case "focus": {
+        if (payload.target === "chrome") {
+          return { focused: this.focusChrome(), routeId, target: "chrome" };
+        }
+        const route = this.#requireRoute(routeId);
+        await this.#ensureView(route);
+        return { focused: this.focusActive(routeId), routeId, target: "page" };
+      }
       case "openExternal": {
         const route = this.#requireRoute(routeId);
         return { routeId, url: route.url };
@@ -372,14 +403,19 @@ export class ElectronBrowserController {
   async #surfaceBounds(payload) {
     const route = this.#routes.get(payload.routeId);
     if (!route) return { updated: false, routeId: payload.routeId };
+    const wasInteractive = route.interactive;
     route.bounds = clampBounds(payload);
     route.visible = payload.visible === true;
+    route.interactive = route.visible && payload.interactive !== false;
     if (route.visible && route.routeId === this.#activeRouteId) {
       const view = await this.#ensureView(route);
       view.setBounds(route.bounds);
       view.setVisible(true);
       view.webContents.setAudioMuted(false);
       this.#cancelDestroy(route);
+      if (route.interactive && !wasInteractive) {
+        queueMicrotask(() => this.focusActive(route.routeId));
+      }
     } else {
       this.#suspend(route);
     }
@@ -388,6 +424,7 @@ export class ElectronBrowserController {
       updated: true,
       routeId: route.routeId,
       visible: route.visible,
+      interactive: route.interactive,
       live: Boolean(route.view),
     };
   }
@@ -453,6 +490,9 @@ export class ElectronBrowserController {
     view.setVisible(route.visible && route.routeId === this.#activeRouteId);
     const contents = view.webContents;
     contents.setBackgroundThrottling(true);
+    contents.on("before-mouse-event", (_event, input) => {
+      if (input.type === "mouseDown") this.focusActive(route.routeId);
+    });
     contents.setWindowOpenHandler(({ url }) => {
       if (!isSafeBrowserUrl(url)) return { action: "deny" };
       const popupRoute = this.#upsertRoute(
@@ -568,6 +608,7 @@ export class ElectronBrowserController {
 
   #suspend(route) {
     route.visible = false;
+    route.interactive = false;
     if (route.view && !route.view.webContents.isDestroyed()) {
       route.view.setVisible(false);
       route.view.webContents.setAudioMuted(true);
@@ -640,6 +681,10 @@ export class ElectronBrowserController {
       canGoBack: route.canGoBack,
       canGoForward: route.canGoForward,
       crashed: route.crashed,
+      focused:
+        route.view && !route.view.webContents.isDestroyed()
+          ? route.view.webContents.isFocused()
+          : false,
       tabId: route.routeId,
       webContentsId:
         route.view && !route.view.webContents.isDestroyed()
@@ -667,10 +712,16 @@ export class ElectronBrowserController {
   }
 
   async #queryAction(routeId, selector, action) {
-    const script = action === "click"
-      ? `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true; })()`
-      : `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return true; })()`;
-    return { [action === "click" ? "clicked" : "hovered"]: await this.#evaluate(routeId, script) };
+    const script =
+      action === "click"
+        ? `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true; })()`
+        : `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return true; })()`;
+    return {
+      [action === "click" ? "clicked" : "hovered"]: await this.#evaluate(
+        routeId,
+        script,
+      ),
+    };
   }
 
   async #fill(routeId, selector, value) {
@@ -738,9 +789,9 @@ export class ElectronBrowserController {
   }
 
   async #pointer(payload) {
-    const contents = (await this.#ensureView(
-      this.#requireRoute(payload.routeId),
-    )).webContents;
+    const contents = (
+      await this.#ensureView(this.#requireRoute(payload.routeId))
+    ).webContents;
     const kind = String(payload.kind ?? "move");
     const type = kind.includes("wheel")
       ? "mouseWheel"
@@ -762,9 +813,9 @@ export class ElectronBrowserController {
   }
 
   async #key(payload) {
-    const contents = (await this.#ensureView(
-      this.#requireRoute(payload.routeId),
-    )).webContents;
+    const contents = (
+      await this.#ensureView(this.#requireRoute(payload.routeId))
+    ).webContents;
     const type = String(payload.kind).includes("up") ? "keyUp" : "keyDown";
     contents.sendInputEvent({
       type,

@@ -446,13 +446,19 @@ export function BrowserWorkspace({
     await invoke("zoom", { factor: next });
   };
 
+  const focusChrome = () => {
+    void browserBridge
+      .invoke("focus", { routeId: activeTab.id, target: "chrome" })
+      .catch(() => undefined);
+  };
+
   return (
     <section
       className={`browser-workspace ${visible ? "is-visible" : "is-runtime-hidden"}`}
       aria-label="内置浏览器"
       aria-hidden={!visible}
     >
-      <header className="browser-tabs-bar">
+      <header className="browser-tabs-bar" onPointerDownCapture={focusChrome}>
         <IconButton icon={PanelLeft} label="返回工作区" onClick={onBack} />
         <div className="browser-tabs" role="tablist" aria-label="浏览器标签页">
           {tabs.map((tab) => (
@@ -495,7 +501,10 @@ export function BrowserWorkspace({
         </span>
       </header>
 
-      <div className="browser-navigation-bar">
+      <div
+        className="browser-navigation-bar"
+        onPointerDownCapture={focusChrome}
+      >
         <IconButton
           icon={ArrowLeft}
           label="后退"
