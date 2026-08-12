@@ -202,6 +202,22 @@ pub enum DesktopMethod {
     GitReviewSubmit,
     #[serde(rename = "git.worktree")]
     GitWorktree,
+    #[serde(rename = "browser.state")]
+    BrowserState,
+    #[serde(rename = "browser.restart")]
+    BrowserRestart,
+    #[serde(rename = "browser.command")]
+    BrowserCommand,
+    #[serde(rename = "browser.surface.bounds")]
+    BrowserSurfaceBounds,
+    #[serde(rename = "browser.annotation.list")]
+    BrowserAnnotationList,
+    #[serde(rename = "browser.annotation.save")]
+    BrowserAnnotationSave,
+    #[serde(rename = "browser.annotation.delete")]
+    BrowserAnnotationDelete,
+    #[serde(rename = "browser.action")]
+    BrowserAction,
     #[serde(rename = "plugin.install")]
     PluginInstall,
     #[serde(rename = "plugin.uninstall")]
@@ -309,7 +325,7 @@ pub enum DesktopMethod {
 }
 
 impl DesktopMethod {
-    pub const ALL: [Self; 146] = [
+    pub const ALL: [Self; 154] = [
         Self::SystemCapabilities,
         Self::RuntimeStatus,
         Self::RuntimeStart,
@@ -404,6 +420,14 @@ impl DesktopMethod {
         Self::GitReviewStart,
         Self::GitReviewSubmit,
         Self::GitWorktree,
+        Self::BrowserState,
+        Self::BrowserRestart,
+        Self::BrowserCommand,
+        Self::BrowserSurfaceBounds,
+        Self::BrowserAnnotationList,
+        Self::BrowserAnnotationSave,
+        Self::BrowserAnnotationDelete,
+        Self::BrowserAction,
         Self::PluginInstall,
         Self::PluginUninstall,
         Self::PluginIndustryActivate,
@@ -462,7 +486,15 @@ impl DesktopMethod {
     pub const fn requires_host(self) -> bool {
         matches!(
             self,
-            Self::ShellActivateDeepLinks
+            Self::BrowserState
+                | Self::BrowserRestart
+                | Self::BrowserCommand
+                | Self::BrowserSurfaceBounds
+                | Self::BrowserAnnotationList
+                | Self::BrowserAnnotationSave
+                | Self::BrowserAnnotationDelete
+                | Self::BrowserAction
+                | Self::ShellActivateDeepLinks
                 | Self::ShellFrontendReady
                 | Self::ShellOpenTaskWindow
                 | Self::ShellRequestMicrophoneAccess
@@ -486,6 +518,18 @@ impl DesktopMethod {
                 | Self::ShellAppUpdateOpenDownload
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserHostOperation {
+    State,
+    Restart,
+    Command,
+    SurfaceBounds,
+    AnnotationList,
+    AnnotationSave,
+    AnnotationDelete,
+    Action,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -668,6 +712,189 @@ pub struct ShellAppUpdateDownload {
 pub struct ShellAppUpdateInstall {
     pub installed: bool,
     pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserCommandRequest {
+    pub command: DesktopBrowserCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "command",
+    content = "payload"
+)]
+#[ts(export)]
+pub enum DesktopBrowserCommand {
+    CreateRoute {
+        route_id: String,
+        thread_id: String,
+        url: String,
+    },
+    Navigate {
+        route_id: String,
+        url: String,
+    },
+    Back {
+        route_id: String,
+    },
+    Forward {
+        route_id: String,
+    },
+    Reload {
+        route_id: String,
+    },
+    Resize {
+        route_id: String,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        visible: bool,
+    },
+    Click {
+        route_id: String,
+        selector: String,
+    },
+    Fill {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Select {
+        route_id: String,
+        selector: String,
+        value: String,
+    },
+    Press {
+        route_id: String,
+        key: String,
+    },
+    Scroll {
+        route_id: String,
+        x: f64,
+        y: f64,
+    },
+    Hover {
+        route_id: String,
+        selector: String,
+    },
+    Evaluate {
+        route_id: String,
+        expression: String,
+    },
+    DomSnapshot {
+        route_id: String,
+    },
+    VisualSnapshot {
+        route_id: String,
+    },
+    DeveloperInspect {
+        route_id: String,
+    },
+    Pointer {
+        route_id: String,
+        kind: String,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        button: i32,
+        click_count: i32,
+        modifiers: u32,
+    },
+    Key {
+        route_id: String,
+        kind: String,
+        key_code: i32,
+        native_key_code: i32,
+        character: String,
+        modifiers: u32,
+    },
+    CloseRoute {
+        route_id: String,
+    },
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserRouteRequest {
+    pub route_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserSurfaceBoundsRequest {
+    pub route_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub scale_factor: f64,
+    pub visible: bool,
+    #[serde(default)]
+    pub interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserAnnotationRequest {
+    pub id: String,
+    pub route_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub rect: Option<[f64; 4]>,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserAnnotationDeleteRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum BrowserAction {
+    Navigate,
+    Back,
+    Forward,
+    Reload,
+    CaptureVisualSnapshot,
+    InspectDeveloperState,
+    BeginAnnotation,
+    CancelAnnotation,
+    SessionStatus,
+    OpenSignIn,
+    ClearSession,
+    ClearAllData,
+    ClearSettingsData,
+    FillSavedCredential,
+    ListImportProfiles,
+    ImportProfile,
+    Attach,
+    ActivateTab,
+    DetachTab,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct BrowserActionRequest {
+    pub action: BrowserAction,
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1831,6 +2058,14 @@ pub fn export_types(output: &Path) -> Result<(), String> {
         GitPullRequestRequest,
         GitReviewStartRequest,
         GitReviewSubmitRequest,
+        BrowserCommandRequest,
+        DesktopBrowserCommand,
+        BrowserRouteRequest,
+        BrowserSurfaceBoundsRequest,
+        BrowserAnnotationRequest,
+        BrowserAnnotationDeleteRequest,
+        BrowserAction,
+        BrowserActionRequest,
         PluginPayloadRequest,
         PluginIdRequest,
         PluginCatalogSyncRequest,

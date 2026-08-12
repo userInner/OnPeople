@@ -27,6 +27,12 @@ import type { EffectiveConfigRequest } from "../bindings/EffectiveConfigRequest"
 import type { ExtensionsListRequest } from "../bindings/ExtensionsListRequest";
 import type { ExtensionsSnapshot } from "../bindings/ExtensionsSnapshot";
 import type { AuthorizedProjectAction } from "../bindings/AuthorizedProjectAction";
+import type { BrowserActionRequest } from "../bindings/BrowserActionRequest";
+import type { BrowserAnnotationDeleteRequest } from "../bindings/BrowserAnnotationDeleteRequest";
+import type { BrowserAnnotationRequest } from "../bindings/BrowserAnnotationRequest";
+import type { BrowserCommandRequest } from "../bindings/BrowserCommandRequest";
+import type { BrowserRouteRequest } from "../bindings/BrowserRouteRequest";
+import type { BrowserSurfaceBoundsRequest } from "../bindings/BrowserSurfaceBoundsRequest";
 import type { FileListRequest } from "../bindings/FileListRequest";
 import type { FilePreview } from "../bindings/FilePreview";
 import type { FilePreviewRequest } from "../bindings/FilePreviewRequest";
@@ -397,6 +403,26 @@ export interface DesktopMethodMap {
   "git.review.start": { params: GitReviewStartRequest; result: JsonValue };
   "git.review.submit": { params: GitReviewSubmitRequest; result: JsonValue };
   "git.worktree": { params: WorktreeRequest; result: JsonValue };
+  "browser.state": { params: Record<string, never>; result: JsonValue };
+  "browser.restart": { params: Record<string, never>; result: JsonValue };
+  "browser.command": { params: BrowserCommandRequest; result: JsonValue };
+  "browser.surface.bounds": {
+    params: BrowserSurfaceBoundsRequest;
+    result: JsonValue;
+  };
+  "browser.annotation.list": {
+    params: BrowserRouteRequest;
+    result: JsonValue;
+  };
+  "browser.annotation.save": {
+    params: BrowserAnnotationRequest;
+    result: JsonValue;
+  };
+  "browser.annotation.delete": {
+    params: BrowserAnnotationDeleteRequest;
+    result: JsonValue;
+  };
+  "browser.action": { params: BrowserActionRequest; result: JsonValue };
   "plugin.install": {
     params: PluginPayloadRequest;
     result: JsonValue;
@@ -571,7 +597,7 @@ export interface DesktopMethodMap {
   };
 }
 
-type MethodName = keyof DesktopMethodMap & DesktopMethod;
+export type MethodName = keyof DesktopMethodMap & DesktopMethod;
 
 export type DesktopTransport = (
   request: DesktopRequest,

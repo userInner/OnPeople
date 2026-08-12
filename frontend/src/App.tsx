@@ -794,14 +794,13 @@ export function App() {
           }}
         />
       ) : null}
-      {utilityOpen ? (
-        <UtilityPane
-          expanded={utilityExpanded}
-          bottomPanelOpen={bottomPanelOpen}
-          onToggleExpanded={() => setUtilityExpanded((expanded) => !expanded)}
-          onToggleBottomPanel={toggleBottomPanel}
-        />
-      ) : null}
+      <UtilityPane
+        visible={utilityOpen}
+        expanded={utilityExpanded}
+        bottomPanelOpen={bottomPanelOpen}
+        onToggleExpanded={() => setUtilityExpanded((expanded) => !expanded)}
+        onToggleBottomPanel={toggleBottomPanel}
+      />
       {bottomPanelMounted ? (
         <section
           className={`bottom-panel ${bottomPanelOpen ? "" : "is-hidden"}`}

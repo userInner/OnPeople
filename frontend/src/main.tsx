@@ -55,7 +55,11 @@ if (!root) throw new Error("OnPeople root element is missing");
 // before a task can invoke the internal_browser MCP server. BrowserWorkspace
 // subscribes to the local queue when it mounts, so commands received while the
 // conversation view is visible are retained instead of timing out.
-browserBridge.receiveAgentCommands(() => undefined);
+browserBridge.receiveAgentCommands(() => {
+  const workbench = useWorkbenchStore.getState();
+  workbench.setToolView("browser");
+  workbench.setUtilityOpen(true);
+});
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.stack || error.message;

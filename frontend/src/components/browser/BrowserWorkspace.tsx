@@ -123,7 +123,13 @@ function tabTitle(tab: BrowserTabState): string {
   }
 }
 
-export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
+export function BrowserWorkspace({
+  visible = true,
+  onBack,
+}: {
+  visible?: boolean;
+  onBack: () => void;
+}) {
   const [tabs, setTabs] = useState<BrowserTabState[]>(loadTabs);
   const [activeTabId, setActiveTabId] = useState(() => tabs[0]!.id);
   const [address, setAddress] = useState("");
@@ -382,7 +388,11 @@ export function BrowserWorkspace({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <section className="browser-workspace" aria-label="内置浏览器">
+    <section
+      className={`browser-workspace ${visible ? "is-visible" : "is-runtime-hidden"}`}
+      aria-label="内置浏览器"
+      aria-hidden={!visible}
+    >
       <header className="browser-tabs-bar">
         <IconButton icon={PanelLeft} label="返回工作区" onClick={onBack} />
         <div className="browser-tabs" role="tablist" aria-label="浏览器标签页">

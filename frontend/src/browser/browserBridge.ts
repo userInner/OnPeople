@@ -1,4 +1,6 @@
 import type { BrowserHostEvent } from "./types";
+import { desktopApi } from "../lib/desktopClient";
+import type { BrowserAction } from "../bindings/BrowserAction";
 
 export interface BrowserAgentCommand {
   id?: string;
@@ -46,6 +48,28 @@ export const browserBridge = {
     payload: Record<string, unknown> = {},
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<T> {
+    const actionByCommand: Record<string, BrowserAction> = {
+      back: "back",
+      forward: "forward",
+      reload: "reload",
+      "visual-snapshot": "captureVisualSnapshot",
+      "developer-tools": "inspectDeveloperState",
+      "session-status": "sessionStatus",
+      "clear-site-data": "clearSession",
+      "clear-all-data": "clearAllData",
+      activate: "activateTab",
+      unregister: "detachTab",
+    };
+    const action = actionByCommand[command];
+    if (action) {
+      return withTimeout(
+        desktopApi.request("browser.action", {
+          action,
+          payload: payload as never,
+        }) as Promise<T>,
+        timeoutMs,
+      );
+    }
     if (!window.onpeopleBrowser) return Promise.reject(unavailable());
     return withTimeout(
       window.onpeopleBrowser.invoke(command, payload) as Promise<T>,

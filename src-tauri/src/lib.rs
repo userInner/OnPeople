@@ -2624,6 +2624,20 @@ struct TauriDesktopHost<'a, R: Runtime> {
 }
 
 impl<R: Runtime> DesktopHost for TauriDesktopHost<'_, R> {
+    fn browser<'a>(
+        &'a self,
+        _operation: onpeople_desktop_api::BrowserHostOperation,
+        _params: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+    {
+        Box::pin(async {
+            Err(AppError::new(
+                onpeople_types::ErrorCode::Unsupported,
+                "Tauri 退路版本不提供内置浏览器；请使用 Electron 主线",
+            ))
+        })
+    }
+
     fn shell<'a>(
         &'a self,
         operation: ShellHostOperation,

@@ -160,7 +160,7 @@ function isTauriRuntime(): boolean {
   );
 }
 
-const desktopApi = createDesktopApiClient(
+export const desktopApi = createDesktopApiClient(
   (request) => call("desktop_request", { request }),
   undefined,
   (handler) => subscribe("desktop:event", handler),

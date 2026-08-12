@@ -1443,6 +1443,14 @@ summary:focus-visible {
   height: 100%;
 }
 
+/* The browser runtime is application-scoped. Its guest webviews stay mounted
+   while the utility pane or another utility view is active; only the browser
+   presentation is hidden. This removes the agent/UI mount race and preserves
+   authenticated sessions across task and tool switches. */
+.browser-workspace.is-runtime-hidden {
+  display: none;
+}
+
 .utility-activity .utility-frame {
   height: 100%;
   max-height: none;

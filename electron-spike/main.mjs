@@ -237,6 +237,12 @@ async function bootstrap() {
           await shellAdapter?.handle(request.method, request.params ?? {}),
         );
       }
+      if (String(request.method).startsWith("browser.")) {
+        return responseSuccess(
+          request,
+          await handleBrowserDesktopRequest(request.method, request.params ?? {}),
+        );
+      }
       return await rustBridge.request(
         request,
         startupMethods.has(request.method)
@@ -245,6 +251,77 @@ async function bootstrap() {
       );
     } catch (error) {
       return responseFailure(request, error);
+    }
+  };
+
+  const routeId = (value = {}) =>
+    String(value.routeId ?? value.tabId ?? browserHost?.state().activeTabId ?? "");
+  const handleBrowserCommand = async (command) => {
+    const kind = String(command?.command ?? "");
+    const payload = command?.payload ?? {};
+    const tabId = routeId(payload);
+    const mapped = {
+      createRoute: ["navigate", { tabId: payload.routeId, url: payload.url }],
+      navigate: ["navigate", { tabId, url: payload.url }],
+      back: ["back", { tabId }],
+      forward: ["forward", { tabId }],
+      reload: ["reload", { tabId }],
+      resize: ["surface-bounds", { ...payload, tabId }],
+      click: ["agent-click", { tabId, selector: payload.selector }],
+      fill: ["agent-type", { tabId, selector: payload.selector, text: payload.value }],
+      select: ["select", { tabId, selector: payload.selector, value: payload.value }],
+      press: ["press", { tabId, key: payload.key }],
+      scroll: ["scroll", { tabId, x: payload.x, y: payload.y }],
+      hover: ["hover", { tabId, selector: payload.selector }],
+      evaluate: ["evaluate", { tabId, expression: payload.expression }],
+      domSnapshot: ["dom-snapshot", { tabId }],
+      visualSnapshot: ["visual-snapshot", { tabId }],
+      developerInspect: ["developer-tools", { tabId }],
+      closeRoute: ["unregister", { tabId }],
+    }[kind];
+    if (!mapped) throw new Error(`不支持的 Desktop 浏览器命令: ${kind}`);
+    return browserHost.handle(mapped[0], mapped[1]);
+  };
+  const handleBrowserAction = async ({ action, payload = {} }) => {
+    const tabId = routeId(payload);
+    const mapped = {
+      navigate: ["navigate", { tabId, url: payload.url }],
+      back: ["back", { tabId }],
+      forward: ["forward", { tabId }],
+      reload: ["reload", { tabId }],
+      captureVisualSnapshot: ["visual-snapshot", { tabId }],
+      inspectDeveloperState: ["developer-tools", { tabId }],
+      sessionStatus: ["session-status", { tabId }],
+      clearSession: ["clear-site-data", { tabId }],
+      clearAllData: ["clear-all-data", {}],
+      clearSettingsData: ["clear-all-data", {}],
+      activateTab: ["activate", { tabId }],
+      detachTab: ["unregister", { tabId }],
+    }[String(action ?? "")];
+    if (!mapped) throw new Error(`浏览器动作尚未实现: ${action}`);
+    return browserHost.handle(mapped[0], mapped[1]);
+  };
+  const handleBrowserDesktopRequest = async (method, params) => {
+    if (!browserHost) throw new Error("浏览器服务尚未就绪");
+    switch (method) {
+      case "browser.state":
+        return browserHost.state();
+      case "browser.restart":
+        return browserHost.handle("restart");
+      case "browser.command":
+        return handleBrowserCommand(params.command);
+      case "browser.surface.bounds":
+        return browserHost.handle("surface-bounds", params);
+      case "browser.annotation.list":
+        return browserHost.handle("annotation-list", params);
+      case "browser.annotation.save":
+        return browserHost.handle("annotation-save", params);
+      case "browser.annotation.delete":
+        return browserHost.handle("annotation-delete", params);
+      case "browser.action":
+        return handleBrowserAction(params);
+      default:
+        throw new Error(`不支持的浏览器 Desktop API: ${method}`);
     }
   };
 

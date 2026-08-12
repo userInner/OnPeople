@@ -127,6 +127,7 @@ export class ElectronBrowserHost {
   #tabByWebContents = new Map();
   #webContentsByTab = new Map();
   #downloads = [];
+  #annotations = new Map();
   #crashCount = 0;
   #recoveryCount = 0;
   #activeTabId = null;
@@ -269,6 +270,28 @@ export class ElectronBrowserHost {
         return this.#zoom(payload.tabId, payload.factor);
       case "recover":
         return this.#recover(payload.tabId);
+      case "restart":
+        return this.#restart();
+      case "evaluate":
+        return this.#evaluate(payload.tabId, payload.expression);
+      case "select":
+        return this.#select(payload.tabId, payload.selector, payload.value);
+      case "press":
+        return this.#press(payload.tabId, payload.key);
+      case "scroll":
+        return this.#scroll(payload.tabId, payload.x, payload.y);
+      case "hover":
+        return this.#hover(payload.tabId, payload.selector);
+      case "surface-bounds":
+        return { acknowledged: true, ...payload };
+      case "annotation-list":
+        return [...this.#annotations.values()].filter(
+          (annotation) => annotation.routeId === String(payload.routeId ?? ""),
+        );
+      case "annotation-save":
+        return this.#saveAnnotation(payload);
+      case "annotation-delete":
+        return { deleted: this.#annotations.delete(String(payload.id ?? "")) };
       default:
         throw new Error(`不支持的浏览器操作: ${command}`);
     }
@@ -544,6 +567,89 @@ export class ElectronBrowserHost {
       })()`,
       true,
     );
+  }
+
+  async #evaluate(tabId, expression) {
+    const guest = this.#guest(tabId);
+    const script = String(expression ?? "");
+    if (!script || script.length > 100_000) {
+      throw new Error("浏览器脚本为空或过长");
+    }
+    return guest.executeJavaScript(script, true);
+  }
+
+  async #select(tabId, selector, value) {
+    return this.#evaluate(
+      tabId,
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(String(selector ?? ""))});
+        if (!(element instanceof HTMLSelectElement)) throw new Error("未找到可选择元素");
+        element.value = ${JSON.stringify(String(value ?? ""))};
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return { selected: true, value: element.value };
+      })()`,
+    );
+  }
+
+  async #press(tabId, key) {
+    const guest = this.#guest(tabId);
+    const value = String(key ?? "").slice(0, 64);
+    if (!value) throw new Error("缺少按键");
+    guest.sendInputEvent({ type: "keyDown", keyCode: value });
+    guest.sendInputEvent({ type: "keyUp", keyCode: value });
+    return { pressed: true, key: value };
+  }
+
+  async #scroll(tabId, x, y) {
+    const guest = this.#guest(tabId);
+    guest.sendInputEvent({
+      type: "mouseWheel",
+      x: 0,
+      y: 0,
+      deltaX: Number(x) || 0,
+      deltaY: Number(y) || 0,
+    });
+    return { scrolled: true };
+  }
+
+  async #hover(tabId, selector) {
+    return this.#evaluate(
+      tabId,
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(String(selector ?? ""))});
+        if (!(element instanceof HTMLElement)) throw new Error("未找到可悬停元素");
+        element.scrollIntoView({ block: "center", inline: "center" });
+        const rect = element.getBoundingClientRect();
+        element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }));
+        return { hovered: true, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+      })()`,
+    );
+  }
+
+  #restart() {
+    for (const webContentsId of this.#webContentsByTab.values()) {
+      const guest = electronWebContents.fromId(webContentsId);
+      if (guest && !guest.isDestroyed()) guest.reload();
+    }
+    return this.state();
+  }
+
+  #saveAnnotation(payload) {
+    const id = String(payload.id ?? "").trim();
+    const routeId = String(payload.routeId ?? "").trim();
+    if (!id || !routeId) throw new Error("批注缺少 id 或 routeId");
+    const annotation = {
+      id,
+      routeId,
+      url: String(payload.url ?? ""),
+      selector: payload.selector ?? null,
+      rect: payload.rect ?? null,
+      text: String(payload.text ?? ""),
+      createdAt: String(payload.createdAt ?? new Date().toISOString()),
+    };
+    this.#annotations.set(id, annotation);
+    return annotation;
   }
 
   async #visualSnapshot(tabId) {

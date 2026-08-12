@@ -31,6 +31,10 @@ import {
 } from "../lib/executionRecovery";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import type { TimelineItem } from "../types";
+import {
+  buildTurnRenderModel,
+  type TurnRenderBlock as TimelineBlock,
+} from "../lib/turnRenderModel";
 import { ArtifactImageOutput } from "./ArtifactImageOutput";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -67,16 +71,8 @@ export function Timeline() {
     runtime?.state === "working" &&
     Boolean(selectedThreadId) &&
     runtime.threadId === selectedThreadId;
-  const displayTimeline = orderCompletedTurnActivities(
-    suppressRedundantReasoningPlaceholders(
-      collapseDuplicateTurnNarration(
-        normalizeTurnActivityTraces(
-          collapseDuplicateCommandTraces(inferMissingTurnIds(timeline)),
-        ),
-      ),
-    ),
-    runtimeWorking,
-  );
+  const renderModel = buildTurnRenderModel(timeline, runtimeWorking);
+  const displayTimeline = renderModel.items;
   const hasLiveTurn =
     displayTimeline.some(
       (item) =>
@@ -265,7 +261,7 @@ export function Timeline() {
 
   return (
     <section className="timeline" aria-label="任务执行流">
-      {groupTimelineItems(displayTimeline).map((block, index, blocks) => {
+      {renderModel.blocks.map((block, index, blocks) => {
         const item = block.items[0];
         const turnSummary = conversationTurnSummaryAt(
           blocks,
@@ -314,308 +310,9 @@ export function Timeline() {
   );
 }
 
-function inferMissingTurnIds(items: TimelineItem[]): TimelineItem[] {
-  let activeTurnId: string | undefined;
-  return items.map((item) => {
-    if (item.role === "user") {
-      activeTurnId = item.turnId;
-      return item;
-    }
-    if (item.turnId) {
-      activeTurnId = item.turnId;
-      return item;
-    }
-    return activeTurnId ? { ...item, turnId: activeTurnId } : item;
-  });
-}
-
-function collapseDuplicateCommandTraces(items: TimelineItem[]): TimelineItem[] {
-  const collapsed: TimelineItem[] = [];
-  const commandIndexes = new Map<string, number>();
-
-  for (const item of items) {
-    const commandKey = duplicateCommandKey(item);
-    const existingIndex = commandKey
-      ? commandIndexes.get(commandKey)
-      : undefined;
-    if (existingIndex === undefined) {
-      if (commandKey) commandIndexes.set(commandKey, collapsed.length);
-      collapsed.push(item);
-      continue;
-    }
-
-    const existing = collapsed[existingIndex];
-    if (existing && commandTraceScore(item) > commandTraceScore(existing)) {
-      collapsed[existingIndex] = item;
-    }
-  }
-
-  return collapsed;
-}
-
-function normalizeTurnActivityTraces(items: TimelineItem[]): TimelineItem[] {
-  const directBrowserOperations = new Map<string, Set<string>>();
-  const successfulBrowserTurns = new Set<string>();
-
-  for (const item of items) {
-    const operation = browserOperation(item);
-    if (!operation || !item.turnId) continue;
-    if (item.kind === "tool") {
-      const operations = directBrowserOperations.get(item.turnId) ?? new Set();
-      operations.add(operation);
-      directBrowserOperations.set(item.turnId, operations);
-    }
-    if (item.kind === "tool" && !hasFailed(item)) {
-      successfulBrowserTurns.add(item.turnId);
-    }
-  }
-
-  return items.filter((item) => {
-    const operation = browserOperation(item);
-    if (
-      operation &&
-      item.turnId &&
-      item.kind === "command" &&
-      directBrowserOperations.get(item.turnId)?.has(operation)
-    ) {
-      // app-server history contains both the outer exec wrapper and the direct
-      // MCP item. Codex renders the semantic browser operation once.
-      return false;
-    }
-    if (
-      operation &&
-      item.turnId &&
-      hasFailed(item) &&
-      successfulBrowserTurns.has(item.turnId)
-    ) {
-      // A browser startup retry is an intermediate state once the same turn
-      // successfully reads or operates the page.
-      return false;
-    }
-    if (
-      item.turnId &&
-      isWaitTrace(item) &&
-      successfulBrowserTurns.has(item.turnId)
-    ) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function browserOperation(item: TimelineItem): string | undefined {
-  const identity =
-    `${item.title ?? ""} ${item.meta ?? ""} ${item.command ?? ""}`.toLowerCase();
-  return identity.match(
-    /browser_(open|dom_snapshot|click|type|back|reload|state)/u,
-  )?.[1];
-}
-
-function isWaitTrace(item: TimelineItem): boolean {
-  if (item.kind !== "tool" || hasFailed(item)) return false;
-  return /^(?:wait|等待)$/iu.test(
-    `${item.title ?? ""} ${item.meta ?? ""}`.trim(),
-  );
-}
-
-function collapseDuplicateTurnNarration(items: TimelineItem[]): TimelineItem[] {
-  const collapsed: TimelineItem[] = [];
-  const narrationIndexes = new Map<string, number>();
-
-  for (const item of items) {
-    const key = narrationKey(item);
-    const existingIndex = key ? narrationIndexes.get(key) : undefined;
-    if (existingIndex === undefined) {
-      if (key) narrationIndexes.set(key, collapsed.length);
-      collapsed.push(item);
-      continue;
-    }
-
-    const existing = collapsed[existingIndex];
-    if (
-      existing &&
-      narrationDisplayPriority(item) > narrationDisplayPriority(existing)
-    ) {
-      collapsed[existingIndex] = item;
-    }
-  }
-
-  return collapsed;
-}
-
-function suppressRedundantReasoningPlaceholders(
-  items: TimelineItem[],
-): TimelineItem[] {
-  const meaningfulTurnItems = new Set<string>();
-  for (const item of items) {
-    if (
-      item.turnId &&
-      ((item.kind === "message" &&
-        item.role === "assistant" &&
-        Boolean(item.text.trim())) ||
-        (isActivityItem(item) && item.kind !== "reasoning"))
-    ) {
-      meaningfulTurnItems.add(item.turnId);
-    }
-  }
-  return items.filter(
-    (item) =>
-      item.kind !== "reasoning" ||
-      Boolean(item.text.trim()) ||
-      (isActivelyPending(item) &&
-        (!item.turnId || !meaningfulTurnItems.has(item.turnId))),
-  );
-}
-
-function narrationKey(item: TimelineItem): string | undefined {
-  if (
-    item.role !== "assistant" ||
-    (item.kind !== "message" && item.kind !== "reasoning") ||
-    !item.turnId ||
-    !item.text.trim()
-  ) {
-    return undefined;
-  }
-  const text = item.text.normalize("NFKC").replace(/\s+/gu, " ").trim();
-  return text ? `${item.turnId}\u0000${text}` : undefined;
-}
-
-function narrationDisplayPriority(item: TimelineItem): number {
-  if (item.kind === "reasoning") return 1;
-  if (item.phase === "final_answer") return 4;
-  if (item.phase === "commentary") return 3;
-  return 2;
-}
-
-function orderCompletedTurnActivities(
-  items: TimelineItem[],
-  runtimeWorking = false,
-): TimelineItem[] {
-  if (items.length < 2) return items;
-
-  const sourceSegments: number[] = [];
-  const turnSegments = new Map<string, number>();
-  let segment = -1;
-  for (const item of items) {
-    if (item.role === "user") segment += 1;
-    const sourceSegment = Math.max(0, segment);
-    sourceSegments.push(sourceSegment);
-    if (item.turnId && !turnSegments.has(item.turnId)) {
-      turnSegments.set(item.turnId, sourceSegment);
-    }
-  }
-
-  const segments = Array.from(
-    { length: Math.max(1, segment + 1) },
-    () => [] as TimelineItem[],
-  );
-  items.forEach((item, index) => {
-    const sourceSegment = sourceSegments[index] ?? 0;
-    const targetSegment =
-      item.role === "user" || !item.turnId
-        ? sourceSegment
-        : (turnSegments.get(item.turnId) ?? sourceSegment);
-    segments[targetSegment]?.push(item);
-  });
-
-  return segments.flatMap((turnItems, segmentIndex) => {
-    let finalReplyIndex = -1;
-    for (let index = turnItems.length - 1; index >= 0; index -= 1) {
-      const item = turnItems[index];
-      if (
-        item?.role === "assistant" &&
-        item.kind === "message" &&
-        item.phase !== "commentary"
-      ) {
-        finalReplyIndex = index;
-        break;
-      }
-    }
-    if (finalReplyIndex < 0) return turnItems;
-
-    const trailing = turnItems.slice(finalReplyIndex + 1);
-    const lateActivities = trailing.filter(isActivityItem);
-    if (lateActivities.length === 0) return turnItems;
-    // Keep live commentary in its original conversational position while a
-    // following tool is still running. Once every late receipt is complete,
-    // move it before the final reply immediately. Waiting for turn/completed
-    // made the reply jump only when the summary switched to “已完成”, which
-    // looked like the model response had disappeared below the viewport.
-    if (
-      runtimeWorking &&
-      segmentIndex === segments.length - 1 &&
-      lateActivities.some(isActivelyPending)
-    ) {
-      return turnItems;
-    }
-    return [
-      ...turnItems.slice(0, finalReplyIndex),
-      ...lateActivities,
-      turnItems[finalReplyIndex]!,
-      ...trailing.filter((item) => !isActivityItem(item)),
-    ];
-  });
-}
-
-function duplicateCommandKey(item: TimelineItem): string | undefined {
-  if (item.kind !== "command" || !item.turnId) return undefined;
-  const command = canonicalCommand(item.command ?? commandText(item));
-  return command ? `${item.turnId}:${command}` : undefined;
-}
-
-function canonicalCommand(value: string): string {
-  const command = singleLineActivityText(value).trim();
-  const shellWrapped = command.match(
-    /^\/bin\/(?:ba|z|)sh\s+-lc\s+(['"])([\s\S]*)\1$/u,
-  );
-  return (shellWrapped?.[2] ?? command).replace(/\s+/g, " ").trim();
-}
-
-function commandTraceScore(item: TimelineItem): number {
-  return (
-    (item.exitCode !== undefined ? 8 : 0) +
-    (item.durationMs !== undefined ? 4 : 0) +
-    (item.cwd ? 2 : 0) +
-    (item.command ? 1 : 0)
-  );
-}
-
-type TimelineBlock =
-  | { id: string; kind: "item"; items: [TimelineItem] }
-  | { id: string; kind: "activity"; items: TimelineItem[] };
-
-function groupTimelineItems(items: TimelineItem[]): TimelineBlock[] {
-  const blocks: TimelineBlock[] = [];
-  for (const item of items) {
-    const activity = isActivityItem(item);
-    const previous = blocks.at(-1);
-    if (
-      activity &&
-      previous?.kind === "activity" &&
-      previous.items.at(-1)?.turnId === item.turnId
-    ) {
-      previous.items.push(item);
-      continue;
-    }
-    blocks.push(
-      activity
-        ? { id: `activity-${item.id}`, kind: "activity", items: [item] }
-        : { id: item.id, kind: "item", items: [item] },
-    );
-  }
-  return blocks;
-}
-
-function isActivityItem(item: TimelineItem) {
-  return (
-    item.kind === "reasoning" ||
-    (item.role === "tool" &&
-      (item.kind === "command" ||
-        item.kind === "file-change" ||
-        item.kind === "tool"))
-  );
-}
-
+/* Turn ownership, duplicate reconciliation and completed-turn placement are
+   deliberately centralized in turnRenderModel.ts. Timeline.tsx only renders
+   the stable projection. */
 function TimelineEntry({ item }: { item: TimelineItem }) {
   const [copied, setCopied] = useState(false);
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
@@ -1276,6 +973,14 @@ function singleLineActivityText(value: string): string {
     .join(" ⏎ ")
     .replace(/^\$\s*/, "")
     .replace(/\s+/g, " ");
+}
+
+function canonicalCommand(value: string): string {
+  const command = singleLineActivityText(value).trim();
+  const shellWrapped = command.match(
+    /^\/bin\/(?:ba|z|)sh\s+-lc\s+(['"])([\s\S]*)\1$/u,
+  );
+  return (shellWrapped?.[2] ?? command).replace(/\s+/g, " ").trim();
 }
 
 function commandOutput(item: TimelineItem): string {

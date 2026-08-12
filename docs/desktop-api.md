@@ -219,7 +219,23 @@ legacy scheduler loop call that same implementation.
 Cloud account, authentication, registration, redemption, groups, usage, and
 leaderboard preferences dispatch directly to `CoreRuntime`. Opening the cloud
 console remains a native-host responsibility because it launches the system
-browser; it is intentionally not represented as a headless request.
+browser.
+
+## Browser host boundary
+
+The stable contract includes eight `browser.*` methods: state, restart,
+command, surface bounds, annotation list/save/delete, and semantic action.
+Electron handles them in its main-process adapter and owns the persistent,
+isolated `persist:onpeople-browser` session. The renderer keeps the guest host
+mounted from application startup; opening or closing the utility pane changes
+presentation only and does not create or destroy the browser service. This
+means Agent, UI, and automation requests share one control plane and do not
+wait for a visible browser panel to mount.
+
+The Rust sidecar advertises the same 154-method protocol but deliberately
+returns `UNSUPPORTED` if a browser request is forwarded past Electron. The
+Tauri fallback does the same; its production tag remains available as a safe
+rollback rather than carrying a second browser implementation.
 
 Live status and session create/close are stable request/response methods. Live
 sideband status and event delivery remain the existing high-frequency event

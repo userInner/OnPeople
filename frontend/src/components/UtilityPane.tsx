@@ -34,6 +34,7 @@ const views: Array<{ id: ToolView; label: string; icon: typeof CircleDot }> = [
 ];
 
 interface UtilityPaneProps {
+  visible?: boolean;
   expanded: boolean;
   bottomPanelOpen: boolean;
   onToggleExpanded: () => void;
@@ -41,6 +42,7 @@ interface UtilityPaneProps {
 }
 
 export function UtilityPane({
+  visible = true,
   expanded,
   bottomPanelOpen,
   onToggleExpanded,
@@ -79,7 +81,11 @@ export function UtilityPane({
   }, [menuOpen]);
 
   return (
-    <aside className={`utility-pane utility-${toolView}`} aria-label="工具舱">
+    <aside
+      className={`utility-pane utility-${toolView} ${visible ? "is-visible" : "is-hidden"}`}
+      aria-label="工具舱"
+      aria-hidden={!visible}
+    >
       <div className="utility-tabs utility-toolbar">
         <div className="utility-view-switcher" ref={menuRef}>
           <div
@@ -159,9 +165,10 @@ export function UtilityPane({
       <div className="utility-frame">
         <div className="utility-content" role="tabpanel">
           {toolView === "activity" ? <ActivityPane /> : null}
-          {toolView === "browser" ? (
-            <BrowserWorkspace onBack={() => setToolView("activity")} />
-          ) : null}
+          <BrowserWorkspace
+            visible={visible && toolView === "browser"}
+            onBack={() => setToolView("activity")}
+          />
           {toolView === "git" ? <GitPane /> : null}
           {toolView === "files" ? (
             localArtifactPreview ? (

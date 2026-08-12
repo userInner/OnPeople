@@ -14,34 +14,36 @@ use serde_json::{Value, json};
 
 use crate::{
     AgentIdRequest, AgentListRequest, AgentMessageRequest, AgentProfileIdRequest,
-    AgentProfileSaveRequest, AuthorizedProjectAction, CloudGroupSelectRequest, CloudLoginRequest,
-    CloudPayloadRequest, CloudRedeemRequest, CloudRegisterRequest, CloudRegistrationCodeRequest,
-    ConnectorOauthCompleteRequest, ContextRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities,
-    DesktopEvent, DesktopHost, DesktopMethod, DesktopRequest, DesktopResponse, EffectiveConfig,
-    EffectiveConfigRequest, EventReplay, EventReplayRequest, ExtensionsListRequest,
-    ExtensionsSnapshot, FileListRequest, FilePreview, FilePreviewRequest, FileSearchRequest,
-    GeneratedImage, GitHunkMutationRequest, GitPullRequestRequest, GitReviewStartRequest,
-    GitReviewSubmitRequest, HookCreateRequest, HookDefinition, HookListRequest, LiveCloseRequest,
-    LiveCreateRequest, LocalArtifactRequest, MemoryDeleteRequest, MemoryListRequest,
-    MemorySaveRequest, MemorySaveResult, MemorySettingsRequest, MemoryState, ModelCatalog,
-    ModelValidation, ModelValidationRequest, NewTaskRequest, PluginCatalogSyncRequest,
-    PluginIdRequest, PluginPayloadRequest, PolicySaveRequest, PolicyState,
-    ProjectActionAuthorizeRequest, ProjectPathRequest, ProjectUpdateRequest, QueuedTaskMessage,
-    QuickLauncherRequest, RuntimeSnapshotRequest, ScheduledTaskFromTextRequest,
-    SchedulerMarkReadRequest, SecretDeleteRequest, SecretDeleteResult, SecretList,
-    SecretSaveRequest, SecretSaveResult, ShellAppUpdateCheck, ShellAppUpdateDownload,
-    ShellAppUpdateInstall, ShellEditorOpenRequest, ShellExternalUrlRequest, ShellFileSelection,
-    ShellFileSelectionRequest, ShellGeneratedImageCopy, ShellGeneratedImageRequest,
-    ShellGeneratedImageReveal, ShellHostOperation, ShellMicrophoneAccess,
-    ShellOpenTaskWindowRequest, ShellOpenedPath, ShellOpenedUrl, ShellPickDownloadDirectoryRequest,
-    ShellProjectRequest, ShellThreadRequest, ShellThreadReveal, SkillEnabledRequest,
-    SkillEnabledState, TaskApprovalResolution, TaskApprovalResolveRequest, TaskCancelRequest,
-    TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest, TaskQueueDeletion,
-    TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery, TaskResumeRequest,
-    TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState, TaskSteerReceipt,
-    TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest, TerminalFocusRequest,
-    TerminalFocusState, TerminalReadyState, ThreadAutoNameRequest, UsagePriceRequest,
-    WorktreePathRequest, should_forward_desktop_event,
+    AgentProfileSaveRequest, AuthorizedProjectAction, BrowserActionRequest,
+    BrowserAnnotationDeleteRequest, BrowserAnnotationRequest, BrowserCommandRequest,
+    BrowserHostOperation, BrowserRouteRequest, BrowserSurfaceBoundsRequest,
+    CloudGroupSelectRequest, CloudLoginRequest, CloudPayloadRequest, CloudRedeemRequest,
+    CloudRegisterRequest, CloudRegistrationCodeRequest, ConnectorOauthCompleteRequest,
+    ContextRequest, DESKTOP_PROTOCOL_VERSION, DesktopCapabilities, DesktopEvent, DesktopHost,
+    DesktopMethod, DesktopRequest, DesktopResponse, EffectiveConfig, EffectiveConfigRequest,
+    EventReplay, EventReplayRequest, ExtensionsListRequest, ExtensionsSnapshot, FileListRequest,
+    FilePreview, FilePreviewRequest, FileSearchRequest, GeneratedImage, GitHunkMutationRequest,
+    GitPullRequestRequest, GitReviewStartRequest, GitReviewSubmitRequest, HookCreateRequest,
+    HookDefinition, HookListRequest, LiveCloseRequest, LiveCreateRequest, LocalArtifactRequest,
+    MemoryDeleteRequest, MemoryListRequest, MemorySaveRequest, MemorySaveResult,
+    MemorySettingsRequest, MemoryState, ModelCatalog, ModelValidation, ModelValidationRequest,
+    NewTaskRequest, PluginCatalogSyncRequest, PluginIdRequest, PluginPayloadRequest,
+    PolicySaveRequest, PolicyState, ProjectActionAuthorizeRequest, ProjectPathRequest,
+    ProjectUpdateRequest, QueuedTaskMessage, QuickLauncherRequest, RuntimeSnapshotRequest,
+    ScheduledTaskFromTextRequest, SchedulerMarkReadRequest, SecretDeleteRequest,
+    SecretDeleteResult, SecretList, SecretSaveRequest, SecretSaveResult, ShellAppUpdateCheck,
+    ShellAppUpdateDownload, ShellAppUpdateInstall, ShellEditorOpenRequest, ShellExternalUrlRequest,
+    ShellFileSelection, ShellFileSelectionRequest, ShellGeneratedImageCopy,
+    ShellGeneratedImageRequest, ShellGeneratedImageReveal, ShellHostOperation,
+    ShellMicrophoneAccess, ShellOpenTaskWindowRequest, ShellOpenedPath, ShellOpenedUrl,
+    ShellPickDownloadDirectoryRequest, ShellProjectRequest, ShellThreadRequest, ShellThreadReveal,
+    SkillEnabledRequest, SkillEnabledState, TaskApprovalResolution, TaskApprovalResolveRequest,
+    TaskCancelRequest, TaskCancellation, TaskHandle, TaskInputResolution, TaskInputResolveRequest,
+    TaskQueueDeletion, TaskQueueItemRequest, TaskQueueRequest, TaskQueueSteerReceipt, TaskRecovery,
+    TaskResumeRequest, TaskSnapshot, TaskSnapshotRequest, TaskStartRequest, TaskState,
+    TaskSteerReceipt, TaskSteerRequest, TerminalContextMenu, TerminalContextMenuRequest,
+    TerminalFocusRequest, TerminalFocusState, TerminalReadyState, ThreadAutoNameRequest,
+    UsagePriceRequest, WorktreePathRequest, should_forward_desktop_event,
 };
 
 #[derive(Clone)]
@@ -725,6 +727,63 @@ impl DesktopDispatcher {
                 let request: WorktreeRequest = parse_params(params)?;
                 self.runtime.worktrees(request)
             }
+            DesktopMethod::BrowserState => {
+                parse_empty(params)?;
+                call_browser_host(host, BrowserHostOperation::State, json!({})).await
+            }
+            DesktopMethod::BrowserRestart => {
+                parse_empty(params)?;
+                call_browser_host(host, BrowserHostOperation::Restart, json!({})).await
+            }
+            DesktopMethod::BrowserCommand => {
+                let request: BrowserCommandRequest = parse_params(params)?;
+                call_browser_host(
+                    host,
+                    BrowserHostOperation::Command,
+                    to_value(request.command)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserSurfaceBounds => {
+                let request: BrowserSurfaceBoundsRequest = parse_params(params)?;
+                call_browser_host(
+                    host,
+                    BrowserHostOperation::SurfaceBounds,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationList => {
+                let request: BrowserRouteRequest = parse_params(params)?;
+                call_browser_host(
+                    host,
+                    BrowserHostOperation::AnnotationList,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationSave => {
+                let request: BrowserAnnotationRequest = parse_params(params)?;
+                call_browser_host(
+                    host,
+                    BrowserHostOperation::AnnotationSave,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAnnotationDelete => {
+                let request: BrowserAnnotationDeleteRequest = parse_params(params)?;
+                call_browser_host(
+                    host,
+                    BrowserHostOperation::AnnotationDelete,
+                    to_value(request)?,
+                )
+                .await
+            }
+            DesktopMethod::BrowserAction => {
+                let request: BrowserActionRequest = parse_params(params)?;
+                call_browser_host(host, BrowserHostOperation::Action, to_value(request)?).await
+            }
             DesktopMethod::PluginInstall => {
                 let request: PluginPayloadRequest = parse_params(params)?;
                 self.runtime.install_plugin(&to_value(request.plugin)?)
@@ -1078,6 +1137,17 @@ impl DesktopDispatcher {
     }
 }
 
+async fn call_browser_host(
+    host: Option<&dyn DesktopHost>,
+    operation: BrowserHostOperation,
+    params: Value,
+) -> Result<Value, AppError> {
+    let host = host.ok_or_else(|| {
+        AppError::new(ErrorCode::Unsupported, "当前桌面适配器不支持浏览器宿主能力")
+    })?;
+    host.browser(operation, params).await
+}
+
 async fn call_shell_host<T: DeserializeOwned + Serialize>(
     host: Option<&dyn DesktopHost>,
     operation: ShellHostOperation,
@@ -1186,10 +1256,26 @@ mod tests {
 
     #[derive(Default)]
     struct FakeDesktopHost {
+        browser_calls: Mutex<Vec<(BrowserHostOperation, Value)>>,
         shell_calls: Mutex<Vec<(ShellHostOperation, Value)>>,
     }
 
     impl DesktopHost for FakeDesktopHost {
+        fn browser<'a>(
+            &'a self,
+            operation: BrowserHostOperation,
+            params: Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.browser_calls
+                    .lock()
+                    .expect("fake browser calls")
+                    .push((operation, params));
+                Ok(json!({ "ready": true, "activeTabId": null, "attachedTabs": [] }))
+            })
+        }
+
         fn shell<'a>(
             &'a self,
             operation: ShellHostOperation,
@@ -1299,6 +1385,58 @@ mod tests {
             assert_eq!(calls[1].0, ShellHostOperation::OpenCloudConsole);
             assert_eq!(calls[1].1, json!({}));
         }
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn browser_methods_require_and_use_the_host_port() {
+        let temporary = tempfile::tempdir().expect("temporary data root");
+        let storage =
+            Storage::open_empty(temporary.path().join("data")).expect("open empty storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime"))
+                .expect("create core runtime"),
+        );
+        let dispatcher = DesktopDispatcher::new(Arc::clone(&runtime));
+        let request = || DesktopRequest {
+            protocol_version: DESKTOP_PROTOCOL_VERSION,
+            request_id: "browser-action-1".to_owned(),
+            method: DesktopMethod::BrowserAction,
+            params: json!({
+                "action": "navigate",
+                "payload": {
+                    "tabId": "tab-1",
+                    "url": "https://example.com"
+                }
+            }),
+        };
+
+        let unsupported = dispatcher.dispatch(request()).await;
+        assert!(!unsupported.ok);
+        assert_eq!(
+            unsupported.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::Unsupported)
+        );
+
+        let host = FakeDesktopHost::default();
+        let response = dispatcher.dispatch_with_host(request(), &host).await;
+        assert!(response.ok, "unexpected response: {response:?}");
+        {
+            let calls = host.browser_calls.lock().expect("fake browser calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, BrowserHostOperation::Action);
+            assert_eq!(
+                calls[0].1,
+                json!({
+                    "action": "navigate",
+                    "payload": {
+                        "tabId": "tab-1",
+                        "url": "https://example.com"
+                    }
+                })
+            );
+        }
+
         runtime.stop().await;
     }
 
