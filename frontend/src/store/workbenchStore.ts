@@ -656,12 +656,14 @@ function itemToTimelineBase(
   if (type === "agentMessage") {
     const text = textValue(item.text);
     if (!text || isInternalTimelineMessage(text)) return null;
+    const phase = textValue(item.phase) || undefined;
     return {
       id,
       role: "assistant",
       kind: "message",
       text,
-      status: textValue(item.phase) || undefined,
+      phase,
+      status: statusText(item.status),
       pending,
     };
   }
@@ -679,12 +681,14 @@ function itemToTimelineBase(
             .join("")
         : textValue(content));
     if (!text || isInternalTimelineMessage(text)) return null;
+    const phase = textValue(item.phase) || undefined;
     return {
       id,
       role: "assistant",
       kind: "message",
       text,
-      status: textValue(item.phase) || undefined,
+      phase,
+      status: statusText(item.status),
       pending,
     };
   }
@@ -1083,6 +1087,21 @@ function upsertItem(items: TimelineItem[], item: TimelineItem): TimelineItem[] {
       }
     }
   }
+  if (index < 0 && isAssistantNarration(item) && item.text.trim()) {
+    const normalized = normalizedUserText(item.text);
+    for (let candidate = items.length - 1; candidate >= 0; candidate -= 1) {
+      const entry = items[candidate];
+      if (
+        entry &&
+        isAssistantNarration(entry) &&
+        normalizedUserText(entry.text) === normalized &&
+        sameTimelineTurn(entry, item)
+      ) {
+        index = candidate;
+        break;
+      }
+    }
+  }
   const previous = index >= 0 ? items[index] : undefined;
   // Completion is monotonic. A delayed `item/started` notification must not
   // resurrect an item that a terminal notification already settled.
@@ -1100,15 +1119,36 @@ function upsertItem(items: TimelineItem[], item: TimelineItem): TimelineItem[] {
   if (index < 0) return [...items.slice(-399), item];
   const current = items[index];
   if (!current) return [...items.slice(-399), item];
+  const preferred =
+    narrationPriority(item) >= narrationPriority(current) ? item : current;
+  const secondary = preferred === item ? current : item;
   const next = [...items];
   next[index] = {
-    ...current,
-    ...item,
-    text: item.text || current.text,
-    meta: item.meta || current.meta,
-    timestamp: item.timestamp ?? current.timestamp,
+    ...secondary,
+    ...preferred,
+    text: preferred.text || secondary.text,
+    meta: preferred.meta || secondary.meta,
+    timestamp: preferred.timestamp ?? secondary.timestamp,
   };
   return next;
+}
+
+function isAssistantNarration(item: TimelineItem): boolean {
+  return (
+    item.role === "assistant" &&
+    (item.kind === "message" || item.kind === "reasoning")
+  );
+}
+
+function sameTimelineTurn(left: TimelineItem, right: TimelineItem): boolean {
+  return Boolean(left.turnId && right.turnId && left.turnId === right.turnId);
+}
+
+function narrationPriority(item: TimelineItem): number {
+  if (item.kind === "reasoning") return 1;
+  if (item.phase === "final_answer") return 4;
+  if (item.phase === "commentary") return 3;
+  return 2;
 }
 
 function mergeRecoveredTimeline(

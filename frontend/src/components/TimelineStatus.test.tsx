@@ -357,12 +357,10 @@ describe("Timeline activity status", () => {
 
     const view = render(<Timeline />);
     expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
-    expect(
-      view.container.querySelector(".turn-summary-current"),
-    ).toHaveTextContent("正在分析");
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
     expect(view.container.querySelector(".turn-summary")).toHaveAttribute(
       "aria-label",
-      "正在处理 0s，正在分析",
+      "正在处理 0s",
     );
     expect(
       view.container.querySelector(".activity-summary > summary strong"),
@@ -455,15 +453,13 @@ describe("Timeline activity status", () => {
     expect(view.container.querySelector(".turn-summary")).not.toHaveTextContent(
       "已完成",
     );
-    expect(
-      view.container.querySelector(".turn-summary-current"),
-    ).toHaveTextContent("正在生成回复");
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
 
     act(() => vi.advanceTimersByTime(2_000));
     expect(screen.getByText("正在处理 2s")).toBeInTheDocument();
   });
 
-  it("shows the live browser and web-search phase beside elapsed time", () => {
+  it("shows the live browser phase once below the elapsed time", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-08T01:31:08.000Z"));
     useWorkbenchStore.setState({
@@ -493,12 +489,90 @@ describe("Timeline activity status", () => {
 
     const view = render(<Timeline />);
     expect(screen.getByText("正在处理 0s")).toBeInTheDocument();
-    expect(
-      view.container.querySelector(".turn-summary-current"),
-    ).toHaveTextContent("正在搜索网页");
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
     expect(
       view.container.querySelector(".activity-summary > summary strong"),
     ).toHaveTextContent("正在搜索网页");
+    expect(
+      view.container.querySelectorAll(
+        ".activity-summary > summary strong, .turn-summary-current",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("renders one commentary update for the real reasoning and command event sequence", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-storage",
+      runtime: {
+        state: "working",
+        threadId: "thread-storage",
+        turnId: "turn-storage",
+        queuedMessages: 0,
+        pendingApprovals: 0,
+        context: null,
+      },
+      timeline: [
+        {
+          id: "user-storage",
+          turnId: "turn-storage",
+          role: "user",
+          kind: "message",
+          text: "查看一下mac的存储",
+        },
+        {
+          id: "reasoning-empty",
+          turnId: "turn-storage",
+          role: "assistant",
+          kind: "reasoning",
+          title: "思考过程",
+          text: "",
+          status: "已完成",
+        },
+        {
+          id: "commentary-live-reasoning",
+          turnId: "turn-storage",
+          role: "assistant",
+          kind: "reasoning",
+          title: "思考过程",
+          text: "我先读取 Mac 当前磁盘空间和各卷使用情况。",
+          pending: true,
+        },
+        {
+          id: "commentary-persisted-message",
+          turnId: "turn-storage",
+          role: "assistant",
+          kind: "message",
+          phase: "commentary",
+          text: "我先读取 Mac 当前磁盘空间和各卷使用情况。",
+          status: "已完成",
+        },
+        {
+          id: "command-storage",
+          turnId: "turn-storage",
+          role: "tool",
+          kind: "command",
+          title: "正在运行命令",
+          command: "df -h",
+          text: "",
+          status: "进行中",
+          pending: true,
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    const view = render(<Timeline />);
+
+    expect(
+      screen.getAllByText("我先读取 Mac 当前磁盘空间和各卷使用情况。"),
+    ).toHaveLength(1);
+    expect(view.container.querySelectorAll(".reasoning-card")).toHaveLength(0);
+    expect(view.container.querySelector(".turn-summary-current")).toBeNull();
+    expect(
+      view.container.querySelector(".activity-summary > summary strong"),
+    ).toHaveTextContent("正在运行命令");
   });
 
   it("warns after three minutes without a live event and can keep waiting", () => {
@@ -723,6 +797,53 @@ describe("Timeline activity status", () => {
     expect(activity).not.toBeNull();
     expect(
       activity!.compareDocumentPosition(finalReply) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps commentary before its completed tool instead of treating it as the final reply", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-commentary-order",
+      runtime: null,
+      timeline: [
+        {
+          id: "user-commentary-order",
+          turnId: "turn-commentary-order",
+          role: "user",
+          kind: "message",
+          text: "查看一下 Mac 存储",
+        },
+        {
+          id: "assistant-commentary-order",
+          turnId: "turn-commentary-order",
+          role: "assistant",
+          kind: "message",
+          phase: "commentary",
+          text: "我先读取当前磁盘空间。",
+        },
+        {
+          id: "command-commentary-order",
+          turnId: "turn-commentary-order",
+          role: "tool",
+          kind: "command",
+          command: "df -h",
+          text: "Filesystem Size Used Avail Capacity",
+          exitCode: 0,
+          status: "已完成",
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    const view = render(<Timeline />);
+    const commentary = screen.getByText("我先读取当前磁盘空间。");
+    const activity = view.container.querySelector(".activity-summary");
+
+    expect(activity).not.toBeNull();
+    expect(
+      commentary.compareDocumentPosition(activity!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });

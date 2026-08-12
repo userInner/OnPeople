@@ -200,6 +200,58 @@ describe("attachment recovery", () => {
 });
 
 describe("completed turn timeline recovery", () => {
+  it("preserves commentary phase and reconciles its transient reasoning copy", () => {
+    const recovered = historyFromResume({
+      thread: {
+        turns: [
+          {
+            id: "turn-commentary",
+            status: "inProgress",
+            items: [
+              {
+                id: "commentary-persisted",
+                type: "agentMessage",
+                phase: "commentary",
+                text: "我先读取 Mac 当前磁盘空间和各卷使用情况。",
+                status: "completed",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(recovered[0]).toMatchObject({
+      phase: "commentary",
+      status: "已完成",
+      pending: false,
+    });
+
+    const reconciled = reconcileRecoveredTimeline(
+      [
+        {
+          id: "commentary-transient",
+          turnId: "turn-commentary",
+          role: "assistant",
+          kind: "reasoning",
+          title: "思考过程",
+          text: "我先读取 Mac 当前磁盘空间和各卷使用情况。",
+          pending: true,
+        },
+      ],
+      recovered,
+    );
+
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({
+      id: "commentary-persisted",
+      kind: "message",
+      phase: "commentary",
+      status: "已完成",
+      pending: false,
+    });
+  });
+
   it("preserves command execution facts separately from output", () => {
     const timeline = historyFromResume({
       thread: {

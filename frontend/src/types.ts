@@ -165,6 +165,8 @@ export interface TimelineItem {
   pending?: boolean | undefined;
   kind?: TimelineKind | undefined;
   status?: string | undefined;
+  /** App-server message phase. Commentary is turn progress; final_answer is the reply. */
+  phase?: "commentary" | "final_answer" | string | undefined;
   meta?: string | undefined;
   /** Recoverable error attached to this timeline action, separate from its payload. */
   error?: string | undefined;

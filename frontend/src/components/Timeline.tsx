@@ -68,7 +68,11 @@ export function Timeline() {
     Boolean(selectedThreadId) &&
     runtime.threadId === selectedThreadId;
   const displayTimeline = orderCompletedTurnActivities(
-    collapseDuplicateCommandTraces(inferMissingTurnIds(timeline)),
+    suppressRedundantReasoningPlaceholders(
+      collapseDuplicateTurnNarration(
+        collapseDuplicateCommandTraces(inferMissingTurnIds(timeline)),
+      ),
+    ),
     runtimeWorking,
   );
   const hasLiveTurn =
@@ -275,7 +279,6 @@ export function Timeline() {
               <TurnSummary
                 elapsedSeconds={turnSummary.elapsedSeconds}
                 running={turnSummary.running}
-                currentStep={turnSummary.currentStep}
                 now={now}
               />
             ) : null}
@@ -348,6 +351,75 @@ function collapseDuplicateCommandTraces(items: TimelineItem[]): TimelineItem[] {
   return collapsed;
 }
 
+function collapseDuplicateTurnNarration(items: TimelineItem[]): TimelineItem[] {
+  const collapsed: TimelineItem[] = [];
+  const narrationIndexes = new Map<string, number>();
+
+  for (const item of items) {
+    const key = narrationKey(item);
+    const existingIndex = key ? narrationIndexes.get(key) : undefined;
+    if (existingIndex === undefined) {
+      if (key) narrationIndexes.set(key, collapsed.length);
+      collapsed.push(item);
+      continue;
+    }
+
+    const existing = collapsed[existingIndex];
+    if (
+      existing &&
+      narrationDisplayPriority(item) > narrationDisplayPriority(existing)
+    ) {
+      collapsed[existingIndex] = item;
+    }
+  }
+
+  return collapsed;
+}
+
+function suppressRedundantReasoningPlaceholders(
+  items: TimelineItem[],
+): TimelineItem[] {
+  const meaningfulTurnItems = new Set<string>();
+  for (const item of items) {
+    if (
+      item.turnId &&
+      ((item.kind === "message" &&
+        item.role === "assistant" &&
+        Boolean(item.text.trim())) ||
+        (isActivityItem(item) && item.kind !== "reasoning"))
+    ) {
+      meaningfulTurnItems.add(item.turnId);
+    }
+  }
+  return items.filter(
+    (item) =>
+      item.kind !== "reasoning" ||
+      Boolean(item.text.trim()) ||
+      (isActivelyPending(item) &&
+        (!item.turnId || !meaningfulTurnItems.has(item.turnId))),
+  );
+}
+
+function narrationKey(item: TimelineItem): string | undefined {
+  if (
+    item.role !== "assistant" ||
+    (item.kind !== "message" && item.kind !== "reasoning") ||
+    !item.turnId ||
+    !item.text.trim()
+  ) {
+    return undefined;
+  }
+  const text = item.text.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  return text ? `${item.turnId}\u0000${text}` : undefined;
+}
+
+function narrationDisplayPriority(item: TimelineItem): number {
+  if (item.kind === "reasoning") return 1;
+  if (item.phase === "final_answer") return 4;
+  if (item.phase === "commentary") return 3;
+  return 2;
+}
+
 function orderCompletedTurnActivities(
   items: TimelineItem[],
   runtimeWorking = false,
@@ -383,7 +455,11 @@ function orderCompletedTurnActivities(
     let finalReplyIndex = -1;
     for (let index = turnItems.length - 1; index >= 0; index -= 1) {
       const item = turnItems[index];
-      if (item?.role === "assistant" && item.kind === "message") {
+      if (
+        item?.role === "assistant" &&
+        item.kind === "message" &&
+        item.phase !== "commentary"
+      ) {
         finalReplyIndex = index;
         break;
       }
@@ -637,7 +713,11 @@ function TimelineEntry({ item }: { item: TimelineItem }) {
   }
 
   return (
-    <article className="message-row message-assistant">
+    <article
+      className={`message-row message-assistant ${
+        item.phase === "commentary" ? "message-commentary" : ""
+      }`}
+    >
       <MarkdownMessage text={item.text} />
       {!item.pending && item.text ? (
         <button
@@ -673,12 +753,10 @@ function deliveryLabel(item: TimelineItem) {
 function TurnSummary({
   elapsedSeconds,
   running,
-  currentStep,
   now,
 }: {
   elapsedSeconds: number | undefined;
   running: boolean;
-  currentStep?: string | undefined;
   now: number;
 }) {
   const [observedAt] = useState(now);
@@ -696,7 +774,7 @@ function TurnSummary({
           : running
             ? "正在处理"
             : "处理完成"
-      }${running && currentStep ? `，${currentStep}` : ""}`}
+      }`}
     >
       <span>
         {running
@@ -707,11 +785,6 @@ function TurnSummary({
             ? `处理了 ${formatDuration(displayedElapsed)}`
             : "处理完成"}
       </span>
-      {running && currentStep ? (
-        <span className="turn-summary-current" aria-live="polite">
-          {currentStep}
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -781,7 +854,6 @@ function summarizeConversationTurn(
 ): {
   elapsedSeconds: number | undefined;
   running: boolean;
-  currentStep?: string | undefined;
 } {
   const items: TimelineItem[] = [];
   for (let index = startIndex; index < blocks.length; index += 1) {
@@ -823,7 +895,6 @@ function summarizeConversationTurn(
         (!item.turnId || turnDurations[item.turnId] === undefined),
     ) ||
     (runtimeWorking && isLatestConversationTurn);
-  const currentStep = running ? currentTurnStep(scopedItems) : undefined;
   const starts = turnIds
     .map((turnId) => Date.parse(turnStartedAt[turnId] ?? ""))
     .filter(Number.isFinite);
@@ -849,7 +920,6 @@ function summarizeConversationTurn(
       return {
         elapsedSeconds: Math.max(0, Math.round((end - earliestStart) / 1_000)),
         running,
-        currentStep,
       };
     }
   }
@@ -860,7 +930,6 @@ function summarizeConversationTurn(
   return {
     elapsedSeconds: durations.length > 0 ? Math.max(...durations) : undefined,
     running,
-    currentStep,
   };
 }
 
@@ -1209,14 +1278,6 @@ function hasFailed(item: TimelineItem): boolean {
     (item.exitCode !== undefined && item.exitCode !== 0) ||
     /失败|错误|已拒绝/.test(`${item.status ?? ""}${item.title ?? ""}`)
   );
-}
-
-function currentTurnStep(items: TimelineItem[]): string {
-  const pendingActivity = [...items]
-    .reverse()
-    .find((item) => isActivityItem(item) && isActivelyPending(item));
-  if (pendingActivity) return activityItemHeadline(pendingActivity, true);
-  return "正在生成回复";
 }
 
 function ReasoningCard({ item }: { item: TimelineItem }) {
