@@ -46,10 +46,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
-    app_server::{
-        AgentRuntimeConfig, AppServerClient, AppServerEvent, BuiltinMcpConfig,
-        refresh_installed_plugin_profile,
-    },
+    app_server::{AgentRuntimeConfig, AppServerClient, AppServerEvent, BuiltinMcpConfig},
     memory,
     scheduler::SchedulerService,
     task_workspaces::{ResolvedTaskWorkspace, materialize, remove_if_empty},
@@ -505,6 +502,15 @@ struct LiveStateInner {
 
 impl CoreRuntime {
     pub fn new(storage: Storage, runtime_root: PathBuf) -> Result<Self, AppError> {
+        // Industry selection belongs to the current composer draft. A crash or
+        // forced quit must not silently reactivate that plugin for the next
+        // ordinary task.
+        if storage
+            .get_metadata("extensions.active-industry-plugin")?
+            .is_some()
+        {
+            storage.delete_metadata("extensions.active-industry-plugin")?;
+        }
         let runtime_paths = RuntimePaths::new(runtime_root);
         let binary = runtime_paths
             .codex_startup_path()
@@ -637,6 +643,8 @@ impl CoreRuntime {
             host_binary,
             browser_available,
         });
+        self.app_server
+            .configure_active_industry_plugin(self.active_industry_plugin_id()?);
         Ok(())
     }
 
@@ -1861,6 +1869,30 @@ impl CoreRuntime {
         if request.text.trim().is_empty() {
             return Err(AppError::invalid("提示词不能为空"));
         }
+        let selected_industry_plugin = request
+            .industry_plugin
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| validate_identifier(value, "行业插件 ID"))
+            .transpose()?;
+        let current_industry_plugin = self.active_industry_plugin_id()?;
+        match (
+            selected_industry_plugin.as_deref(),
+            current_industry_plugin.as_deref(),
+        ) {
+            (Some(selected), Some(current)) if selected == current => {}
+            (Some(selected), _) => {
+                self.activate_industry_plugin(&json!({ "pluginId": selected }))?;
+            }
+            (None, Some(current)) => {
+                self.deactivate_industry_plugin(&json!({ "pluginId": current }))?;
+            }
+            (None, None) => {}
+        }
+        self.app_server
+            .prepare_industry_plugin(selected_industry_plugin.clone())
+            .await;
         if !self.app_server.is_ready() {
             self.start().await?;
         }
@@ -1971,11 +2003,7 @@ impl CoreRuntime {
                 developer_instructions.as_deref().unwrap_or_default()
             ));
         }
-        if let Some(plugin_id) = request
-            .industry_plugin
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        if let Some(plugin_id) = selected_industry_plugin.as_deref()
             && let Some(plugin_instructions) =
                 read_industry_plugin_instructions(&self.storage.paths().codex_home, plugin_id)?
         {
@@ -2725,12 +2753,26 @@ impl CoreRuntime {
     }
 
     pub fn extensions(&self, cwd: Option<&str>) -> Result<Value, AppError> {
+        let active_industry_plugin = self
+            .storage
+            .get_metadata("extensions.active-industry-plugin")?;
+        let active_id = active_industry_plugin
+            .as_ref()
+            .and_then(|plugin| plugin.get("id"))
+            .and_then(Value::as_str);
         let root = cwd.map(Path::new);
         let mut skills = root.map(scan_skill_files).transpose()?.unwrap_or_default();
         skills.extend(scan_installed_plugin_skills(
             &self.storage.paths().codex_home,
+            active_id,
         )?);
         for skill in &mut skills {
+            if skill.get("scope").and_then(Value::as_str) == Some("plugin")
+                && skill.get("pluginId").and_then(Value::as_str) != active_id
+            {
+                skill["enabled"] = Value::Bool(false);
+                continue;
+            }
             let Some(path) = skill.get("path").and_then(Value::as_str) else {
                 continue;
             };
@@ -2741,13 +2783,6 @@ impl CoreRuntime {
                 }
             }
         }
-        let active_industry_plugin = self
-            .storage
-            .get_metadata("extensions.active-industry-plugin")?;
-        let active_id = active_industry_plugin
-            .as_ref()
-            .and_then(|plugin| plugin.get("id"))
-            .and_then(Value::as_str);
         let mut plugins = self
             .storage
             .get_metadata("extensions.plugins")?
@@ -2756,13 +2791,16 @@ impl CoreRuntime {
         for plugin in &mut plugins {
             let active = plugin.get("id").and_then(Value::as_str) == active_id;
             plugin["active"] = Value::Bool(active);
+            if plugin.get("type").and_then(Value::as_str) == Some("industry") {
+                plugin["enabled"] = Value::Bool(active);
+            }
         }
         let configured_mcp_servers = self
             .storage
             .get_metadata("extensions.mcp")?
             .and_then(|value| value.as_array().cloned())
             .unwrap_or_default();
-        let mut mcp_servers = builtin_mcp_servers();
+        let mut mcp_servers = builtin_mcp_servers(self.active_industry_plugin_id()?.as_deref());
         for server in configured_mcp_servers {
             let id = server.get("id").and_then(Value::as_str);
             if let Some(position) = mcp_servers
@@ -3201,6 +3239,11 @@ impl CoreRuntime {
             .unwrap_or_default();
         plugin["id"] = Value::String(id.clone());
         plugin["installed"] = Value::Bool(true);
+        if plugin.get("type").and_then(Value::as_str) == Some("industry") {
+            plugin["enabled"] = Value::Bool(false);
+        } else if plugin.get("enabled").and_then(Value::as_bool).is_none() {
+            plugin["enabled"] = Value::Bool(true);
+        }
         if let Some(builtin) = payload.get("builtin").and_then(Value::as_bool) {
             plugin["builtin"] = Value::Bool(builtin);
         }
@@ -3209,7 +3252,8 @@ impl CoreRuntime {
         plugins.push(plugin.clone());
         self.storage
             .put_metadata("extensions.plugins", &Value::Array(plugins))?;
-        refresh_installed_plugin_profile(&self.storage.paths().codex_home)?;
+        self.app_server
+            .refresh_plugin_profile(&self.storage.paths().codex_home)?;
         Ok(plugin)
     }
 
@@ -3234,7 +3278,8 @@ impl CoreRuntime {
         if install_root.is_dir() {
             std::fs::remove_dir_all(&install_root).map_err(AppError::storage)?;
         }
-        refresh_installed_plugin_profile(&self.storage.paths().codex_home)?;
+        self.app_server
+            .refresh_plugin_profile(&self.storage.paths().codex_home)?;
         if self
             .storage
             .get_metadata("extensions.active-industry-plugin")?
@@ -3245,6 +3290,9 @@ impl CoreRuntime {
         {
             self.storage
                 .delete_metadata("extensions.active-industry-plugin")?;
+            self.app_server.configure_active_industry_plugin(None);
+            self.app_server
+                .refresh_plugin_profile(&self.storage.paths().codex_home)?;
             self.emit(
                 EventKind::Agent,
                 self.state.read().current_thread_id.clone(),
@@ -3261,14 +3309,24 @@ impl CoreRuntime {
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::invalid("行业插件缺少 ID"))?;
         let id = validate_identifier(id, "行业插件 ID")?;
-        let plugin = self
+        let mut plugins = self
             .storage
             .get_metadata("extensions.plugins")?
             .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .into_iter()
+            .unwrap_or_default();
+        let plugin = plugins
+            .iter()
             .find(|plugin| plugin.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .cloned()
             .unwrap_or_else(|| json!({ "id": id, "name": id }));
+        for installed in &mut plugins {
+            if installed.get("type").and_then(Value::as_str) == Some("industry") {
+                installed["enabled"] =
+                    Value::Bool(installed.get("id").and_then(Value::as_str) == Some(id.as_str()));
+            }
+        }
+        self.storage
+            .put_metadata("extensions.plugins", &Value::Array(plugins))?;
         let mut active = plugin;
         active["id"] = Value::String(id.clone());
         active["active"] = Value::Bool(true);
@@ -3276,6 +3334,10 @@ impl CoreRuntime {
         active["activatedAt"] = serde_json::to_value(Utc::now()).map_err(AppError::internal)?;
         self.storage
             .put_metadata("extensions.active-industry-plugin", &active)?;
+        self.app_server
+            .configure_active_industry_plugin(Some(id.clone()));
+        self.app_server
+            .refresh_plugin_profile(&self.storage.paths().codex_home)?;
         self.emit(
             EventKind::Agent,
             self.state.read().current_thread_id.clone(),
@@ -3302,6 +3364,22 @@ impl CoreRuntime {
             self.storage
                 .delete_metadata("extensions.active-industry-plugin")?;
         }
+        if let Some(mut plugins) = self
+            .storage
+            .get_metadata("extensions.plugins")?
+            .and_then(|value| value.as_array().cloned())
+        {
+            for plugin in &mut plugins {
+                if plugin.get("id").and_then(Value::as_str) == Some(id) {
+                    plugin["enabled"] = Value::Bool(false);
+                }
+            }
+            self.storage
+                .put_metadata("extensions.plugins", &Value::Array(plugins))?;
+        }
+        self.app_server.configure_active_industry_plugin(None);
+        self.app_server
+            .refresh_plugin_profile(&self.storage.paths().codex_home)?;
         self.emit(
             EventKind::Agent,
             self.state.read().current_thread_id.clone(),
@@ -3313,6 +3391,18 @@ impl CoreRuntime {
     pub fn reload_mcp(&self) -> Result<Value, AppError> {
         let component = self.runtime_paths.mcp_host()?;
         Ok(json!({ "reloaded": true, "path": component.path, "at": Utc::now() }))
+    }
+
+    fn active_industry_plugin_id(&self) -> Result<Option<String>, AppError> {
+        Ok(self
+            .storage
+            .get_metadata("extensions.active-industry-plugin")?
+            .as_ref()
+            .and_then(|plugin| plugin.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned))
     }
 
     pub fn list_hooks(&self, cwd: &str, local: bool) -> Result<Value, AppError> {
@@ -6040,7 +6130,10 @@ fn scan_skill_files(root: &Path) -> Result<Vec<Value>, AppError> {
     Ok(skills)
 }
 
-fn scan_installed_plugin_skills(codex_home: &Path) -> Result<Vec<Value>, AppError> {
+fn scan_installed_plugin_skills(
+    codex_home: &Path,
+    active_industry_plugin: Option<&str>,
+) -> Result<Vec<Value>, AppError> {
     let plugins_root = codex_home.join("plugins");
     if !plugins_root.is_dir() {
         return Ok(Vec::new());
@@ -6052,6 +6145,8 @@ fn scan_installed_plugin_skills(codex_home: &Path) -> Result<Vec<Value>, AppErro
             continue;
         }
         let plugin_id = entry.file_name().to_string_lossy().into_owned();
+        let enabled = !entry.path().join(".onpeople/industry.json").is_file()
+            || active_industry_plugin == Some(plugin_id.as_str());
         let skill_root = entry.path().join("skills");
         if !skill_root.is_dir() {
             continue;
@@ -6074,7 +6169,7 @@ fn scan_installed_plugin_skills(codex_home: &Path) -> Result<Vec<Value>, AppErro
                 "path": path,
                 "pluginId": plugin_id,
                 "scope": "plugin",
-                "enabled": true,
+                "enabled": enabled,
             }));
         }
     }
@@ -6117,13 +6212,16 @@ fn read_industry_plugin_instructions(
     Ok(Some(contents))
 }
 
-fn builtin_mcp_servers() -> Vec<Value> {
-    vec![
+fn builtin_mcp_servers(active_industry_plugin: Option<&str>) -> Vec<Value> {
+    let mut servers = vec![
         json!({ "id": "computer_use", "name": "Computer Use", "status": "已连接", "builtin": true, "command": "onpeople-mcp-host computer-use" }),
         json!({ "id": "workspace_artifacts", "name": "文件与数据", "status": "已连接", "builtin": true, "command": "onpeople-mcp-host artifacts" }),
         json!({ "id": "image_generation", "name": "图像生成", "status": "已连接", "builtin": true, "command": "onpeople-mcp-host image-generation" }),
-        json!({ "id": "research_sources", "name": "研究资料", "status": "已连接", "builtin": true, "command": "onpeople-mcp-host research-sources" }),
-    ]
+    ];
+    if active_industry_plugin == Some("research-paper") {
+        servers.push(json!({ "id": "research_sources", "name": "研究资料", "status": "已连接", "builtin": true, "command": "onpeople-mcp-host research-sources" }));
+    }
+    servers
 }
 
 fn plugin_catalog(installed_plugins: &[Value], remote_plugins: &[Value]) -> Vec<Value> {
@@ -7711,12 +7809,23 @@ mod tests {
                 "source": plugin_root
             }))
             .expect("install plugin");
+        let extensions = runtime
+            .extensions(None)
+            .expect("extensions before activation");
+        assert_eq!(extensions["plugins"][0]["enabled"], false);
+        assert_eq!(extensions["skills"][0]["enabled"], false);
+        assert!(extensions["mcpServers"].as_array().is_some_and(|servers| {
+            servers
+                .iter()
+                .all(|server| server["id"] != "research_sources")
+        }));
         runtime
             .activate_industry_plugin(&json!({ "id": "legal-review" }))
             .expect("activate plugin");
         let extensions = runtime.extensions(None).expect("extensions");
         assert_eq!(extensions["activeIndustryPlugin"]["id"], "legal-review");
         assert_eq!(extensions["plugins"][0]["active"], true);
+        assert_eq!(extensions["plugins"][0]["enabled"], true);
         assert_eq!(extensions["skills"][0]["pluginId"], "legal-review");
         assert!(
             extensions["catalog"]
@@ -7731,7 +7840,11 @@ mod tests {
         runtime
             .deactivate_industry_plugin(&json!({ "id": "legal-review" }))
             .expect("deactivate plugin");
-        assert!(runtime.extensions(None).expect("extensions")["activeIndustryPlugin"].is_null());
+        let extensions = runtime
+            .extensions(None)
+            .expect("extensions after deactivate");
+        assert!(extensions["activeIndustryPlugin"].is_null());
+        assert_eq!(extensions["plugins"][0]["enabled"], false);
         runtime
             .uninstall_plugin(&json!({ "id": "legal-review" }))
             .expect("uninstall plugin");
@@ -7740,6 +7853,23 @@ mod tests {
                 .as_array()
                 .is_some_and(Vec::is_empty)
         );
+    }
+
+    #[test]
+    fn clears_stale_industry_activation_when_the_runtime_restarts() {
+        let directory = tempdir().expect("temporary runtime directory");
+        let storage = Storage::open_empty(directory.path().join("data")).expect("storage");
+        storage
+            .put_metadata(
+                "extensions.active-industry-plugin",
+                &json!({ "id": "research-paper", "active": true }),
+            )
+            .expect("active plugin metadata");
+
+        let runtime = CoreRuntime::new(storage, directory.path().join("runtime")).expect("runtime");
+
+        assert!(runtime.extensions(None).expect("extensions")["activeIndustryPlugin"].is_null());
+        assert_eq!(runtime.app_server.active_industry_plugin(), None);
     }
 
     #[test]

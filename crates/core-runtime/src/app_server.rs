@@ -61,6 +61,8 @@ pub struct AppServerClient {
     ready: Arc<std::sync::atomic::AtomicBool>,
     binary: std::path::PathBuf,
     builtin_mcp: RwLock<Option<BuiltinMcpConfig>>,
+    active_industry_plugin: RwLock<Option<String>>,
+    running_industry_plugin: RwLock<Option<String>>,
 }
 
 impl AppServerClient {
@@ -82,11 +84,40 @@ impl AppServerClient {
             ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             binary,
             builtin_mcp: RwLock::new(None),
+            active_industry_plugin: RwLock::new(None),
+            running_industry_plugin: RwLock::new(None),
         })
     }
 
     pub fn configure_builtin_mcp(&self, config: BuiltinMcpConfig) {
         *self.builtin_mcp.write() = Some(config);
+    }
+
+    /// Selects the one industry plugin exposed to subsequently created turns.
+    ///
+    /// Installation and activation are deliberately separate: an installed
+    /// industry plugin remains discoverable in the marketplace, but its
+    /// skills and MCP servers are absent from the model profile until the
+    /// composer explicitly selects it for a turn.
+    pub async fn prepare_industry_plugin(&self, plugin_id: Option<String>) {
+        *self.active_industry_plugin.write() = plugin_id.clone();
+        let restart_required = self.is_ready() && *self.running_industry_plugin.read() != plugin_id;
+        if restart_required {
+            self.stop().await;
+        }
+    }
+
+    pub fn configure_active_industry_plugin(&self, plugin_id: Option<String>) {
+        *self.active_industry_plugin.write() = plugin_id;
+    }
+
+    #[must_use]
+    pub fn active_industry_plugin(&self) -> Option<String> {
+        self.active_industry_plugin.read().clone()
+    }
+
+    pub fn refresh_plugin_profile(&self, codex_home: &Path) -> Result<(), AppError> {
+        refresh_installed_plugin_profile(codex_home, self.active_industry_plugin.read().as_deref())
     }
 
     #[must_use]
@@ -153,7 +184,16 @@ impl AppServerClient {
             .await
             .map_err(AppError::storage)?;
         let builtin_mcp = self.builtin_mcp.read().clone();
-        write_onpeople_profile(cwd, codex_home, provider, builtin_mcp.as_ref(), agents).await?;
+        let active_industry_plugin = self.active_industry_plugin.read().clone();
+        write_onpeople_profile(
+            cwd,
+            codex_home,
+            provider,
+            builtin_mcp.as_ref(),
+            agents,
+            active_industry_plugin.as_deref(),
+        )
+        .await?;
         let mut command = Command::new(&self.binary);
         command
             .args(["app-server", "--listen", "stdio://"])
@@ -226,6 +266,7 @@ impl AppServerClient {
             self.stop_process().await;
             return Err(error);
         }
+        *self.running_industry_plugin.write() = active_industry_plugin;
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -540,6 +581,7 @@ async fn write_onpeople_profile(
     provider: &ProviderSettings,
     builtin_mcp: Option<&BuiltinMcpConfig>,
     agents: &AgentRuntimeConfig,
+    active_industry_plugin: Option<&str>,
 ) -> Result<(), AppError> {
     let base_url = if provider.base_url.trim().is_empty() {
         "https://api.aibro.vip/v1"
@@ -573,8 +615,10 @@ async fn write_onpeople_profile(
             ("workspace_artifacts", "artifacts"),
             ("computer_use", "computer-use"),
             ("image_generation", "image-generation"),
-            ("research_sources", "research-sources"),
         ];
+        if active_industry_plugin == Some("research-paper") {
+            servers.push(("research_sources", "research-sources"));
+        }
         if mcp.browser_available {
             servers.insert(1, ("internal_browser", "browser"));
         }
@@ -596,7 +640,10 @@ async fn write_onpeople_profile(
             }
         }
     }
-    contents.push_str(&installed_plugin_profile(codex_home)?);
+    contents.push_str(&installed_plugin_profile(
+        codex_home,
+        active_industry_plugin,
+    )?);
     let path = codex_home.join("config.toml");
     let temporary = codex_home.join("config.toml.tmp");
     tokio::fs::write(&temporary, contents)
@@ -633,8 +680,11 @@ const PLUGIN_PROFILE_END: &str = "# ONPEOPLE PLUGINS END";
 
 /// Rebuild the personal marketplace used by `OnPeople`'s isolated Codex Home and
 /// update the generated plugin section without touching provider credentials.
-/// The app server reloads this configuration for subsequently created tasks.
-pub fn refresh_installed_plugin_profile(codex_home: &Path) -> Result<(), AppError> {
+/// The runtime restarts the app server when the selected industry plugin changes.
+fn refresh_installed_plugin_profile(
+    codex_home: &Path,
+    active_industry_plugin: Option<&str>,
+) -> Result<(), AppError> {
     let path = codex_home.join("config.toml");
     if !path.is_file() {
         return Ok(());
@@ -642,14 +692,20 @@ pub fn refresh_installed_plugin_profile(codex_home: &Path) -> Result<(), AppErro
     let contents = std::fs::read_to_string(&path).map_err(AppError::storage)?;
     let base = strip_plugin_profile(&contents);
     let mut updated = base.trim_end().to_owned();
-    updated.push_str(&installed_plugin_profile(codex_home)?);
+    updated.push_str(&installed_plugin_profile(
+        codex_home,
+        active_industry_plugin,
+    )?);
     updated.push('\n');
     let temporary = codex_home.join("config.toml.plugins.tmp");
     std::fs::write(&temporary, updated).map_err(AppError::storage)?;
     std::fs::rename(&temporary, path).map_err(AppError::storage)
 }
 
-fn installed_plugin_profile(codex_home: &Path) -> Result<String, AppError> {
+fn installed_plugin_profile(
+    codex_home: &Path,
+    active_industry_plugin: Option<&str>,
+) -> Result<String, AppError> {
     let plugins_root = codex_home.join("plugins");
     let mut plugins = Vec::new();
     if plugins_root.is_dir() {
@@ -675,17 +731,18 @@ fn installed_plugin_profile(codex_home: &Path) -> Result<String, AppError> {
             {
                 continue;
             }
-            plugins.push(id.to_owned());
+            let industry = entry.path().join(".onpeople/industry.json").is_file();
+            plugins.push((id.to_owned(), industry));
         }
     }
-    plugins.sort();
-    plugins.dedup();
+    plugins.sort_by(|left, right| left.0.cmp(&right.0));
+    plugins.dedup_by(|left, right| left.0 == right.0);
 
     let marketplace_dir = codex_home.join(".agents/plugins");
     std::fs::create_dir_all(&marketplace_dir).map_err(AppError::storage)?;
     let entries = plugins
         .iter()
-        .map(|id| {
+        .map(|(id, _)| {
             json!({
                 "name": id,
                 "source": { "source": "local", "path": format!("./plugins/{id}") },
@@ -710,9 +767,10 @@ fn installed_plugin_profile(codex_home: &Path) -> Result<String, AppError> {
         "\n{PLUGIN_PROFILE_BEGIN}\n\n[marketplaces.onpeople-local]\nsource_type = \"local\"\nsource = {}\n",
         toml_string(&codex_home.to_string_lossy()),
     );
-    for id in plugins {
+    for (id, industry) in plugins {
+        let enabled = !industry || active_industry_plugin == Some(id.as_str());
         block.push_str(&format!(
-            "\n[plugins.{}]\nenabled = true\n",
+            "\n[plugins.{}]\nenabled = {enabled}\n",
             toml_string(&format!("{id}@onpeople-local")),
         ));
     }
@@ -764,6 +822,7 @@ mod profile_tests {
                 enabled: true,
                 max_concurrent_threads: 4,
             },
+            None,
         )
         .await
         .expect("profile");
@@ -801,6 +860,7 @@ mod profile_tests {
                 enabled: false,
                 max_concurrent_threads: 1,
             },
+            None,
         )
         .await
         .expect("profile");
@@ -833,13 +893,14 @@ mod profile_tests {
                 enabled: false,
                 max_concurrent_threads: 6,
             },
+            None,
         )
         .await
         .expect("profile");
         let profile =
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
         assert!(profile.contains("[mcp_servers.workspace_artifacts]"));
-        assert_eq!(profile.matches("[mcp_servers.").count(), 5);
+        assert_eq!(profile.matches("[mcp_servers.").count(), 4);
         assert!(profile.contains("args = [\"artifacts\"]"));
         assert!(profile.contains("[mcp_servers.computer_use]"));
         assert!(profile.contains("args = [\"computer-use\"]"));
@@ -848,7 +909,7 @@ mod profile_tests {
         assert!(profile.contains(
             "env_vars = [\"ONPEOPLE_BROWSER_AGENT_BRIDGE\", \"ONPEOPLE_BROWSER_AGENT_TOKEN\"]"
         ));
-        assert!(profile.contains("[mcp_servers.research_sources]"));
+        assert!(!profile.contains("[mcp_servers.research_sources]"));
         assert!(profile.contains("enabled = false"));
         assert!(profile.contains("max_concurrent_threads_per_session = 6"));
     }
@@ -868,12 +929,13 @@ mod profile_tests {
                 enabled: false,
                 max_concurrent_threads: 6,
             },
+            None,
         )
         .await
         .expect("profile");
         let profile =
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
-        assert_eq!(profile.matches("[mcp_servers.").count(), 4);
+        assert_eq!(profile.matches("[mcp_servers.").count(), 3);
         assert!(!profile.contains("[mcp_servers.internal_browser]"));
     }
 
@@ -882,6 +944,14 @@ mod profile_tests {
         let root = tempdir().expect("temporary root");
         let plugin = root.path().join("plugins/research-paper/.codex-plugin");
         std::fs::create_dir_all(&plugin).expect("plugin directory");
+        std::fs::create_dir_all(root.path().join("plugins/research-paper/.onpeople"))
+            .expect("industry directory");
+        std::fs::write(
+            root.path()
+                .join("plugins/research-paper/.onpeople/industry.json"),
+            r#"{"type":"industry"}"#,
+        )
+        .expect("industry manifest");
         std::fs::write(
             plugin.join("plugin.json"),
             r#"{"name":"research-paper","version":"1.0.0"}"#,
@@ -896,6 +966,7 @@ mod profile_tests {
                 enabled: true,
                 max_concurrent_threads: 2,
             },
+            None,
         )
         .await
         .expect("profile");
@@ -903,10 +974,50 @@ mod profile_tests {
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
         assert!(profile.contains("[marketplaces.onpeople-local]"));
         assert!(profile.contains("[plugins.\"research-paper@onpeople-local\"]"));
+        assert!(profile.contains("[plugins.\"research-paper@onpeople-local\"]\nenabled = false"));
         let marketplace =
             std::fs::read_to_string(root.path().join(".agents/plugins/marketplace.json"))
                 .expect("marketplace");
         assert!(marketplace.contains("./plugins/research-paper"));
+    }
+
+    #[tokio::test]
+    async fn enables_only_the_selected_industry_plugin_and_its_research_mcp() {
+        let root = tempdir().expect("temporary root");
+        for id in ["research-paper", "legal-review"] {
+            let plugin = root.path().join(format!("plugins/{id}"));
+            std::fs::create_dir_all(plugin.join(".codex-plugin")).expect("plugin directory");
+            std::fs::create_dir_all(plugin.join(".onpeople")).expect("industry directory");
+            std::fs::write(
+                plugin.join(".codex-plugin/plugin.json"),
+                format!(r#"{{"name":"{id}","version":"1.0.0"}}"#),
+            )
+            .expect("plugin manifest");
+            std::fs::write(plugin.join(".onpeople/industry.json"), "{}")
+                .expect("industry manifest");
+        }
+        write_onpeople_profile(
+            root.path(),
+            root.path(),
+            &ProviderSettings::default(),
+            Some(&BuiltinMcpConfig {
+                host_binary: "/Applications/OnPeople.app/onpeople-mcp-host".into(),
+                browser_available: false,
+            }),
+            &AgentRuntimeConfig {
+                enabled: false,
+                max_concurrent_threads: 1,
+            },
+            Some("research-paper"),
+        )
+        .await
+        .expect("profile");
+
+        let profile =
+            std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
+        assert!(profile.contains("[mcp_servers.research_sources]"));
+        assert!(profile.contains("[plugins.\"research-paper@onpeople-local\"]\nenabled = true"));
+        assert!(profile.contains("[plugins.\"legal-review@onpeople-local\"]\nenabled = false"));
     }
 
     #[tokio::test]
@@ -932,6 +1043,7 @@ mod profile_tests {
                 enabled: false,
                 max_concurrent_threads: 1,
             },
+            None,
         )
         .await
         .expect("profile");
@@ -946,6 +1058,7 @@ mod profile_tests {
                 enabled: false,
                 max_concurrent_threads: 1,
             },
+            None,
         )
         .await
         .expect("profile");
