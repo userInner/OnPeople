@@ -184,17 +184,6 @@ export function BrowserWorkspace({
         const url = normalizeBrowserAddress(command.url);
         setInspector(null);
         setError(null);
-        if (activeTab.url === "about:blank") {
-          updateTab(activeTab.id, {
-            url,
-            title: url,
-            loading: true,
-            crashed: false,
-            lastActiveAt: Date.now(),
-          });
-          setActiveTabId(activeTab.id);
-          return;
-        }
         if (command.routeId) {
           setTabs((current) => {
             const existing = current.find((tab) => tab.id === command.routeId);
@@ -208,6 +197,17 @@ export function BrowserWorkspace({
             return [...current, { ...createTab(url), id: command.routeId! }];
           });
           setActiveTabId(command.routeId);
+          return;
+        }
+        if (activeTab.url === "about:blank") {
+          updateTab(activeTab.id, {
+            url,
+            title: url,
+            loading: true,
+            crashed: false,
+            lastActiveAt: Date.now(),
+          });
+          setActiveTabId(activeTab.id);
           return;
         }
         addTab(url);
@@ -263,7 +263,7 @@ export function BrowserWorkspace({
         return;
       }
       if (event.kind === "new-tab" && event.requestedUrl) {
-        addTab(event.requestedUrl);
+        addTab(event.requestedUrl, event.tabId ?? undefined);
         return;
       }
       if (!event.tabId) return;
