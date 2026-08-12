@@ -330,7 +330,7 @@ describe("Codex conversation controls", () => {
     });
 
     render(<Composer />);
-    fireEvent.click(screen.getByRole("button", { name: "引导" }));
+    fireEvent.click(screen.getByRole("button", { name: "立即引导" }));
 
     await waitFor(() =>
       expect(desktopClient.steerQueuedMessage).toHaveBeenCalledWith(

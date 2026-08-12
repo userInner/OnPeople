@@ -996,20 +996,12 @@ export function Composer() {
                 <button
                   type="button"
                   className="composer-queue-guide"
+                  aria-label="立即引导"
                   disabled={busy || message.status === "failed"}
                   onClick={() => void steerQueuedMessage(message.id)}
                 >
                   <CornerDownRight size={14} aria-hidden="true" />
-                  <span>引导</span>
-                </button>
-                <button
-                  type="button"
-                  className="composer-queue-action"
-                  aria-label="删除排队消息"
-                  disabled={busy}
-                  onClick={() => void deleteQueuedMessage(message.id)}
-                >
-                  <Trash2 size={15} aria-hidden="true" />
+                  <span>立即引导</span>
                 </button>
                 <div className="composer-queue-menu-wrap">
                   <button
@@ -1038,7 +1030,20 @@ export function Composer() {
                           );
                         }}
                       >
-                        复制到输入框
+                        编辑消息
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="is-danger"
+                        disabled={busy}
+                        onClick={() => {
+                          setQueueMenuId(null);
+                          void deleteQueuedMessage(message.id);
+                        }}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                        删除
                       </button>
                     </div>
                   ) : null}

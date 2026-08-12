@@ -7168,6 +7168,8 @@ button.activity-row:hover {
   z-index: 1;
   margin: 0 0 -2px;
   overflow: visible;
+  max-height: min(30dvh, 260px);
+  overflow-y: auto;
   border: 1px solid #deded9;
   border-radius: 17px 17px 9px 9px;
   background: var(--surface);
@@ -7177,11 +7179,11 @@ button.activity-row:hover {
 .composer-queue-item {
   position: relative;
   display: grid;
-  min-height: 52px;
-  grid-template-columns: 28px minmax(0, 1fr) auto auto auto;
+  min-height: 42px;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
   gap: 7px;
   align-items: center;
-  padding: 6px 11px 6px 9px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -7195,8 +7197,8 @@ button.activity-row:hover {
 
 .composer-queue-icon {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -7208,8 +7210,8 @@ button.activity-row:hover {
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 520;
+  font-size: 12px;
+  font-weight: 500;
   letter-spacing: -0.006em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7223,7 +7225,7 @@ button.activity-row:hover {
 .composer-queue-guide,
 .composer-queue-action {
   display: inline-flex;
-  height: 29px;
+  height: 27px;
   gap: 5px;
   align-items: center;
   justify-content: center;
@@ -7280,6 +7282,13 @@ button.activity-row:hover {
   background: transparent;
   font-size: 11px;
   text-align: left;
+}
+
+.composer-queue-menu button.is-danger {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--danger);
 }
 
 .composer-queue-menu button:hover {
