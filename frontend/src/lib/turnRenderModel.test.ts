@@ -85,4 +85,42 @@ describe("buildTurnRenderModel", () => {
       buildTurnRenderModel(source, true).items.map((entry) => entry.id),
     ).toEqual(["user", "final", "tool"]);
   });
+
+  it("places a late user anchor before assistant output from the same turn", () => {
+    const source = [
+      item({
+        id: "previous-user",
+        role: "user",
+        turnId: "turn-previous",
+        text: "查看一下今天天气",
+      }),
+      item({
+        id: "previous-final",
+        turnId: "turn-previous",
+        phase: "final_answer",
+        text: "请告诉我你所在的城市。",
+      }),
+      item({
+        id: "next-commentary",
+        turnId: "turn-weather",
+        phase: "commentary",
+        text: "我来查询北京今天的实时天气预报。",
+      }),
+      item({
+        id: "next-user",
+        role: "user",
+        turnId: "turn-weather",
+        text: "北京",
+      }),
+    ];
+
+    expect(
+      buildTurnRenderModel(source, true).items.map((entry) => entry.id),
+    ).toEqual([
+      "previous-user",
+      "previous-final",
+      "next-user",
+      "next-commentary",
+    ]);
+  });
 });

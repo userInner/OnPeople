@@ -1116,7 +1116,10 @@ function upsertItem(items: TimelineItem[], item: TimelineItem): TimelineItem[] {
   if (item.pending) {
     items = settlePreviousPendingItems(items, item.id);
   }
-  if (index < 0) return [...items.slice(-399), item];
+  if (index < 0) {
+    const next = [...items.slice(-399), item];
+    return placeUserBeforeOwnedTurnItems(next, next.length - 1);
+  }
   const current = items[index];
   if (!current) return [...items.slice(-399), item];
   const preferred =
@@ -1130,6 +1133,25 @@ function upsertItem(items: TimelineItem[], item: TimelineItem): TimelineItem[] {
     meta: preferred.meta || secondary.meta,
     timestamp: preferred.timestamp ?? secondary.timestamp,
   };
+  return placeUserBeforeOwnedTurnItems(next, index);
+}
+
+function placeUserBeforeOwnedTurnItems(
+  items: TimelineItem[],
+  userIndex: number,
+): TimelineItem[] {
+  const user = items[userIndex];
+  if (user?.role !== "user" || !user.turnId) return items;
+  const firstOwnedIndex = items.findIndex(
+    (entry, index) =>
+      index !== userIndex &&
+      entry.role !== "user" &&
+      entry.turnId === user.turnId,
+  );
+  if (firstOwnedIndex < 0 || firstOwnedIndex > userIndex) return items;
+  const next = [...items];
+  next.splice(userIndex, 1);
+  next.splice(firstOwnedIndex, 0, user);
   return next;
 }
 

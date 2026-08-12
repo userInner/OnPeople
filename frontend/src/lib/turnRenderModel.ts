@@ -22,7 +22,9 @@ export function buildTurnRenderModel(
     suppressRedundantReasoningPlaceholders(
       collapseDuplicateTurnNarration(
         normalizeTurnActivityTraces(
-          collapseDuplicateCommandTraces(inferMissingTurnIds(source)),
+          collapseDuplicateCommandTraces(
+            inferMissingTurnIds(placeUserBeforeOwnedTurnItems(source)),
+          ),
         ),
       ),
     ),
@@ -216,6 +218,28 @@ function orderCompletedTurnActivities(
       ...trailing.filter((item) => !isActivityItem(item)),
     ];
   });
+}
+
+function placeUserBeforeOwnedTurnItems(items: TimelineItem[]): TimelineItem[] {
+  const next = [...items];
+  const userIds = items
+    .filter((item) => item.role === "user" && Boolean(item.turnId))
+    .map((item) => item.id);
+  for (const userId of userIds) {
+    const userIndex = next.findIndex((item) => item.id === userId);
+    const user = next[userIndex];
+    if (userIndex < 1 || !user?.turnId) continue;
+    const firstOwnedIndex = next.findIndex(
+      (item, index) =>
+        index !== userIndex &&
+        item.role !== "user" &&
+        item.turnId === user.turnId,
+    );
+    if (firstOwnedIndex < 0 || firstOwnedIndex > userIndex) continue;
+    next.splice(userIndex, 1);
+    next.splice(firstOwnedIndex, 0, user);
+  }
+  return next;
 }
 
 function groupTimelineItems(items: TimelineItem[]): TurnRenderBlock[] {

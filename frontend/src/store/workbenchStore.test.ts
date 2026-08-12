@@ -109,6 +109,56 @@ describe("live turn attribution", () => {
       "tool",
     ]);
   });
+
+  it("moves a late queued user anchor before already-streamed turn output", () => {
+    const current: TimelineItem[] = [
+      {
+        id: "user-previous",
+        role: "user",
+        kind: "message",
+        turnId: "turn-previous",
+        text: "查看一下今天天气",
+      },
+      {
+        id: "assistant-previous",
+        role: "assistant",
+        kind: "message",
+        turnId: "turn-previous",
+        text: "请告诉我你所在的城市。",
+      },
+      {
+        id: "assistant-next",
+        role: "assistant",
+        kind: "message",
+        turnId: "turn-weather",
+        phase: "commentary",
+        text: "我来查询北京今天的实时天气预报。",
+      },
+    ];
+
+    const anchored = attachQueuedMessageToTurn(
+      current,
+      [
+        {
+          id: "queue-beijing",
+          threadId: "thread-weather",
+          text: "北京",
+          queuedAt: "2026-08-12T05:50:47.842Z",
+          status: "queued",
+        },
+      ],
+      "thread-weather",
+      "turn-weather",
+      "2026-08-12T05:50:48.000Z",
+    );
+
+    expect(anchored.timeline.map((item) => item.id)).toEqual([
+      "user-previous",
+      "assistant-previous",
+      "queued-user-queue-beijing",
+      "assistant-next",
+    ]);
+  });
 });
 
 describe("turn timing recovery", () => {
