@@ -72,11 +72,21 @@ const elapsedMs = () =>
 const runtimeRoot = app.isPackaged
   ? path.join(process.resourcesPath, ".embedded-runtime")
   : path.join(repositoryRoot, ".embedded-runtime");
+const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const hostBinary =
   process.env.ONPEOPLE_RUST_HOST ||
   (app.isPackaged
-    ? path.join(runtimeRoot, "bin", "onpeople-desktop-host")
-    : path.join(repositoryRoot, "target", "debug", "onpeople-desktop-host"));
+    ? path.join(
+        runtimeRoot,
+        "bin",
+        `onpeople-desktop-host${executableSuffix}`,
+      )
+    : path.join(
+        repositoryRoot,
+        "target",
+        "debug",
+        `onpeople-desktop-host${executableSuffix}`,
+      ));
 
 function responseSuccess(request, result = null) {
   return {

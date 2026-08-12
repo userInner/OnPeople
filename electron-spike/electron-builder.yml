@@ -20,6 +20,16 @@ mac:
   icon: assets/OnPeople.icns
   target:
     - dir
+    - dmg
     - zip
-  identity: null
+  hardenedRuntime: true
+win:
+  icon: assets/OnPeople.ico
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
 asar: true
