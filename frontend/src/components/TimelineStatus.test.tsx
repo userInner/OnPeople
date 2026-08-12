@@ -1141,6 +1141,29 @@ describe("Timeline activity status", () => {
     expect(screen.queryByText(/_meta/)).not.toBeInTheDocument();
   });
 
+  it("hides opaque JSON tool envelopes that have no user-facing text", () => {
+    const view = renderCommand({
+      id: "opaque-tool-envelope",
+      turnId: "turn-opaque-tool-envelope",
+      role: "tool",
+      kind: "tool",
+      title: "internal_browser · browser_open",
+      text: JSON.stringify({
+        _meta: null,
+        content: [{ type: "image", data: "not-user-facing" }],
+        structuredContent: { internal: true },
+      }),
+      status: "完成",
+    });
+
+    fireEvent.click(
+      view.container.querySelector(".activity-summary > summary")!,
+    );
+    fireEvent.click(view.container.querySelector(".tool-card > summary")!);
+    expect(screen.queryByText(/structuredContent/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not-user-facing/)).not.toBeInTheDocument();
+  });
+
   it("collapses recoverable browser startup retries after the page succeeds", () => {
     useWorkbenchStore.setState({
       threadLoading: false,

@@ -1592,15 +1592,19 @@ function readableToolOutput(text: string): string {
   const trimmed = text.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
   try {
-    const payload = JSON.parse(trimmed) as {
-      content?: Array<{ type?: unknown; text?: unknown }>;
-    };
-    if (!Array.isArray(payload.content)) return text;
-    const messages = payload.content
+    const payload = JSON.parse(trimmed) as unknown;
+    const envelope =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as {
+            content?: Array<{ type?: unknown; text?: unknown }>;
+          })
+        : null;
+    if (!Array.isArray(envelope?.content)) return "";
+    const messages = envelope.content
       .filter((part) => part?.type === "text" && typeof part.text === "string")
       .map((part) => String(part.text).trim())
       .filter(Boolean);
-    return messages.length > 0 ? messages.join("\n\n") : text;
+    return messages.length > 0 ? messages.join("\n\n") : "";
   } catch {
     return text;
   }
