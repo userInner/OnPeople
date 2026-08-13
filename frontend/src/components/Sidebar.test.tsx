@@ -1,31 +1,25 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { desktopClient } from "../lib/desktopClient";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import { Sidebar, threadSidebarSection } from "./Sidebar";
-
-vi.mock("../lib/desktopClient", () => ({
-  desktopClient: {
-    getCloudAccount: vi.fn(),
-    onCloudAccountUpdated: vi.fn(),
-  },
-}));
 
 describe("Sidebar account modal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(desktopClient.getCloudAccount).mockResolvedValue({
-      signedIn: false,
-      serviceUrl: "",
-      account: null,
-      group: null,
-      models: [],
+    useWorkbenchStore.setState({
+      accountStatus: "signed-out",
+      cloudAccount: {
+        signedIn: false,
+        serviceUrl: "",
+        account: null,
+        group: null,
+        models: [],
+      },
     });
-    vi.mocked(desktopClient.onCloudAccountUpdated).mockResolvedValue(() => {});
   });
 
-  it("blocks and locally covers the project rail while authentication is open", () => {
+  it("opens authentication without dimming or blocking the workspace", () => {
     const appRoot = document.createElement("div");
     appRoot.id = "root";
     document.body.append(appRoot);
@@ -37,31 +31,24 @@ describe("Sidebar account modal", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(document.body).toHaveClass("account-auth-open");
-    expect(appRoot).toHaveAttribute("inert");
-    expect(
-      appRoot.querySelector(".project-rail-modal-scrim"),
-    ).toBeInTheDocument();
+    expect(appRoot).not.toHaveAttribute("inert");
+    expect(appRoot.querySelector(".project-rail-modal-scrim")).toBeNull();
 
     view.unmount();
     expect(document.body).not.toHaveClass("account-auth-open");
-    expect(appRoot).not.toHaveAttribute("inert");
   });
 
-  it("does not let partial cloud events clear a signed-in account", async () => {
-    let accountUpdated: ((value: unknown) => void) | null = null;
-    vi.mocked(desktopClient.getCloudAccount).mockResolvedValue({
-      signedIn: true,
-      serviceUrl: "https://onpeople.example",
-      account: { email: "person@example.com" },
-      group: null,
-      models: [],
-    });
-    vi.mocked(desktopClient.onCloudAccountUpdated).mockImplementation(
-      async (handler) => {
-        accountUpdated = handler;
-        return () => {};
+  it("shows the authoritative signed-in account", async () => {
+    useWorkbenchStore.setState({
+      accountStatus: "signed-in",
+      cloudAccount: {
+        signedIn: true,
+        serviceUrl: "https://onpeople.example",
+        account: { email: "person@example.com" },
+        group: null,
+        models: [],
       },
-    );
+    });
 
     render(<Sidebar />);
     expect(
@@ -69,8 +56,6 @@ describe("Sidebar account modal", () => {
         name: "账户 person@example.com",
       }),
     ).toBeInTheDocument();
-
-    act(() => accountUpdated?.({ live: { active: true } }));
 
     expect(
       screen.getByRole("button", { name: "账户 person@example.com" }),
@@ -137,14 +122,16 @@ describe("sidebar task placement", () => {
 describe("sidebar selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(desktopClient.getCloudAccount).mockResolvedValue({
-      signedIn: false,
-      serviceUrl: "",
-      account: null,
-      group: null,
-      models: [],
+    useWorkbenchStore.setState({
+      accountStatus: "signed-out",
+      cloudAccount: {
+        signedIn: false,
+        serviceUrl: "",
+        account: null,
+        group: null,
+        models: [],
+      },
     });
-    vi.mocked(desktopClient.onCloudAccountUpdated).mockResolvedValue(() => {});
     useWorkbenchStore.setState({
       primaryView: "plugins",
       selectedThreadId: "thread-1",

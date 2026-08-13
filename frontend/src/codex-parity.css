@@ -366,6 +366,12 @@ summary:focus-visible {
   padding: 6px 8px;
 }
 
+.account-button[data-account-state="signed-out"] {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--surface);
+}
+
 .account-avatar {
   width: 22px;
   height: 22px;
@@ -5003,7 +5009,7 @@ button.activity-row:hover {
   }
 
   .codex-sidebar .account-copy strong {
-    font-size: 14px;
+    font-size: 13px;
   }
 }
 

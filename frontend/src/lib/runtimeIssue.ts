@@ -12,7 +12,7 @@ export function runtimeIssuePresentation(
 ): RuntimeIssuePresentation {
   const normalized = message.trim();
   if (
-    /未配置.*(?:服务凭据|api\s*key)|请先登录|登录状态.*失效|authentication|unauthorized|\b401\b|\b403\b/iu.test(
+    /未配置.*(?:服务凭据|api\s*key)|请(?:先)?登录|登录状态.*失效|authentication|unauthorized|\b401\b|\b403\b/iu.test(
       normalized,
     )
   ) {
@@ -37,7 +37,7 @@ export function runtimeIssuePresentation(
   return {
     kind: "runtime",
     title: "暂时无法启动任务",
-    description: normalized || "桌面服务尚未就绪，请稍后重试。",
-    actionLabel: "重试",
+    description: "桌面服务暂时未连接。重新连接后即可继续。",
+    actionLabel: "重新连接",
   };
 }

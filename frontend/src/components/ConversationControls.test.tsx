@@ -50,6 +50,14 @@ describe("Codex conversation controls", () => {
     useWorkbenchStore.setState({
       sendPrompt: originalSendPrompt,
       selectedThreadId: "thread-main",
+      accountStatus: "signed-in",
+      cloudAccount: {
+        signedIn: true,
+        serviceUrl: "https://onpeople.example",
+        account: { email: "person@example.com" },
+        group: null,
+        models: [],
+      },
       threadLoading: false,
       error: null,
       timeline: [],
@@ -455,6 +463,44 @@ describe("Codex conversation controls", () => {
       "不对",
       expect.objectContaining({ mode: "agent" }),
     );
+  });
+
+  it("keeps the draft and opens login instead of sending while signed out", () => {
+    const sendPrompt = vi.fn().mockResolvedValue(undefined);
+    const openLogin = vi.fn();
+    window.addEventListener("onpeople:open-account-auth", openLogin);
+    useWorkbenchStore.setState({
+      accountStatus: "signed-out",
+      cloudAccount: {
+        signedIn: false,
+        serviceUrl: "https://onpeople.example",
+        account: null,
+        group: null,
+        models: [],
+      },
+      runtime: {
+        state: "ready",
+        threadId: "thread-main",
+        turnId: null,
+        queuedMessages: 0,
+        pendingApprovals: 0,
+        context: null,
+      },
+      sendPrompt,
+    });
+
+    render(<Composer />);
+    const input = screen.getByLabelText("任务输入");
+    fireEvent.change(input, { target: { value: "登录以后再发送" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(openLogin).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue("登录以后再发送");
+    expect(
+      screen.getByText("登录后即可继续。你的输入已保留，不会自动发送。"),
+    ).toBeVisible();
+    window.removeEventListener("onpeople:open-account-auth", openLogin);
   });
 
   it("shows a clean model settings menu and closes it outside", async () => {

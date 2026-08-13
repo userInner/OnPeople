@@ -2,10 +2,10 @@ import { ArrowRight, Check, LoaderCircle, Mail, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import otterIcon from "../../../assets/onpeople-app-icon-256.png";
 import { desktopClient } from "../lib/desktopClient";
 import { isCloudAccountState } from "../lib/cloudAccount";
 import { errorMessage } from "../lib/errors";
-import { useDialogFocus } from "../lib/dialogFocus";
 import type { CloudAccountState } from "../types";
 
 type AuthMode = "login" | "register";
@@ -25,20 +25,21 @@ export function AccountAuthPopover({
   const [busy, setBusy] = useState<"submit" | "code" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useDialogFocus(dialogRef, onClose);
 
   useEffect(() => {
-    const appRoot = document.getElementById("root");
-    const rootWasInert = appRoot?.hasAttribute("inert") ?? false;
-
     document.body.classList.add("account-auth-open");
-    appRoot?.setAttribute("inert", "");
-
     return () => {
       document.body.classList.remove("account-auth-open");
-      if (!rootWasInert) appRoot?.removeAttribute("inert");
     };
   }, []);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
 
   const submit = async () => {
     if (!email.trim() || !password || (mode === "register" && !code.trim())) {
@@ -106,20 +107,20 @@ export function AccountAuthPopover({
   };
 
   return createPortal(
-    <div className="account-auth-layer" onPointerDown={onClose}>
+    <div className="account-auth-layer">
       <div
         ref={dialogRef}
         className="account-auth-popover"
         role="dialog"
         aria-label="登录或注册 OnPeople"
-        aria-modal="true"
+        aria-modal="false"
         tabIndex={-1}
-        onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="account-auth-heading">
+          <img src={otterIcon} alt="" aria-hidden="true" />
           <div>
-            <strong>进入 OnPeople</strong>
-            <span>登录后自动同步模型和 Sub2API Key</span>
+            <strong>{mode === "login" ? "登录" : "创建账户"}</strong>
+            <span>登录 OnPeople，继续使用模型与任务同步</span>
           </div>
           <button
             className="account-auth-close"
@@ -243,7 +244,7 @@ export function AccountAuthPopover({
 
         <p className="account-auth-footnote">
           {mode === "login"
-            ? "还没有 OnPeople 账户？点击上方“注册”。"
+            ? "本地文件不会上传。还没有账户？点击上方“注册”。"
             : "已有账户？点击上方“登录”。"}
         </p>
       </div>

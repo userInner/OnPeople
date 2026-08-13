@@ -16,6 +16,18 @@ describe("runtimeIssuePresentation", () => {
     });
   });
 
+  it("classifies the signed-out runtime message as an account action", () => {
+    expect(
+      runtimeIssuePresentation(
+        "请登录 OnPeople 以同步可用模型；如需使用其他模型服务，可前往设置完成配置",
+      ),
+    ).toMatchObject({
+      kind: "account",
+      title: "登录后即可开始",
+      actionLabel: "登录 OnPeople",
+    });
+  });
+
   it("distinguishes an expired login", () => {
     expect(runtimeIssuePresentation("OnPeople 登录状态已失效")).toMatchObject({
       kind: "account",
@@ -27,6 +39,15 @@ describe("runtimeIssuePresentation", () => {
   it("keeps network failures actionable", () => {
     expect(runtimeIssuePresentation("network timeout")).toMatchObject({
       kind: "connection",
+      actionLabel: "重新连接",
+    });
+  });
+
+  it("hides implementation language for desktop service failures", () => {
+    expect(runtimeIssuePresentation("Rust 桌面宿主尚未启动")).toEqual({
+      kind: "runtime",
+      title: "暂时无法启动任务",
+      description: "桌面服务暂时未连接。重新连接后即可继续。",
       actionLabel: "重新连接",
     });
   });

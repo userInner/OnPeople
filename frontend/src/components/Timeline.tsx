@@ -57,6 +57,7 @@ export function Timeline() {
   const interrupt = useWorkbenchStore((state) => state.interrupt);
   const draftCwd = useWorkbenchStore((state) => state.draftCwd);
   const preferences = useWorkbenchStore((state) => state.preferences);
+  const accountStatus = useWorkbenchStore((state) => state.accountStatus);
   const end = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
   const userPausedFollow = useRef(false);
@@ -223,17 +224,32 @@ export function Timeline() {
   }
 
   if (timeline.length === 0) {
+    const signedOut =
+      accountStatus === "signed-out" || accountStatus === "expired";
+    const loginExpired = accountStatus === "expired";
     return (
       <section className="empty-timeline" aria-label="新任务">
         <div className="empty-symbol" aria-hidden="true">
           <Sparkles size={19} />
         </div>
-        <h1>{selectedThreadId ? "继续这项任务" : "今天想做什么？"}</h1>
+        <h1>
+          {signedOut
+            ? "今天想做什么？"
+            : selectedThreadId
+              ? "继续这项任务"
+              : "今天想做什么？"}
+        </h1>
         <p>
           <FolderOpen size={13} aria-hidden="true" />
-          <span>{draftCwd ?? "自动工作区"}</span>
+          <span>
+            {signedOut
+              ? loginExpired
+                ? "当前输入已保留，重新登录后即可发送"
+                : "登录后即可发送，当前输入会保留"
+              : (draftCwd ?? "自动工作区")}
+          </span>
         </p>
-        {preferences.showSuggestions ? (
+        {signedOut ? null : preferences.showSuggestions ? (
           <div className="suggestion-grid">
             {suggestions.map((suggestion) => (
               <button

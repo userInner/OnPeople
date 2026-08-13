@@ -4,7 +4,6 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Copy,
   ExternalLink,
   Folder,
@@ -24,10 +23,9 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 
 import { desktopClient } from "../lib/desktopClient";
-import { isCloudAccountState } from "../lib/cloudAccount";
 import { numberedThreadShortcuts } from "../lib/threadShortcuts";
 import { useWorkbenchStore } from "../store/workbenchStore";
-import type { CloudAccountState, PrimaryView, ThreadSummary } from "../types";
+import type { PrimaryView, ThreadSummary } from "../types";
 import { AccountAuthPopover } from "./AccountAuthPopover";
 import { IconButton } from "./IconButton";
 
@@ -77,37 +75,18 @@ export function Sidebar() {
   const newTask = useWorkbenchStore((state) => state.newTask);
   const refreshThreads = useWorkbenchStore((state) => state.refreshThreads);
   const reconnectRuntime = useWorkbenchStore((state) => state.reconnectRuntime);
+  const cloudAccount = useWorkbenchStore((state) => state.cloudAccount);
+  const accountStatus = useWorkbenchStore((state) => state.accountStatus);
+  const setCloudAccount = useWorkbenchStore((state) => state.setCloudAccount);
   const [searchOpen, setSearchOpen] = useState(false);
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [menuOpen, setMenuOpen] = useState<
     "project" | "account" | "brand" | null
   >(null);
   const [authOpen, setAuthOpen] = useState(false);
-  const [cloudAccount, setCloudAccount] = useState<CloudAccountState | null>(
-    null,
-  );
   const [contextMenu, setContextMenu] = useState<SidebarContextMenu | null>(
     null,
   );
-
-  useEffect(() => {
-    let active = true;
-    void desktopClient
-      .getCloudAccount()
-      .then((value) => {
-        if (active) setCloudAccount(value);
-      })
-      .catch(() => undefined);
-    const subscription = desktopClient.onCloudAccountUpdated((value) => {
-      // CloudAccount is also used for Live side-band status. Never let a
-      // partial `{ live: ... }` event erase the authoritative account state.
-      if (active && isCloudAccountState(value)) setCloudAccount(value);
-    });
-    return () => {
-      active = false;
-      void subscription.then((unlisten) => unlisten());
-    };
-  }, []);
 
   useEffect(() => {
     const openAccountAuth = () => {
@@ -207,7 +186,7 @@ export function Sidebar() {
     setUtilityOpen(false);
   };
 
-  const signedIn = cloudAccount?.signedIn === true;
+  const signedIn = accountStatus === "signed-in";
   const account =
     cloudAccount?.account && typeof cloudAccount.account === "object"
       ? (cloudAccount.account as Record<string, unknown>)
@@ -297,7 +276,6 @@ export function Sidebar() {
       ) : null}
       <div className="codex-project-host">
         <ProjectSwitcherPopover
-          blocked={authOpen}
           projects={projects}
           activeProjectPath={activeProjectPath}
           selectedThreadId={selectedThreadId}
@@ -342,6 +320,7 @@ export function Sidebar() {
         <button
           type="button"
           className="account-button"
+          data-account-state={accountStatus}
           aria-haspopup={signedIn ? "menu" : "dialog"}
           aria-expanded={signedIn ? menuOpen === "account" : authOpen}
           aria-label={signedIn ? `账户 ${accountName}` : "登录或注册 OnPeople"}
@@ -356,14 +335,30 @@ export function Sidebar() {
             }
           }}
         >
-          <span className="account-avatar">
-            {signedIn ? accountName.slice(0, 2).toUpperCase() : "ON"}
+          <span className={`account-avatar${signedIn ? "" : " is-signed-out"}`}>
+            {signedIn ? accountName.slice(0, 2).toUpperCase() : "OP"}
           </span>
           <span className="account-copy">
-            <strong>{signedIn ? accountName : "OnPeople"}</strong>
-            <small>{signedIn ? "已登录" : "未登录 · 点击登录或注册"}</small>
+            <strong>
+              {signedIn
+                ? accountName
+                : accountStatus === "loading"
+                  ? "正在检查账户"
+                  : accountStatus === "expired"
+                    ? "重新登录"
+                    : "登录或注册"}
+            </strong>
+            <small>
+              {signedIn
+                ? "已登录"
+                : accountStatus === "expired"
+                  ? "登录已过期，重新验证后继续"
+                  : accountStatus === "unavailable"
+                    ? "登录服务暂时不可用"
+                    : "使用 OnPeople 账户"}
+            </small>
           </span>
-          <ChevronDown size={13} />
+          {signedIn ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         {!signedIn && authOpen ? (
           <AccountAuthPopover
@@ -383,18 +378,6 @@ export function Sidebar() {
             onManage={() => setToolView("manage")}
           />
         ) : null}
-        <div className="account-actions">
-          <IconButton
-            icon={CircleHelp}
-            label="帮助与诊断"
-            onClick={() => setToolView("manage")}
-          />
-          <IconButton
-            icon={Settings}
-            label="设置"
-            onClick={() => setSettingsOpen(true)}
-          />
-        </div>
       </footer>
       {contextMenu?.kind === "thread" ? (
         <ThreadContextMenu
@@ -419,7 +402,6 @@ export function Sidebar() {
 }
 
 function ProjectSwitcherPopover({
-  blocked,
   projects,
   activeProjectPath,
   selectedThreadId,
@@ -433,7 +415,6 @@ function ProjectSwitcherPopover({
   onAddProject,
   allThreads,
 }: {
-  blocked: boolean;
   projects: Array<{
     path: string;
     name: string;
@@ -653,9 +634,6 @@ function ProjectSwitcherPopover({
 
   return (
     <div className="project-rail" role="menu" aria-label="切换项目">
-      {blocked ? (
-        <div className="project-rail-modal-scrim" aria-hidden="true" />
-      ) : null}
       <div className="project-rail-section project-rail-section-collapsed">
         <button
           className="project-rail-section-heading"

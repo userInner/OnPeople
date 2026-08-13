@@ -79,6 +79,7 @@ export function App() {
   const loading = useWorkbenchStore((state) => state.loading);
   const error = useWorkbenchStore((state) => state.error);
   const runtimeRetrying = useWorkbenchStore((state) => state.runtimeRetrying);
+  const accountStatus = useWorkbenchStore((state) => state.accountStatus);
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
   const threads = useWorkbenchStore((state) => state.threadList.threads);
   const primaryView = useWorkbenchStore((state) => state.primaryView);
@@ -93,6 +94,15 @@ export function App() {
   const refreshThreads = useWorkbenchStore((state) => state.refreshThreads);
   const newTask = useWorkbenchStore((state) => state.newTask);
   const runtimeIssue = error ? runtimeIssuePresentation(error) : null;
+  const suppressSignedOutStartupNoise =
+    accountStatus === "signed-out" &&
+    Boolean(
+      error?.match(
+        /Rust 桌面宿主尚未启动|桌面宿主.*(?:尚未启动|未启动)|desktop host.*not started/iu,
+      ),
+    );
+  const suppressExpectedSignedOutAccountPrompt =
+    accountStatus === "signed-out" && runtimeIssue?.kind === "account";
   const sidebarMaximum = maximumSidebarWidth(
     window.innerWidth,
     utilityOpen,
@@ -690,7 +700,10 @@ export function App() {
                   正在连接桌面服务
                 </div>
               ) : null}
-              {error && runtimeIssue ? (
+              {error &&
+              runtimeIssue &&
+              !suppressSignedOutStartupNoise &&
+              !suppressExpectedSignedOutAccountPrompt ? (
                 <div
                   className={`runtime-warning is-${runtimeIssue.kind}`}
                   role={runtimeIssue.kind === "account" ? "status" : "alert"}

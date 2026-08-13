@@ -290,6 +290,7 @@ export function Composer() {
   const interrupt = useWorkbenchStore((state) => state.interrupt);
   const runtime = useWorkbenchStore((state) => state.runtime);
   const status = useWorkbenchStore((state) => state.status);
+  const accountStatus = useWorkbenchStore((state) => state.accountStatus);
   const selectedThreadId = useWorkbenchStore((state) => state.selectedThreadId);
   const selectedThread = useWorkbenchStore((state) =>
     state.threadList.threads.find(
@@ -625,6 +626,12 @@ export function Composer() {
     const value = text.trim();
     if (!value && images.length === 0 && attachments.length === 0) return;
     setComposerError(null);
+    if (!working && accountStatus !== "signed-in") {
+      window.dispatchEvent(new Event("onpeople:open-account-auth"));
+      setComposerError("登录后即可继续。你的输入已保留，不会自动发送。");
+      textarea.current?.focus();
+      return;
+    }
     if (working) {
       if (images.length > 0 || attachments.length > 0 || capability) {
         setComposerError(

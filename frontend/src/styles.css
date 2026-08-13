@@ -2937,6 +2937,32 @@ summary:focus-visible {
 .account-button:hover {
   background: var(--surface-muted);
 }
+.account-button[data-account-state="signed-out"] {
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--surface);
+}
+.account-button[data-account-state="signed-out"]:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+.account-button[data-account-state="signed-out"] .account-copy small,
+.account-button[data-account-state="signed-out"] > svg {
+  color: var(--ink-faint);
+}
+.account-button[data-account-state="unavailable"] {
+  border: 1px solid color-mix(in srgb, var(--warning) 24%, var(--line));
+  background: color-mix(in srgb, var(--warning) 5%, var(--surface));
+}
+.account-button[data-account-state="expired"] {
+  border: 1px solid #edb76a;
+  background: #fff8ed;
+  color: #7a4300;
+}
+.account-button[data-account-state="expired"] .account-avatar {
+  background: #d97706;
+  color: #fff;
+}
 .account-avatar {
   display: grid;
   width: 25px;
@@ -2949,6 +2975,11 @@ summary:focus-visible {
   background: #9c4c42;
   font-size: 9px;
   font-weight: 700;
+}
+.account-avatar.is-signed-out {
+  color: #72512c;
+  background: #f6e8d7;
+  box-shadow: inset 0 0 0 1px #e5c9a8;
 }
 .account-copy {
   display: flex;
@@ -2972,60 +3003,52 @@ summary:focus-visible {
 }
 .account-auth-layer {
   position: fixed;
-  /* This is a window-level modal. Keep it above the persistent project rail
-     (70), settings (120), and command palette (200). */
   z-index: 220;
-  inset: 0;
-  display: grid;
-  padding: 24px;
-  place-items: center;
-  background: rgb(32 32 30 / 10%);
-}
-
-/* Dim the application root while the account dialog portal is mounted. */
-body.account-auth-open > #root {
-  filter: brightness(0.78) blur(1.5px);
+  bottom: 54px;
+  left: 8px;
+  width: min(286px, calc(100vw - 16px));
   pointer-events: none;
-}
-
-/* Keep the project rail visually consistent with the account dialog. */
-.project-rail-modal-scrim {
-  position: absolute;
-  z-index: 20;
-  inset: 0;
-  background: rgb(32 32 30 / 24%);
-  backdrop-filter: blur(1.5px);
 }
 
 .account-auth-popover {
   position: relative;
-  width: min(390px, calc(100vw - 48px));
-  padding: 24px;
+  width: 100%;
+  padding: 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 18px;
+  border-radius: 12px;
   background: var(--surface);
   box-shadow:
-    0 26px 70px rgb(30 28 25 / 24%),
-    0 4px 14px rgb(30 28 25 / 10%);
+    0 18px 44px rgb(30 28 25 / 14%),
+    0 3px 10px rgb(30 28 25 / 8%);
+  pointer-events: auto;
 }
 .account-auth-heading {
   display: flex;
-  gap: 12px;
+  gap: 9px;
   align-items: flex-start;
   justify-content: space-between;
 }
+.account-auth-heading > img {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 3px 10px rgb(20 15 24 / 18%);
+}
 .account-auth-heading > div {
   display: grid;
+  flex: 1;
   gap: 4px;
 }
 .account-auth-heading strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 650;
 }
 .account-auth-heading span {
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.4;
 }
 .account-auth-close {
@@ -3046,7 +3069,7 @@ body.account-auth-open > #root {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
-  margin: 14px 0;
+  margin: 10px 0;
   padding: 3px;
   border-radius: 8px;
   background: var(--surface-muted);
@@ -3070,14 +3093,14 @@ body.account-auth-open > #root {
 .account-auth-field {
   display: grid;
   gap: 5px;
-  margin-top: 10px;
+  margin-top: 7px;
   color: var(--ink-soft);
   font-size: 10px;
   font-weight: 600;
 }
 .account-auth-field input {
   width: 100%;
-  min-height: 32px;
+  min-height: 29px;
   padding: 0 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -3143,26 +3166,26 @@ body.account-auth-open > #root {
 .account-auth-submit {
   display: flex;
   width: 100%;
-  min-height: 34px;
+  min-height: 31px;
   gap: 6px;
   align-items: center;
   justify-content: center;
-  margin-top: 14px;
+  margin-top: 10px;
   border-radius: 8px;
   color: #fff;
-  background: var(--accent);
+  background: var(--ink);
   font-size: 11px;
   font-weight: 650;
 }
 .account-auth-submit:hover {
-  filter: brightness(0.96);
+  background: color-mix(in srgb, var(--ink) 90%, var(--surface));
 }
 .account-auth-submit:disabled {
   cursor: wait;
   opacity: 0.65;
 }
 .account-auth-footnote {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: var(--ink-faint);
   font-size: 9px;
   line-height: 1.4;
@@ -3170,18 +3193,6 @@ body.account-auth-open > #root {
 }
 .is-spinning {
   animation: spin 0.8s linear infinite;
-}
-.account-actions {
-  display: none;
-  gap: 1px;
-}
-.sidebar-account:hover .account-actions,
-.sidebar-account:focus-within .account-actions {
-  display: flex;
-}
-.account-actions .icon-button {
-  width: 25px;
-  height: 25px;
 }
 
 .main-column {

@@ -5,6 +5,7 @@ import { isCloudAccountState } from "../lib/cloudAccount";
 import { errorMessage } from "../lib/errors";
 import type {
   AgentStatus,
+  CloudAccountState,
   EventEnvelope,
   Goal,
   LocalArtifactPreviewRequest,
@@ -46,6 +47,13 @@ export type ThreadActivityStatus =
   | "waiting-input"
   | "error";
 
+export type AccountStatus =
+  | "loading"
+  | "signed-in"
+  | "signed-out"
+  | "expired"
+  | "unavailable";
+
 interface WorkbenchStore {
   initialized: boolean;
   loading: boolean;
@@ -53,6 +61,8 @@ interface WorkbenchStore {
   runtimeRetrying: boolean;
   sendingPrompt: boolean;
   error: string | null;
+  cloudAccount: CloudAccountState | null;
+  accountStatus: AccountStatus;
   status: AgentStatus | null;
   preferences: Preferences;
   threadList: ThreadList;
@@ -77,6 +87,8 @@ interface WorkbenchStore {
   draftCwd: string | null;
   initialize: () => Promise<void>;
   reconnectRuntime: () => Promise<void>;
+  refreshCloudAccount: () => Promise<CloudAccountState | null>;
+  setCloudAccount: (value: CloudAccountState) => void;
   refreshThreads: () => Promise<void>;
   refreshScheduler: () => Promise<void>;
   selectThread: (id: string | null) => Promise<void>;
@@ -128,6 +140,22 @@ function textValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function accountStatus(value: CloudAccountState): AccountStatus {
+  return value.signedIn ? "signed-in" : "signed-out";
+}
+
+function isTransientDesktopStartupError(value: unknown): boolean {
+  return /Rust 桌面宿主尚未启动|桌面宿主.*(?:尚未启动|未启动)|desktop host.*not started/iu.test(
+    errorMessage(value),
+  );
+}
+
+function isAuthenticationError(value: unknown): boolean {
+  return /(?:401|403|unauthori[sz]ed|forbidden|authentication required|login required|session expired|登录(?:已)?过期|请(?:先|重新)?登录|未登录)/iu.test(
+    errorMessage(value),
+  );
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -1393,6 +1421,8 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
   runtimeRetrying: false,
   sendingPrompt: false,
   error: null,
+  cloudAccount: null,
+  accountStatus: "loading",
   status: null,
   preferences: defaultPreferences,
   threadList: emptyThreads,
@@ -1426,6 +1456,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         desktopClient.listThreads(),
         desktopClient.runtimeSnapshot(),
         desktopClient.scheduler(),
+        desktopClient.getCloudAccount(),
       ] as const);
       const [
         statusResult,
@@ -1433,6 +1464,7 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         threadListResult,
         runtimeResult,
         schedulerResult,
+        accountResult,
       ] = results;
       const status =
         statusResult.status === "fulfilled" ? statusResult.value : null;
@@ -1450,27 +1482,49 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         schedulerResult.status === "fulfilled"
           ? schedulerResult.value
           : { tasks: [], runs: [], unread: 0 };
+      const cloudAccount =
+        accountResult.status === "fulfilled" &&
+        isCloudAccountState(accountResult.value)
+          ? accountResult.value
+          : null;
       const threadActivity = Object.fromEntries(
         threadList.threads.map((thread) => [
           thread.id,
           threadActivityFromStatus(thread.status),
         ]),
       ) as Record<string, ThreadActivityStatus>;
-      const initialError = results.find(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
-      );
+      // Account discovery is optional during startup. A temporarily unavailable
+      // login service must not turn the entire workbench into a fatal state.
+      const initialError = results
+        .slice(0, 5)
+        .find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+      const visibleInitialError =
+        initialError && !isTransientDesktopStartupError(initialError.reason)
+          ? errorMessage(initialError.reason)
+          : null;
       set({
         status,
         preferences,
         threadList,
         runtime,
         scheduler,
+        cloudAccount,
+        accountStatus:
+          cloudAccount?.signedIn &&
+          initialError &&
+          isAuthenticationError(initialError.reason)
+            ? "expired"
+            : cloudAccount
+              ? accountStatus(cloudAccount)
+              : "unavailable",
         threadActivity,
         draftCwd: null,
         initialized: true,
         loading: false,
-        error: initialError ? errorMessage(initialError.reason) : null,
+        error: visibleInitialError,
       });
       applyTheme(preferences);
       if (!subscriptionsStarted) {
@@ -2027,6 +2081,11 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
         await desktopClient
           .onCloudAccountUpdated(async (account) => {
             if (!isCloudAccountState(account)) return;
+            set({
+              cloudAccount: account,
+              accountStatus: accountStatus(account),
+              error: null,
+            });
             if (account.signedIn) {
               await get().reconnectRuntime();
               return;
@@ -2038,7 +2097,14 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
               ]);
               set({ status, runtime, error: null });
             } catch (error) {
-              set({ error: errorMessage(error) });
+              // Signed-out runtime snapshots commonly report that model access
+              // needs login. The account CTA already explains that state, so
+              // do not surface the same condition as a desktop failure.
+              set({
+                error: isAuthenticationError(error)
+                  ? null
+                  : errorMessage(error),
+              });
             }
           })
           .catch((error) => set({ error: errorMessage(error) }));
@@ -2058,25 +2124,56 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
     if (runtimeStartPromise) return runtimeStartPromise;
     const run = (async () => {
       set({ runtimeRetrying: true, error: null });
+      let lastError: unknown = null;
+      for (const delay of [0, 350, 900, 1_800]) {
+        if (delay > 0) {
+          await new Promise<void>((resolve) =>
+            window.setTimeout(resolve, delay),
+          );
+        }
+        try {
+          await desktopClient.startRuntime();
+          const [status, runtime, threadList, cloudAccount] = await Promise.all(
+            [
+              desktopClient.agentStatus(),
+              desktopClient.runtimeSnapshot(get().selectedThreadId),
+              desktopClient.listThreads({
+                query: get().search,
+                archived: get().showingArchived,
+              }),
+              desktopClient.getCloudAccount(),
+            ],
+          );
+          set((state) => ({
+            status,
+            runtime,
+            threadList,
+            cloudAccount,
+            accountStatus: accountStatus(cloudAccount),
+            draftCwd: state.draftCwd,
+            error: null,
+          }));
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!isTransientDesktopStartupError(error)) break;
+        }
+      }
       try {
-        await desktopClient.startRuntime();
-        const [status, runtime, threadList] = await Promise.all([
-          desktopClient.agentStatus(),
-          desktopClient.runtimeSnapshot(get().selectedThreadId),
-          desktopClient.listThreads({
-            query: get().search,
-            archived: get().showingArchived,
-          }),
-        ]);
-        set((state) => ({
-          status,
-          runtime,
-          threadList,
-          draftCwd: state.draftCwd,
-          error: null,
-        }));
-      } catch (error) {
-        set({ error: errorMessage(error) });
+        const cloudAccount = await desktopClient.getCloudAccount();
+        set({
+          cloudAccount,
+          accountStatus:
+            cloudAccount.signedIn && isAuthenticationError(lastError)
+              ? "expired"
+              : accountStatus(cloudAccount),
+          error: errorMessage(lastError),
+        });
+      } catch {
+        set({
+          accountStatus: "unavailable",
+          error: errorMessage(lastError),
+        });
       } finally {
         set({ runtimeRetrying: false });
       }
@@ -2088,6 +2185,27 @@ export const useWorkbenchStore = create<WorkbenchStore>((set, get) => ({
       if (runtimeStartPromise === run) runtimeStartPromise = null;
     }
   },
+
+  refreshCloudAccount: async () => {
+    try {
+      const cloudAccount = await desktopClient.getCloudAccount();
+      set({
+        cloudAccount,
+        accountStatus: accountStatus(cloudAccount),
+      });
+      return cloudAccount;
+    } catch {
+      set({ accountStatus: "unavailable" });
+      return null;
+    }
+  },
+
+  setCloudAccount: (cloudAccount) =>
+    set({
+      cloudAccount,
+      accountStatus: accountStatus(cloudAccount),
+      error: null,
+    }),
 
   refreshThreads: async () => {
     const { search, showingArchived } = get();
