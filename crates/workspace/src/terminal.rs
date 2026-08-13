@@ -44,7 +44,7 @@ impl Default for TerminalService {
 impl TerminalService {
     pub fn start(&self, request: &TerminalStartRequest) -> Result<TerminalSession, AppError> {
         let cwd = crate::canonical_workspace(Path::new(&request.cwd))?;
-        let shell = request.shell.clone().unwrap_or_else(default_shell);
+        let shell = validated_shell(request.shell.as_deref())?;
         let size = PtySize {
             rows: request.rows.clamp(2, 500),
             cols: request.cols.clamp(2, 500),
@@ -211,10 +211,76 @@ fn default_shell() -> String {
     })
 }
 
+/// The terminal API exists to open an interactive shell for the user, not to
+/// run arbitrary programs. Restricting the requested executable to well-known
+/// shell names (resolved through the host's normal PATH) keeps `terminal.start`
+/// from doubling as a silent process-spawn primitive for a compromised
+/// renderer or any other desktop-API caller.
+const ALLOWED_SHELLS: &[&str] = &[
+    "zsh",
+    "bash",
+    "fish",
+    "sh",
+    "dash",
+    "nu",
+    "pwsh",
+    "pwsh.exe",
+    "powershell",
+    "powershell.exe",
+    "cmd",
+    "cmd.exe",
+];
+
+fn validated_shell(requested: Option<&str>) -> Result<String, AppError> {
+    let Some(requested) = requested else {
+        return Ok(default_shell());
+    };
+    let trimmed = requested.trim();
+    if trimmed.is_empty() {
+        return Ok(default_shell());
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if !trimmed.contains(['/', '\\']) && ALLOWED_SHELLS.contains(&lowered.as_str()) {
+        return Ok(trimmed.to_owned());
+    }
+    Err(
+        AppError::new(ErrorCode::InvalidRequest, "终端只能启动白名单内的 shell")
+            .context("requestedShell", trimmed),
+    )
+}
+
 impl Drop for TerminalService {
     fn drop(&mut self) {
         if Arc::strong_count(&self.sessions) == 1 {
             self.terminate_all();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_shell;
+
+    #[test]
+    fn shell_requests_are_restricted_to_known_shells() {
+        // Missing or blank requests fall back to the user's default shell.
+        assert!(validated_shell(None).is_ok());
+        assert!(validated_shell(Some("  ")).is_ok());
+        // Well-known shell names pass, case-insensitively.
+        for shell in ["zsh", "bash", "fish", "PowerShell.exe", "pwsh", "cmd"] {
+            assert!(validated_shell(Some(shell)).is_ok(), "{shell}");
+        }
+        // Arbitrary executables, absolute paths, and traversal are rejected.
+        for shell in [
+            "/bin/zsh",
+            "python3",
+            "osascript",
+            "node",
+            "../../usr/bin/env",
+            "C:\\Windows\\System32\\calc.exe",
+            "zsh/",
+        ] {
+            assert!(validated_shell(Some(shell)).is_err(), "{shell}");
         }
     }
 }

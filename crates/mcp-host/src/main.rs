@@ -399,25 +399,74 @@ fn call_artifact(name: &str, args: &Value) -> Result<Vec<Value>, String> {
 }
 
 fn workspace_path(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
+    if value.trim().is_empty() {
+        return Err("artifact path is required".to_owned());
+    }
     let root = env::var_os("INTERNAL_AGENT_WORKSPACE")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let path = if path.is_absolute() {
-        path
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("workspace root is unavailable: {error}"))?;
+
+    let requested = PathBuf::from(value);
+    let candidate = if requested.is_absolute() {
+        requested
     } else {
-        root.join(path)
+        root.join(requested)
     };
-    let parent = path
+
+    // Reject `..` up front so it can never be resolved into an escape by a
+    // later symlink hop; ordinary artifact paths never need parent segments.
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("artifact path must not contain '..' segments".to_owned());
+    }
+
+    let file_name = candidate
+        .file_name()
+        .ok_or_else(|| "artifact path must point to a file".to_owned())?
+        .to_owned();
+    let parent = candidate
         .parent()
         .ok_or_else(|| "artifact path has no parent".to_owned())?;
+
+    // Confine the deepest *existing* ancestor before creating anything, so a
+    // path outside the workspace can never even create directories.
+    let mut existing = parent;
+    loop {
+        match existing.canonicalize() {
+            Ok(resolved) => {
+                if !resolved.starts_with(&root) {
+                    return Err("artifact path is outside the active workspace".to_owned());
+                }
+                break;
+            }
+            Err(_) => {
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| "artifact path is outside the active workspace".to_owned())?;
+            }
+        }
+    }
+
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let root = root.canonicalize().map_err(|error| error.to_string())?;
-    let parent = parent.canonicalize().map_err(|error| error.to_string())?;
-    if !parent.starts_with(&root) {
+    let real_parent = parent.canonicalize().map_err(|error| error.to_string())?;
+    if !real_parent.starts_with(&root) {
         return Err("artifact path is outside the active workspace".to_owned());
     }
-    Ok(path)
+
+    let output = real_parent.join(&file_name);
+    // Never follow an existing symlink at the final component: that is the
+    // classic workspace-escape (e.g. `report.docx -> ~/.ssh/authorized_keys`).
+    if let Ok(metadata) = std::fs::symlink_metadata(&output) {
+        if metadata.file_type().is_symlink() {
+            return Err("artifact path resolves to a symlink and was rejected".to_owned());
+        }
+    }
+    Ok(output)
 }
 
 fn create_document(args: &Value) -> Result<Vec<Value>, String> {
@@ -1250,27 +1299,7 @@ fn call_research(name: &str, args: &Value) -> Result<Vec<Value>, String> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| "url is required".to_owned())?;
             let parsed = url::Url::parse(url).map_err(|_| "研究来源地址无效".to_owned())?;
-            if parsed.scheme() != "https"
-                || !matches!(
-                    parsed.host_str(),
-                    Some(
-                        "api.crossref.org"
-                            | "api.openalex.org"
-                            | "api.datacite.org"
-                            | "eutils.ncbi.nlm.nih.gov"
-                            | "www.ebi.ac.uk"
-                            | "export.arxiv.org"
-                            | "dblp.org"
-                            | "doaj.org"
-                            | "zenodo.org"
-                            | "api.osf.io"
-                            | "api.ror.org"
-                            | "clinicaltrials.gov"
-                            | "doi.org"
-                            | "arxiv.org"
-                    )
-                )
-            {
+            if !is_allowed_research_url(&parsed) {
                 return Err("该地址不在公开研究来源范围内".to_owned());
             }
             let max = args
@@ -1278,14 +1307,16 @@ fn call_research(name: &str, args: &Value) -> Result<Vec<Value>, String> {
                 .and_then(Value::as_u64)
                 .unwrap_or(20_000)
                 .clamp(1_000, 100_000) as usize;
-            let response = reqwest::blocking::get(url)
-                .map_err(|error| public_source_error(&error.to_string()))?
-                .error_for_status()
-                .map_err(|error| public_source_error(&error.to_string()))?;
-            let text = response
-                .text()
-                .map_err(|error| public_source_error(&error.to_string()))?;
-            Ok(vec![text_content(json!({ "url": url, "text": text.chars().take(max).collect::<String>(), "truncated": text.chars().count() > max }).to_string())])
+            let text = fetch_public_research_text(url)?;
+            let truncated = text.chars().count() > max;
+            Ok(vec![text_content(
+                json!({
+                    "url": url,
+                    "text": text.chars().take(max).collect::<String>(),
+                    "truncated": truncated,
+                })
+                .to_string(),
+            )])
         }
         "research_search" => {
             let query = args
@@ -1304,6 +1335,72 @@ fn call_research(name: &str, args: &Value) -> Result<Vec<Value>, String> {
         }
         _ => Err(format!("unknown research tool: {name}")),
     }
+}
+
+const RESEARCH_HOSTS: [&str; 14] = [
+    "api.crossref.org",
+    "api.openalex.org",
+    "api.datacite.org",
+    "eutils.ncbi.nlm.nih.gov",
+    "www.ebi.ac.uk",
+    "export.arxiv.org",
+    "dblp.org",
+    "doaj.org",
+    "zenodo.org",
+    "api.osf.io",
+    "api.ror.org",
+    "clinicaltrials.gov",
+    "doi.org",
+    "arxiv.org",
+];
+
+fn is_allowed_research_url(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| RESEARCH_HOSTS.contains(&host))
+}
+
+// Fetches a public research URL with hard limits: a 20s timeout, a bounded
+// response body, and a redirect policy that re-applies the scheme+host
+// allowlist on *every* hop. Without the per-hop check an allowlisted
+// redirector (e.g. doi.org) could bounce the request to 169.254.169.254 or a
+// localhost service (SSRF); the byte cap bounds memory from a hostile or huge
+// response.
+fn fetch_public_research_text(url: &str) -> Result<String, String> {
+    const MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        let allowed = attempt.url().scheme() == "https"
+            && attempt
+                .url()
+                .host_str()
+                .is_some_and(|host| RESEARCH_HOSTS.contains(&host));
+        if attempt.previous().len() >= 10 {
+            attempt.error("too many redirects")
+        } else if allowed {
+            attempt.follow()
+        } else {
+            attempt.error("redirect target is not an allowed research source")
+        }
+    });
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("OnPeople-Research-Paper/1.0 (public metadata; no credentials)")
+        .timeout(Duration::from_secs(20))
+        .redirect(redirect_policy)
+        .build()
+        .map_err(|error| public_source_error(&error.to_string()))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|error| public_source_error(&error.to_string()))?
+        .error_for_status()
+        .map_err(|error| public_source_error(&error.to_string()))?;
+    let mut buffer = Vec::new();
+    response
+        .take(MAX_BODY_BYTES)
+        .read_to_end(&mut buffer)
+        .map_err(|error| public_source_error(&error.to_string()))?;
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
 }
 
 fn search_public_research(query: &str, limit: usize) -> Result<Value, String> {
@@ -1505,7 +1602,8 @@ fn html_escape(value: &str) -> String {
 mod tests {
     use super::{
         ServerKind, apply_template, create_document, create_site, create_spreadsheet,
-        create_template, create_visualization, inspect_artifact, tool_definitions,
+        create_template, create_visualization, inspect_artifact, is_allowed_research_url,
+        tool_definitions, workspace_path,
     };
     use serde_json::Value;
 
@@ -1648,5 +1746,53 @@ mod tests {
         let chart = std::fs::read_to_string(temporary.path().join("chart.html")).expect("chart");
         assert!(chart.contains("OnPeople Visualize"));
         assert!(chart.contains("application/json"));
+    }
+
+    #[test]
+    fn workspace_path_rejects_parent_traversal() {
+        assert!(workspace_path("../escape.txt").is_err());
+        assert!(workspace_path("nested/../../escape.txt").is_err());
+    }
+
+    #[test]
+    fn workspace_path_allows_files_inside_the_workspace() {
+        let current = std::env::current_dir().expect("current directory");
+        let temporary = tempfile::Builder::new()
+            .prefix("onpeople-ws-ok-")
+            .tempdir_in(&current)
+            .expect("temporary workspace");
+        let target = temporary.path().join("nested").join("report.docx");
+        let resolved = workspace_path(target.to_str().expect("utf-8 path"))
+            .expect("path inside the workspace is allowed");
+        assert!(resolved.ends_with("report.docx"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_path_rejects_absolute_paths_outside_the_workspace() {
+        assert!(workspace_path("/etc/hosts").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_path_rejects_a_symlinked_final_component() {
+        let current = std::env::current_dir().expect("current directory");
+        let temporary = tempfile::Builder::new()
+            .prefix("onpeople-ws-symlink-")
+            .tempdir_in(&current)
+            .expect("temporary workspace");
+        let link = temporary.path().join("artifact.txt");
+        std::os::unix::fs::symlink("/etc/hosts", &link).expect("create symlink");
+        assert!(workspace_path(link.to_str().expect("utf-8 path")).is_err());
+    }
+
+    #[test]
+    fn research_allowlist_blocks_non_https_and_unknown_hosts() {
+        let allow = |value: &str| is_allowed_research_url(&url::Url::parse(value).unwrap());
+        assert!(allow("https://api.crossref.org/works"));
+        assert!(allow("https://doi.org/10.1000/xyz"));
+        assert!(!allow("http://api.crossref.org/works"));
+        assert!(!allow("https://169.254.169.254/latest/meta-data/"));
+        assert!(!allow("https://evil.example.com/"));
     }
 }

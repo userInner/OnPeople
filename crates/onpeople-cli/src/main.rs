@@ -284,7 +284,9 @@ async fn run_exec(mut options: ExecOptions) -> Result<(), AppError> {
     }
 
     let runtime_root = resolve_runtime_root(options.runtime_root.as_deref())?;
-    let codex_binary = match RuntimePaths::new(runtime_root).codex() {
+    // The CLI deliberately keeps CODEX_BIN-style overrides in release builds:
+    // its runtime root is already an env/argv knob controlled by the invoker.
+    let codex_binary = match RuntimePaths::with_env_overrides(runtime_root).codex() {
         Ok(component) => component.path,
         #[cfg(debug_assertions)]
         Err(_) => find_path_executable(if cfg!(windows) { "codex.exe" } else { "codex" })

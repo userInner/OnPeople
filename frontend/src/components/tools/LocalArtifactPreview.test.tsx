@@ -89,7 +89,7 @@ describe("LocalArtifactPreview", () => {
     expect(desktopClient.openLocalArtifact).not.toHaveBeenCalled();
   });
 
-  it("renders HTML in a script-free internal page instead of showing source", async () => {
+  it("renders HTML in a sandboxed, script-free data-URL frame instead of showing source", async () => {
     useWorkbenchStore.setState({
       localArtifactPreview: {
         id: "preview-html",
@@ -109,15 +109,19 @@ describe("LocalArtifactPreview", () => {
 
     render(<LocalArtifactPreview />);
 
-    const document = await screen.findByRole("document", {
-      name: "hello.html",
-    });
-    await waitFor(() => expect(document.shadowRoot).not.toBeNull());
-    const html = document.shadowRoot?.innerHTML ?? "";
-    expect(html).toContain("hello world");
-    expect(html).toContain("p{color:red}");
-    expect(html).not.toContain("<script");
-    expect(html).not.toContain("alert(1)");
+    const frame = await screen.findByTitle("hello.html");
+    // A fully-restricted sandbox (no allow-scripts/allow-same-origin) means the
+    // frame cannot execute scripts or reach the privileged desktop bridge.
+    expect(frame).toHaveAttribute("sandbox", "");
+    const src = frame.getAttribute("src") ?? "";
+    expect(src.startsWith("data:text/html")).toBe(true);
+    const decoded = decodeURIComponent(
+      src.replace(/^data:text\/html;charset=utf-8,/, ""),
+    );
+    expect(decoded).toContain("hello world");
+    expect(decoded).toContain("p{color:red}");
+    expect(decoded).not.toContain("<script");
+    expect(decoded).not.toContain("alert(1)");
   });
 
   it("formats JSON and explains unsupported Office files", async () => {

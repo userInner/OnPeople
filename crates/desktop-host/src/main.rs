@@ -102,14 +102,35 @@ async fn run(options: Options) -> Result<(), AppError> {
 
 #[cfg(unix)]
 async fn serve_socket(runtime: Arc<CoreRuntime>, path: PathBuf) -> Result<(), AppError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use tokio::net::UnixListener;
 
     if path.exists() {
         std::fs::remove_file(&path).map_err(AppError::internal)?;
     }
     let listener = UnixListener::bind(&path).map_err(AppError::internal)?;
+    // The socket carries the full desktop API (terminal, files, automation)
+    // with no further authentication, so it must be owner-only and every
+    // accepted peer must prove it runs as the owning user.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(AppError::internal)?;
+    let owner_uid = std::fs::metadata(&path).map_err(AppError::internal)?.uid();
     let result = async {
-        let (stream, _) = listener.accept().await.map_err(AppError::internal)?;
+        let stream = loop {
+            let (stream, _) = listener.accept().await.map_err(AppError::internal)?;
+            match stream.peer_cred() {
+                Ok(credentials) if credentials.uid() == owner_uid => break stream,
+                Ok(credentials) => {
+                    eprintln!(
+                        "onpeople-desktop-host: 拒绝来自 uid {} 的 socket 连接",
+                        credentials.uid()
+                    );
+                }
+                Err(error) => {
+                    eprintln!("onpeople-desktop-host: 无法读取 socket 对端凭证: {error}");
+                }
+            }
+        };
         let (reader, writer) = stream.into_split();
         serve(runtime, reader, writer).await
     }
@@ -367,6 +388,72 @@ mod tests {
             .await
             .expect("join serve task")
             .expect("serve protocol");
+        runtime.stop().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_transport_is_owner_only_and_serves_the_owning_user() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let storage = Storage::open_empty(temporary.path().join("data")).expect("open storage");
+        let runtime = Arc::new(
+            CoreRuntime::new(storage, temporary.path().join("runtime")).expect("create runtime"),
+        );
+        let socket_path = temporary.path().join("desktop-api.sock");
+        let serve_task = tokio::spawn(serve_socket(runtime.clone(), socket_path.clone()));
+
+        let mut connection = None;
+        for _ in 0..100 {
+            match tokio::net::UnixStream::connect(&socket_path).await {
+                Ok(stream) => {
+                    connection = Some(stream);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        let connection = connection.expect("connect to desktop socket");
+
+        let mode = std::fs::metadata(&socket_path)
+            .expect("socket metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "socket 必须仅属主可读写");
+
+        let (reader, mut writer) = connection.into_split();
+        let request = onpeople_desktop_api::DesktopRequest {
+            protocol_version: onpeople_desktop_api::DESKTOP_PROTOCOL_VERSION,
+            request_id: "socket-contract-1".to_owned(),
+            method: onpeople_desktop_api::DesktopMethod::SystemCapabilities,
+            params: json!({}),
+        };
+        writer
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&request).expect("serialize request")
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write request");
+
+        let mut response = String::new();
+        BufReader::new(reader)
+            .read_line(&mut response)
+            .await
+            .expect("read response");
+        let response: Value = serde_json::from_str(&response).expect("parse host message");
+        assert_eq!(response["kind"], "response");
+        assert_eq!(response["payload"]["ok"], true);
+
+        writer.shutdown().await.expect("close request stream");
+        serve_task
+            .await
+            .expect("join serve task")
+            .expect("serve socket");
         runtime.stop().await;
     }
 }

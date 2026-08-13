@@ -16,12 +16,32 @@ pub struct RuntimeComponent {
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
     root: PathBuf,
+    allow_env_overrides: bool,
 }
 
 impl RuntimePaths {
+    /// Strict resolution for desktop hosts: environment-variable binary
+    /// overrides (`CODEX_BIN`, `CUA_DRIVER_PATH`, …) bypass manifest hash
+    /// verification by design, so they are honored only in debug builds.
+    /// Release desktop builds ignore them loudly instead of silently
+    /// redirecting sidecars to unverified executables.
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            allow_env_overrides: cfg!(debug_assertions),
+        }
+    }
+
+    /// CLI-style hosts trust their invoking environment by design (their
+    /// runtime root is itself an env/argv knob), so they may opt in to
+    /// honoring binary overrides in release builds as well.
+    #[must_use]
+    pub fn with_env_overrides(root: PathBuf) -> Self {
+        Self {
+            root,
+            allow_env_overrides: true,
+        }
     }
 
     #[must_use]
@@ -214,31 +234,44 @@ impl RuntimePaths {
         )
     }
 
-    fn resolve(
+    fn override_component(
         &self,
         name: &'static str,
         override_name: &str,
-        executable: &str,
-    ) -> Result<RuntimeComponent, AppError> {
-        if let Some(path) = std::env::var_os(override_name).map(PathBuf::from) {
-            if executable_file(&path) {
-                return Ok(RuntimeComponent {
-                    name,
-                    path,
-                    bundled: false,
-                });
-            }
-            return Err(AppError::new(
-                ErrorCode::RuntimeUnavailable,
-                format!("{name} 覆盖路径不可执行"),
-            )
-            .context("path", path.to_string_lossy()));
+    ) -> Result<Option<RuntimeComponent>, AppError> {
+        let Some(path) = std::env::var_os(override_name).map(PathBuf::from) else {
+            return Ok(None);
+        };
+        if !self.allow_env_overrides {
+            eprintln!(
+                "onpeople-runtime: 忽略 {override_name} 覆盖（此构建只信任已校验的内嵌运行时）"
+            );
+            return Ok(None);
         }
+        if executable_file(&path) {
+            return Ok(Some(RuntimeComponent {
+                name,
+                path,
+                bundled: false,
+            }));
+        }
+        Err(AppError::new(
+            ErrorCode::RuntimeUnavailable,
+            format!("{name} 覆盖路径不可执行"),
+        )
+        .context("path", path.to_string_lossy()))
+    }
+
+    fn bundled_component_path(
+        &self,
+        name: &'static str,
+        executable: &str,
+    ) -> Result<PathBuf, AppError> {
         let candidates = [
             self.root.join("bin").join(executable),
             self.root.join(executable),
         ];
-        let path = candidates
+        candidates
             .into_iter()
             .find(|path| executable_file(path))
             .ok_or_else(|| {
@@ -246,7 +279,19 @@ impl RuntimePaths {
                     ErrorCode::RuntimeUnavailable,
                     format!("未找到已签名的 {name} 运行时"),
                 )
-            })?;
+            })
+    }
+
+    fn resolve(
+        &self,
+        name: &'static str,
+        override_name: &str,
+        executable: &str,
+    ) -> Result<RuntimeComponent, AppError> {
+        if let Some(component) = self.override_component(name, override_name)? {
+            return Ok(component);
+        }
+        let path = self.bundled_component_path(name, executable)?;
         self.verify_manifest_component(name, &path)?;
         Ok(RuntimeComponent {
             name,
@@ -261,33 +306,10 @@ impl RuntimePaths {
         override_name: &str,
         executable: &str,
     ) -> Result<RuntimeComponent, AppError> {
-        if let Some(path) = std::env::var_os(override_name).map(PathBuf::from) {
-            if executable_file(&path) {
-                return Ok(RuntimeComponent {
-                    name,
-                    path,
-                    bundled: false,
-                });
-            }
-            return Err(AppError::new(
-                ErrorCode::RuntimeUnavailable,
-                format!("{name} 覆盖路径不可执行"),
-            )
-            .context("path", path.to_string_lossy()));
+        if let Some(component) = self.override_component(name, override_name)? {
+            return Ok(component);
         }
-        let candidates = [
-            self.root.join("bin").join(executable),
-            self.root.join(executable),
-        ];
-        let path = candidates
-            .into_iter()
-            .find(|path| executable_file(path))
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::RuntimeUnavailable,
-                    format!("未找到已签名的 {name} 运行时"),
-                )
-            })?;
+        let path = self.bundled_component_path(name, executable)?;
         Ok(RuntimeComponent {
             name,
             path,

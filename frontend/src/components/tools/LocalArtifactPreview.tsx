@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import {
   Clipboard,
   ExternalLink,
@@ -8,7 +9,7 @@ import {
   LoaderCircle,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { desktopClient } from "../../lib/desktopClient";
 import { errorMessage } from "../../lib/errors";
@@ -196,32 +197,15 @@ function SandboxedHtmlPreview({
   content: string;
   title: string;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => sanitizedHtmlFragment(content), [content]);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
-    const baseStyle = document.createElement("style");
-    baseStyle.textContent = `
-      :host { display: block; min-height: 100%; color: #171717; background: #fff; }
-      .onpeople-html-document { box-sizing: border-box; min-height: 100%; padding: 24px; }
-      img, video, canvas, svg { max-width: 100%; height: auto; }
-      pre { max-width: 100%; overflow: auto; }
-    `;
-    const page = document.createElement("article");
-    page.className = "onpeople-html-document";
-    page.innerHTML = html;
-    root.replaceChildren(baseStyle, page);
-  }, [html]);
+  const src = useMemo(() => buildSandboxedHtmlUrl(content), [content]);
 
   return (
-    <div
+    <iframe
       className="local-artifact-html"
-      ref={hostRef}
-      role="document"
-      aria-label={title}
+      title={title}
+      sandbox=""
+      referrerPolicy="no-referrer"
+      src={src}
     />
   );
 }
@@ -238,64 +222,63 @@ function formattedText(preview: LocalArtifactPreview | null): string {
   }
 }
 
-function sanitizedHtmlFragment(content: string): string {
-  const parsed = new DOMParser().parseFromString(content, "text/html");
-  parsed
-    .querySelectorAll(
-      "script, iframe, frame, object, embed, applet, portal, link, base, meta",
-    )
-    .forEach((node) => node.remove());
-  parsed.querySelectorAll("form").forEach((form) => {
-    form.replaceWith(...Array.from(form.childNodes));
-  });
-  parsed.querySelectorAll("*").forEach((element) => {
-    for (const attribute of Array.from(element.attributes)) {
-      const name = attribute.name.toLowerCase();
-      if (
-        name.startsWith("on") ||
-        [
-          "srcdoc",
-          "nonce",
-          "integrity",
-          "target",
-          "action",
-          "formaction",
-        ].includes(name)
-      ) {
-        element.removeAttribute(attribute.name);
-        continue;
-      }
-      if (["src", "poster", "xlink:href"].includes(name)) {
-        if (!attribute.value.trim().toLowerCase().startsWith("data:")) {
-          element.removeAttribute(attribute.name);
-        }
-        continue;
-      }
-      if (name === "href" && !attribute.value.trim().startsWith("#")) {
-        element.removeAttribute(attribute.name);
-        continue;
-      }
-      if (name === "style") {
-        const safeStyle = sanitizedCss(attribute.value);
-        if (safeStyle) element.setAttribute(attribute.name, safeStyle);
-        else element.removeAttribute(attribute.name);
-      }
-    }
-    if (element.tagName.toLowerCase() === "style") {
-      element.textContent = sanitizedCss(element.textContent ?? "");
-    }
-  });
-  const headStyles = Array.from(parsed.head.querySelectorAll("style"))
-    .map((style) => style.outerHTML)
-    .join("");
-  return `${headStyles}${parsed.body.innerHTML}`;
-}
+const HTML_PREVIEW_BASE_STYLE = `
+  :root { color-scheme: light; }
+  html { margin: 0; }
+  body {
+    margin: 0;
+    box-sizing: border-box;
+    min-height: 100vh;
+    padding: 24px;
+    color: #171717;
+    background: #fff;
+  }
+  img, video, canvas, svg { max-width: 100%; height: auto; }
+  pre { max-width: 100%; overflow: auto; }
+`;
 
-function sanitizedCss(css: string): string {
-  return css
-    .replace(/@import\s+[^;]+;?/giu, "")
-    .replace(/url\s*\([^)]*\)/giu, "none")
-    .replace(/expression\s*\([^)]*\)/giu, "");
+const HTML_PREVIEW_CSP =
+  "default-src 'none'; img-src data:; media-src data:; font-src data:; " +
+  "style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
+
+// Untrusted HTML artifacts are rendered inside a fully sandboxed iframe (no
+// allow-scripts, no allow-same-origin) loaded from an opaque `data:` origin, so
+// scripts can never execute and the frame cannot reach the privileged desktop
+// bridge, even if DOMPurify is bypassed. DOMPurify (the first, defense-in-depth
+// layer) keeps the whole document so head-level <style> survives; the sandbox
+// plus the document's own CSP is the second layer.
+function buildSandboxedHtmlUrl(content: string): string {
+  const sanitized = DOMPurify.sanitize(content, {
+    WHOLE_DOCUMENT: true,
+    FORBID_TAGS: [
+      "script",
+      "iframe",
+      "object",
+      "embed",
+      "base",
+      "meta",
+      "link",
+      "form",
+    ],
+    FORBID_ATTR: [
+      "target",
+      "srcdoc",
+      "nonce",
+      "integrity",
+      "action",
+      "formaction",
+    ],
+  });
+  const injectedHead =
+    '<meta charset="utf-8">' +
+    `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">` +
+    `<style>${HTML_PREVIEW_BASE_STYLE}</style>`;
+  const documentHtml = sanitized.includes("<head>")
+    ? sanitized.replace("<head>", `<head>${injectedHead}`)
+    : `<html><head>${injectedHead}</head><body>${sanitized}</body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(
+    `<!doctype html>${documentHtml}`,
+  )}`;
 }
 
 function isHtmlPreview(

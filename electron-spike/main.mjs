@@ -74,8 +74,10 @@ const runtimeRoot = app.isPackaged
   ? path.join(process.resourcesPath, ".embedded-runtime")
   : path.join(repositoryRoot, ".embedded-runtime");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
+// ONPEOPLE_RUST_HOST 只在开发模式生效：打包版若接受环境变量重定向 Rust host，
+// 任何能污染应用环境的本地进程都能替换整个特权后端。
 const hostBinary =
-  process.env.ONPEOPLE_RUST_HOST ||
+  (!app.isPackaged && process.env.ONPEOPLE_RUST_HOST) ||
   (app.isPackaged
     ? path.join(runtimeRoot, "bin", `onpeople-desktop-host${executableSuffix}`)
     : path.join(
@@ -84,6 +86,9 @@ const hostBinary =
         "debug",
         `onpeople-desktop-host${executableSuffix}`,
       ));
+if (app.isPackaged && process.env.ONPEOPLE_RUST_HOST) {
+  console.warn("[onpeople] 忽略 ONPEOPLE_RUST_HOST（打包版只信任内嵌 Rust host）");
+}
 
 function responseSuccess(request, result = null) {
   return {
@@ -363,6 +368,12 @@ async function bootstrap() {
   };
   const handleBrowserDesktopRequest = async (method, params) => {
     if (!browserController) throw new Error("浏览器服务尚未就绪");
+    if (
+      method === "browser.command" &&
+      params?.command?.command === "evaluate"
+    ) {
+      throw new Error("browser.command evaluate 不向渲染进程开放");
+    }
     if (method === "browser.action") {
       const action = String(params.action ?? "");
       if (action === "openExternal") {
@@ -388,15 +399,29 @@ async function bootstrap() {
     return browserController.handle(method, params);
   };
 
-  ipcMain.handle("onpeople:metrics", () => metrics(rustBridge));
+  const isMainRenderer = (event) =>
+    Boolean(mainWindow) &&
+    event.sender === mainWindow.webContents &&
+    event.senderFrame === mainWindow.webContents.mainFrame;
+  const assertMainRenderer = (event) => {
+    if (!isMainRenderer(event)) {
+      throw new Error("拒绝来自非主窗口渲染进程的特权调用");
+    }
+  };
+
+  ipcMain.handle("onpeople:metrics", (event) => {
+    assertMainRenderer(event);
+    return metrics(rustBridge);
+  });
   ipcMain.on("onpeople:browser-agent-ready", (event) => {
-    if (event.sender !== mainWindow?.webContents) return;
+    if (!isMainRenderer(event)) return;
     browserAgentRendererReady = true;
     for (const command of pendingBrowserAgentCommands.splice(0)) {
       emit("browser:agent-command", command);
     }
   });
-  ipcMain.handle("onpeople:browser", async (_event, command, payload = {}) => {
+  ipcMain.handle("onpeople:browser", async (event, command, payload = {}) => {
+    assertMainRenderer(event);
     if (!browserController) throw new Error("浏览器服务尚未就绪");
     if (command === "state") return browserController.state();
     const routeId = String(
@@ -440,7 +465,8 @@ async function bootstrap() {
     }
     throw new Error(`旧浏览器 IPC 不支持操作: ${command}`);
   });
-  ipcMain.handle("onpeople:invoke", async (_event, command, args = {}) => {
+  ipcMain.handle("onpeople:invoke", async (event, command, args = {}) => {
+    assertMainRenderer(event);
     if (command === "desktop_request") return desktopRequest(args.request);
     throw new Error(`Electron 只接受 Desktop API transport: ${command}`);
   });

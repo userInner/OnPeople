@@ -27,6 +27,10 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct BuiltinMcpConfig {
     pub host_binary: PathBuf,
     pub browser_available: bool,
+    /// Manifest-verified Cua Driver path, injected explicitly into the
+    /// `computer_use` server environment so the sidecar never trusts an
+    /// inherited `CUA_DRIVER_PATH` from the app's environment.
+    pub cua_driver: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -623,8 +627,18 @@ async fn write_onpeople_profile(
             servers.insert(1, ("internal_browser", "browser"));
         }
         for (server_id, argument) in servers {
+            // computer_use drives the user's real desktop, so every tool call
+            // must be confirmed by a human (the desktop shows an approval
+            // card; headless runs auto-decline). The other builtin servers
+            // stay auto-approved: they are workspace-confined or fully
+            // visible inside the embedded browser UI.
+            let approval_mode = if server_id == "computer_use" {
+                "prompt"
+            } else {
+                "approve"
+            };
             contents.push_str(&format!(
-                "\n[mcp_servers.{server_id}]\ncommand = {}\nargs = [{}]\nrequired = false\nstartup_timeout_sec = 10\ntool_timeout_sec = 120\ndefault_tools_approval_mode = \"approve\"\n",
+                "\n[mcp_servers.{server_id}]\ncommand = {}\nargs = [{}]\nrequired = false\nstartup_timeout_sec = 10\ntool_timeout_sec = 120\ndefault_tools_approval_mode = \"{approval_mode}\"\n",
                 toml_string(&mcp.host_binary.to_string_lossy()),
                 toml_string(argument),
             ));
@@ -637,6 +651,17 @@ async fn write_onpeople_profile(
                 contents.push_str(
                     "env_vars = [\"ONPEOPLE_BROWSER_AGENT_BRIDGE\", \"ONPEOPLE_BROWSER_AGENT_TOKEN\"]\n",
                 );
+            }
+            if server_id == "computer_use"
+                && let Some(driver) = mcp.cua_driver.as_ref()
+            {
+                // Pin the driver to the manifest-verified path instead of
+                // letting the sidecar read whatever CUA_DRIVER_PATH happens
+                // to be present in the inherited environment.
+                contents.push_str(&format!(
+                    "env = {{ \"CUA_DRIVER_PATH\" = {} }}\n",
+                    toml_string(&driver.to_string_lossy()),
+                ));
             }
         }
     }
@@ -883,6 +908,10 @@ mod profile_tests {
                 "/Applications/OnPeople.app/Contents/Resources/.embedded-runtime/onpeople-mcp-host"
                     .into(),
             browser_available: true,
+            cua_driver: Some(
+                "/Applications/OnPeople.app/Contents/Resources/.embedded-runtime/bin/cua-driver"
+                    .into(),
+            ),
         };
         write_onpeople_profile(
             root.path(),
@@ -909,6 +938,24 @@ mod profile_tests {
         assert!(profile.contains(
             "env_vars = [\"ONPEOPLE_BROWSER_AGENT_BRIDGE\", \"ONPEOPLE_BROWSER_AGENT_TOKEN\"]"
         ));
+        assert!(profile.contains(
+            "env = { \"CUA_DRIVER_PATH\" = \"/Applications/OnPeople.app/Contents/Resources/.embedded-runtime/bin/cua-driver\" }"
+        ));
+        let computer_use = profile
+            .split("[mcp_servers.")
+            .find(|section| section.starts_with("computer_use]"))
+            .expect("computer_use server section");
+        assert!(
+            computer_use.contains("default_tools_approval_mode = \"prompt\""),
+            "computer_use 必须要求人工确认"
+        );
+        assert_eq!(
+            profile
+                .matches("default_tools_approval_mode = \"approve\"")
+                .count(),
+            3,
+            "其余内置服务器保持自动批准"
+        );
         assert!(!profile.contains("[mcp_servers.research_sources]"));
         assert!(profile.contains("enabled = false"));
         assert!(profile.contains("max_concurrent_threads_per_session = 6"));
@@ -924,6 +971,7 @@ mod profile_tests {
             Some(&BuiltinMcpConfig {
                 host_binary: "/Applications/OnPeople.app/onpeople-mcp-host".into(),
                 browser_available: false,
+                cua_driver: None,
             }),
             &AgentRuntimeConfig {
                 enabled: false,
@@ -937,6 +985,7 @@ mod profile_tests {
             std::fs::read_to_string(root.path().join("config.toml")).expect("profile contents");
         assert_eq!(profile.matches("[mcp_servers.").count(), 3);
         assert!(!profile.contains("[mcp_servers.internal_browser]"));
+        assert!(!profile.contains("CUA_DRIVER_PATH"));
     }
 
     #[tokio::test]
@@ -1003,6 +1052,7 @@ mod profile_tests {
             Some(&BuiltinMcpConfig {
                 host_binary: "/Applications/OnPeople.app/onpeople-mcp-host".into(),
                 browser_available: false,
+                cua_driver: None,
             }),
             &AgentRuntimeConfig {
                 enabled: false,

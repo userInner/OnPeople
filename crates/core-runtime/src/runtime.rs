@@ -659,9 +659,17 @@ impl CoreRuntime {
         let host_binary = self.runtime_paths.mcp_host()?.path;
         let browser_available = std::env::var_os("ONPEOPLE_BROWSER_AGENT_BRIDGE").is_some()
             && std::env::var_os("ONPEOPLE_BROWSER_AGENT_TOKEN").is_some();
+        let cua_driver = match self.runtime_paths.cua_driver() {
+            Ok(component) => Some(component.path),
+            Err(error) => {
+                warn!(?error, "cua-driver 不可用，computer_use 将保持未配置");
+                None
+            }
+        };
         self.app_server.configure_builtin_mcp(BuiltinMcpConfig {
             host_binary,
             browser_available,
+            cua_driver,
         });
         self.app_server
             .configure_active_industry_plugin(self.active_industry_plugin_id()?);
