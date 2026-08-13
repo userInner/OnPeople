@@ -7570,6 +7570,243 @@ button.activity-row:hover {
   font-size: 10px;
 }
 
+/* Agent orchestration ledger: a quiet execution strip. The overview stays
+   scannable; the detailed work order is intentionally one level deeper. */
+.orchestration-ledger {
+  max-height: min(48vh, 430px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.orchestration-ledger-summary {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  min-height: 32px;
+  gap: 12px;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+  font-size: 10px;
+  letter-spacing: 0.01em;
+}
+
+.orchestration-ledger-summary span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.orchestration-ledger-summary span.is-covered {
+  color: #2f7654;
+}
+
+.orchestration-ledger .subagent-panel-list {
+  display: grid;
+  gap: 5px;
+  padding: 7px 8px 9px;
+}
+
+.orchestration-work-order {
+  position: relative;
+  min-height: 0;
+}
+
+.orchestration-spine-index {
+  display: none;
+}
+
+.orchestration-work-order.is-running .orchestration-spine-index {
+  border-color: color-mix(in srgb, #2f8f5b 34%, #dadad6);
+  color: #2f7654;
+}
+
+.orchestration-work-order.is-failed .orchestration-spine-index {
+  border-color: #e2b5ae;
+  color: #b64d40;
+}
+
+.orchestration-work-order-main {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 97%, var(--surface-soft));
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.orchestration-work-order-main:hover {
+  border-color: color-mix(in srgb, var(--ink) 18%, var(--line));
+  background: var(--surface);
+}
+
+.orchestration-work-order-heading {
+  display: grid;
+  min-height: 43px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+  padding: 0 9px 0 11px;
+}
+
+.orchestration-work-order-heading > button:first-child {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 7px minmax(0, 1fr) 15px;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+}
+
+.orchestration-work-order-heading > button:first-child > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.orchestration-work-order-heading strong,
+.orchestration-work-order-heading small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestration-work-order-heading strong {
+  font-size: 12px;
+  font-weight: 610;
+}
+
+.orchestration-work-order-heading small {
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.orchestration-work-order-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: #efefec;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.orchestration-work-order.is-running .orchestration-work-order-status {
+  color: #2f7654;
+  background: #eaf3ed;
+}
+
+.orchestration-work-order.is-failed .orchestration-work-order-status {
+  color: #a84338;
+  background: #f8e9e6;
+}
+
+.orchestration-work-order-objective {
+  margin: 0;
+  padding: 0 35px 9px 26px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestration-work-order-objective.is-expanded {
+  overflow: visible;
+  white-space: normal;
+}
+
+.orchestration-work-order-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 1px 10px 8px 26px;
+  overflow: hidden;
+  border: 1px solid #e5e5e1;
+  border-radius: 9px;
+  background: #e5e5e1;
+}
+
+.orchestration-work-order-section {
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--surface);
+}
+
+.orchestration-work-order-section strong {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 590;
+}
+
+.orchestration-work-order-section ul {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding: 0 0 0 14px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.orchestration-work-order .subagent-command-list {
+  margin: 0;
+}
+
+.orchestration-work-order-detail-footer {
+  margin: 0 10px 9px 26px;
+}
+
+.orchestration-open-thread {
+  display: inline-flex;
+  min-height: 24px;
+  gap: 5px;
+  align-items: center;
+  margin: 5px 0 0;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  background: transparent;
+  font-size: 10px;
+}
+
+.orchestration-open-thread:hover {
+  color: var(--ink);
+  background: #eeeeeb;
+}
+
+.orchestration-work-order-heading > button:first-child:focus-visible,
+.orchestration-open-thread:focus-visible,
+.subagent-stop:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ink) 28%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .orchestration-ledger-summary span:nth-child(2) {
+    display: none;
+  }
+
+  .orchestration-work-order-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Codex's output rail is a compact rounded inspector, not a second full-size
    workspace. The detailed Git/Files panes keep their wider column. */
 .utility-activity {
