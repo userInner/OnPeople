@@ -20,6 +20,7 @@ import {
   normalizeBrowserAddress,
 } from "./browser-controller.mjs";
 import { BrowserAgentBridge } from "./browser-agent-bridge.mjs";
+import { isAllowedDesktopNavigation } from "./desktop-navigation.mjs";
 import { RustBridge } from "./rust-bridge.mjs";
 import { ElectronShellAdapter } from "./shell-adapter.mjs";
 
@@ -76,11 +77,7 @@ const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const hostBinary =
   process.env.ONPEOPLE_RUST_HOST ||
   (app.isPackaged
-    ? path.join(
-        runtimeRoot,
-        "bin",
-        `onpeople-desktop-host${executableSuffix}`,
-      )
+    ? path.join(runtimeRoot, "bin", `onpeople-desktop-host${executableSuffix}`)
     : path.join(
         repositoryRoot,
         "target",
@@ -253,6 +250,7 @@ async function bootstrap() {
 
   let shellAdapter = null;
   const createWindow = () => {
+    const packagedEntryPath = path.join(repositoryRoot, "dist", "index.html");
     const window = new BrowserWindow({
       width: 1440,
       height: 960,
@@ -277,8 +275,11 @@ async function bootstrap() {
     window.webContents.on("will-navigate", (event, url) => {
       const developmentUrl = process.env.ONPEOPLE_VITE_URL;
       if (
-        (developmentUrl && url.startsWith(developmentUrl)) ||
-        (!developmentUrl && url.startsWith("file:"))
+        isAllowedDesktopNavigation({
+          targetUrl: url,
+          developmentUrl,
+          packagedEntryPath,
+        })
       ) {
         return;
       }
@@ -301,7 +302,7 @@ async function bootstrap() {
     if (process.env.ONPEOPLE_VITE_URL) {
       void window.loadURL(process.env.ONPEOPLE_VITE_URL);
     } else {
-      void window.loadFile(path.join(repositoryRoot, "dist", "index.html"));
+      void window.loadFile(packagedEntryPath);
     }
     return window;
   };

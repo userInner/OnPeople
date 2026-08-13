@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,6 +77,60 @@ if (missing.length > 0) {
   );
 }
 
+await verifyPackagedRuntime();
+
 console.log(
   `Electron package module verification passed (${visited.size} local modules).`,
 );
+
+async function verifyPackagedRuntime() {
+  const runtimeRoot = path.join(path.dirname(archivePath), ".embedded-runtime");
+  const manifest = JSON.parse(
+    readFileSync(path.join(runtimeRoot, "manifest.json"), "utf8"),
+  );
+  for (const component of manifest.components ?? []) {
+    if (!component.target || !component.sha256) continue;
+    const target = path.join(runtimeRoot, component.target);
+    const actual = await sha256(target);
+    if (actual !== component.sha256) {
+      throw new Error(
+        `Packaged runtime hash mismatch for ${component.name}: ${component.target}`,
+      );
+    }
+  }
+
+  if (process.platform !== "darwin") return;
+  for (const executable of [
+    "cua-driver",
+    "onpeople-mcp-host",
+    "onpeople",
+    "onpeople-desktop-host",
+  ]) {
+    const target = path.join(runtimeRoot, "bin", executable);
+    execFileSync("codesign", ["--verify", "--strict", target]);
+    const inspection = spawnSync("codesign", ["-dv", target], {
+      encoding: "utf8",
+    });
+    if (inspection.status !== 0) {
+      throw new Error(
+        `Unable to inspect packaged runtime signature: ${executable}`,
+      );
+    }
+    const details = `${inspection.stdout}${inspection.stderr}`;
+    if (!details.includes("TeamIdentifier=6K4S66PVRQ")) {
+      throw new Error(
+        `Packaged runtime is not signed by the OnPeople team: ${executable}`,
+      );
+    }
+  }
+}
+
+function sha256(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const input = createReadStream(filePath);
+    input.on("error", reject);
+    input.on("data", (chunk) => hash.update(chunk));
+    input.on("end", () => resolve(hash.digest("hex")));
+  });
+}

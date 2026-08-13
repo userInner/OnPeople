@@ -9,6 +9,7 @@ files:
   - electron-spike/preload.cjs
   - electron-spike/browser-agent-bridge.mjs
   - electron-spike/browser-controller.mjs
+  - electron-spike/desktop-navigation.mjs
   - electron-spike/rust-bridge.mjs
   - electron-spike/shell-adapter.mjs
   - package.json
@@ -18,6 +19,8 @@ extraResources:
 mac:
   category: public.app-category.developer-tools
   icon: assets/OnPeople.icns
+  signIgnore:
+    - "Contents/Resources/\\.embedded-runtime/"
   target:
     - dir
     - dmg
