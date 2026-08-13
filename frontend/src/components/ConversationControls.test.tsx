@@ -138,10 +138,23 @@ describe("Codex conversation controls", () => {
       agents: [
         {
           id: "agent-pasteur",
-          title: "Pasteur",
-          role: "default",
+          title: "登录恢复审查",
+          role: "reviewer",
           nickname: "Pasteur",
           status: "completed",
+          prompt: `
+角色：代码审查员
+目标：审查登录恢复链路
+范围：
+- 认证状态与启动恢复
+已知线索：
+- 首次启动可能晚于界面
+交付物：
+- 严重程度排序的发现
+验收标准：
+- 提供文件证据和定向测试
+边界：
+- 只读，不修改文件`,
         },
         {
           id: "agent-kepler",
@@ -161,6 +174,30 @@ describe("Codex conversation controls", () => {
             id: `turn-${agentId}`,
             status: "completed",
             items: [
+              {
+                id: `prompt-${agentId}`,
+                type: "userMessage",
+                content:
+                  agentId === "agent-pasteur"
+                    ? [
+                        {
+                          type: "text",
+                          text: `角色：代码审查员
+目标：审查登录恢复链路
+范围：
+- 认证状态与启动恢复
+已知线索：
+- 首次启动可能晚于界面
+交付物：
+- 严重程度排序的发现
+验收标准：
+- 提供文件证据和定向测试
+边界：
+- 只读，不修改文件`,
+                        },
+                      ]
+                    : [{ type: "text", text: "检查剩余实现。" }],
+              },
               {
                 id: `command-${agentId}`,
                 type: "commandExecution",
@@ -681,20 +718,65 @@ describe("Codex conversation controls", () => {
     render(<SubagentPanel />);
 
     const summary = await screen.findByRole("button", {
-      name: /2 个 Agent 已完成/,
+      name: /编排册 · 2 个工作单已结束/,
     });
     expect(screen.queryByText("Pasteur")).not.toBeInTheDocument();
 
     fireEvent.click(summary);
-    expect(screen.getByText("Pasteur")).toBeInTheDocument();
-    expect(await screen.findAllByText("rg --files")).toHaveLength(2);
-    expect(await screen.findAllByText("npm test")).toHaveLength(2);
-    expect(await screen.findAllByText("npm run build")).toHaveLength(2);
+    expect(screen.getByText("登录恢复审查")).toBeInTheDocument();
+    expect(screen.getByText("审查登录恢复链路")).toBeInTheDocument();
+    expect(screen.getByText("1 个验收单")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "展开 登录恢复审查 工作单" }),
+    );
+    expect(screen.getByText("认证状态与启动恢复")).toBeInTheDocument();
+    expect(screen.getByText("提供文件证据和定向测试")).toBeInTheDocument();
+    expect(await screen.findByText("rg --files")).toBeInTheDocument();
+    expect(await screen.findByText("npm test")).toBeInTheDocument();
+    expect(await screen.findByText("npm run build")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "关闭 Agent 活动" }));
     expect(
-      screen.queryByRole("button", { name: /2 个 Agent 已完成/ }),
+      screen.queryByRole("button", {
+        name: /编排册 · 2 个工作单已结束/,
+      }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps a running orchestration collapsed after the user collapses it", async () => {
+    vi.mocked(desktopClient.listAgents).mockResolvedValue({
+      agents: [
+        {
+          id: "agent-running",
+          title: "发布检查",
+          role: "reviewer",
+          nickname: "Pauli",
+          status: "running",
+          prompt: "目标：检查发布清单",
+        },
+      ],
+    });
+
+    render(<SubagentPanel />);
+
+    const summary = await screen.findByRole("button", {
+      name: /编排册 · 1 个 Agent 正在执行/,
+    });
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("发布检查")).toBeInTheDocument();
+
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("发布检查")).not.toBeInTheDocument();
+
+    const listener = vi.mocked(desktopClient.onAgentEvent).mock.calls[0]?.[0];
+    listener?.({ payload: { method: "agent/status/updated" } } as never);
+
+    await waitFor(() =>
+      expect(desktopClient.listAgents).toHaveBeenCalledTimes(2),
+    );
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("发布检查")).not.toBeInTheDocument();
   });
 
   it("selects an industry plugin and forwards it to the next Codex turn", async () => {

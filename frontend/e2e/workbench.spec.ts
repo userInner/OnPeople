@@ -19,7 +19,7 @@ test("renders the final workbench shell without overlapping primary regions", as
   await expect(
     page
       .getByRole("complementary", { name: "工具舱" })
-      .getByText("输出", { exact: true }),
+      .getByRole("heading", { name: "输出" }),
   ).toBeVisible();
   await expect(page.getByRole("textbox", { name: "任务输入" })).toBeVisible();
   await page.getByRole("button", { name: "搜索" }).click();
@@ -238,9 +238,10 @@ test("renders active Codex-style task state and contextual output", async ({
   const executionHeadline = activity.locator(
     ".activity-summary > summary strong",
   );
-  await expect(executionHeadline).toHaveText("正在运行 npm test");
-  await expect(activity.getByText("正在处理", { exact: true })).toBeVisible();
-  await expect(activity.getByText(/1\d+s/, { exact: true })).toBeVisible();
+  // 时间线把 npm test/cargo clippy 之类的命令归纳为语义化标题。
+  await expect(executionHeadline).toHaveText("正在运行检查");
+  // 运行状态与计时现在渲染为同一个节点，例如“正在处理 12s”。
+  await expect(activity.getByText(/^正在处理 1\d+s$/)).toBeVisible();
   await executionHeadline.click();
   await expect(
     activity.getByText("已修改 2 个文件", { exact: true }),

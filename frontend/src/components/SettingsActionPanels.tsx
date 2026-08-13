@@ -1,22 +1,13 @@
 import {
-  AppWindow,
-  BookOpen,
   Check,
   ChevronDown,
-  FileImage,
-  FileSpreadsheet,
-  FileText,
   Globe2,
-  Monitor,
   Plus,
-  Presentation,
   Puzzle,
   RefreshCw,
   Search,
-  Server,
   Sparkles,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -25,6 +16,7 @@ import { desktopClient } from "../lib/desktopClient";
 import { errorMessage } from "../lib/errors";
 import type { ProviderKind, SettingsRoute } from "../types";
 import { CustomSelect } from "./ui/CustomSelect";
+import { OnPeopleIcon } from "./OnPeopleIcon";
 
 type ResourceRecord = Record<string, unknown>;
 
@@ -386,7 +378,7 @@ function PolicySettings({
           />
           <ToggleSetting
             label="允许多 Agent"
-            hint="控制 Codex 原生 spawn_agent 协作工具"
+            hint="允许主 Agent 自动拆分复杂任务，并生成可审阅的编排册"
             value={draft.multiAgent}
             onChange={(multiAgent) => setDraft({ ...draft, multiAgent })}
           />
@@ -1671,7 +1663,7 @@ function PluginSettings({
             />
           </label>
           <ExtensionSection
-            icon={<Sparkles size={15} aria-hidden="true" />}
+            icon={<OnPeopleIcon name="skills" size={15} />}
             title="Skills"
             subtitle="匹配任务时自动使用，也可以在提示词中明确指定。"
             count={visibleSkills.length}
@@ -1684,7 +1676,7 @@ function PluginSettings({
               return (
                 <div className="extension-row" key={id}>
                   <span className="extension-row-icon skill-icon">
-                    <Sparkles size={15} aria-hidden="true" />
+                    <OnPeopleIcon name="skills" size={15} />
                   </span>
                   <div className="extension-row-main">
                     <strong>{text(skill.name, "未命名 Skill")}</strong>
@@ -1717,7 +1709,7 @@ function PluginSettings({
             })}
           </ExtensionSection>
           <ExtensionSection
-            icon={<Server size={15} aria-hidden="true" />}
+            icon={<OnPeopleIcon name="mcp" size={15} />}
             title="MCP 服务"
             subtitle="这些服务向 Agent 提供实际可调用的工具。"
             count={visibleMcpServers.length}
@@ -1728,7 +1720,7 @@ function PluginSettings({
               return (
                 <div className="extension-row" key={id}>
                   <span className="extension-row-icon mcp-icon">
-                    <Wrench size={15} aria-hidden="true" />
+                    <OnPeopleIcon name="mcp" size={15} />
                   </span>
                   <div className="extension-row-main">
                     <strong>{text(server.name, id)}</strong>
@@ -1912,34 +1904,7 @@ function PluginGlyph({
   plugin: ResourceRecord;
   size: number;
 }) {
-  const icon = text(plugin.icon, "plugin");
-  const props = { size, "aria-hidden": true } as const;
-  switch (icon) {
-    case "computer":
-      return <Monitor {...props} />;
-    case "document":
-      return <FileText {...props} />;
-    case "pdf":
-      return <BookOpen {...props} />;
-    case "spreadsheet":
-      return <FileSpreadsheet {...props} />;
-    case "presentation":
-      return <Presentation {...props} />;
-    case "template":
-      return <FileText {...props} />;
-    case "site":
-      return <AppWindow {...props} />;
-    case "visualize":
-      return <Sparkles {...props} />;
-    case "image":
-      return <FileImage {...props} />;
-    case "research":
-      return <Search {...props} />;
-    case "app":
-      return <AppWindow {...props} />;
-    default:
-      return <Puzzle {...props} />;
-  }
+  return <OnPeopleIcon name={plugin.icon} size={size} fallback="plugin" />;
 }
 
 function ExtensionSection({

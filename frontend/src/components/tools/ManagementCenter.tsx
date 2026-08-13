@@ -157,8 +157,8 @@ export function ManagementCenter() {
           <span className="management-count">{agents.length}</span>
         </div>
         <p className="agent-native-hint">
-          在当前对话中直接说“使用两个子 Agent 并行处理”。主 Agent
-          会负责委派、等待和汇总。
+          复杂任务会自动拆成边界清晰的工作单，并在对话下方显示编排册。你也可以明确说“使用两个子
+          Agent 并行处理”。主 Agent 负责集成，Reviewer 负责最终验收。
         </p>
         {agents.length === 0 ? (
           <p className="tool-empty">当前任务还没有原生子 Agent。</p>

@@ -728,11 +728,11 @@ function formatMessageTime(timestamp: string) {
 
 function ActivitySummary({ items }: { items: TimelineItem[] }) {
   const pending = items.some(isActivelyPending);
-  const failed = items.some(hasFailed);
+  const failed = activityEndedInFailure(items);
   const [open, setOpen] = useState(false);
   const primary = primaryActivityItem(items);
   const headline = activityHeadline(items, pending);
-  const facts = primary ? digestFacts(primary, pending) : [];
+  const facts = failed && primary ? digestFacts(primary, pending) : [];
 
   return (
     <details
@@ -794,9 +794,9 @@ type ActivityCategory =
   | "reasoning";
 
 function completedActivityHeadline(items: TimelineItem[]): string {
-  if (items.some(hasFailed)) {
-    const failed = [...items].reverse().find(hasFailed);
-    return failed ? activityItemHeadline(failed, false) : "操作失败";
+  const lastAttempt = lastActivityAttempt(items);
+  if (lastAttempt && hasFailed(lastAttempt)) {
+    return activityItemHeadline(lastAttempt, false);
   }
   const categories = new Set(items.map(activityCategory));
   if (categories.size > 1) categories.delete("reasoning");
@@ -836,6 +836,20 @@ function activityCategory(item: TimelineItem): ActivityCategory {
   }
   if (/web.?search|搜索网页|检索网页/.test(identity)) return "web-search";
   return "tool";
+}
+
+/**
+ * 分组状态反映最终结果：以组内最后一个可失败的子项（命令/工具/文件修改，
+ * reasoning 除外）为准。中间失败若已被后续重试成功覆盖，整组不再标记失败；
+ * 失败详情仍保留在对应子项上。
+ */
+function lastActivityAttempt(items: TimelineItem[]): TimelineItem | undefined {
+  return [...items].reverse().find((item) => item.kind !== "reasoning");
+}
+
+function activityEndedInFailure(items: TimelineItem[]): boolean {
+  const lastAttempt = lastActivityAttempt(items);
+  return lastAttempt !== undefined && hasFailed(lastAttempt);
 }
 
 function primaryActivityItem(items: TimelineItem[]): TimelineItem | undefined {

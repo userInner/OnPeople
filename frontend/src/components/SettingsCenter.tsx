@@ -816,7 +816,7 @@ function GeneralPolicyCard({
         />
         <ToggleRow
           label="多 Agent"
-          hint={`允许并行委派，当前上限为 ${draft.maxConcurrentAgents} 个 Agent`}
+          hint={`自动生成工作单并行委派，当前上限为 ${draft.maxConcurrentAgents} 个 Agent`}
           value={draft.multiAgent}
           onChange={(multiAgent) => void apply({ ...draft, multiAgent })}
         />

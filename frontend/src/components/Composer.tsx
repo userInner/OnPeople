@@ -1,15 +1,13 @@
 import {
-  BookOpen,
   ArrowUp,
+  BookOpen,
   Check,
   CornerDownRight,
   ChevronLeft,
   ChevronDown,
   FileText,
-  FileSpreadsheet,
   Folder,
   Goal,
-  Globe2,
   Hand,
   Image,
   LoaderCircle,
@@ -18,7 +16,6 @@ import {
   MoreHorizontal,
   Paperclip,
   Plus,
-  Presentation,
   Puzzle,
   Search,
   ShieldAlert,
@@ -44,6 +41,7 @@ import type { ModelDescriptor, ProjectAction } from "../types";
 import { IconButton } from "./IconButton";
 import { LiveCallPanel } from "./LiveCallPanel";
 import { useLiveConversation } from "./LiveConversation";
+import { OnPeopleIcon } from "./OnPeopleIcon";
 
 const modes = [
   { id: "agent", label: "Agent", description: "自主执行任务并使用工具" },
@@ -158,43 +156,43 @@ const productivityPlugins = [
     id: "documents",
     name: "Documents",
     description: "创建和检查文档",
-    icon: FileText,
+    icon: "document",
   },
   {
     id: "pdf",
     name: "PDF",
     description: "读取、创建和检查 PDF",
-    icon: BookOpen,
+    icon: "pdf",
   },
   {
     id: "spreadsheets",
     name: "Spreadsheets",
     description: "创建和分析电子表格",
-    icon: FileSpreadsheet,
+    icon: "spreadsheet",
   },
   {
     id: "presentations",
     name: "Presentations",
     description: "创建和检查演示文稿",
-    icon: Presentation,
+    icon: "presentation",
   },
   {
     id: "template-creator",
     name: "Template Creator",
     description: "创建和应用可复用模板",
-    icon: Puzzle,
+    icon: "template",
   },
   {
     id: "sites",
     name: "Sites",
     description: "创建独立响应式网页",
-    icon: Globe2,
+    icon: "site",
   },
   {
     id: "visualize",
     name: "Visualize",
     description: "创建交互式数据图表",
-    icon: Sparkles,
+    icon: "visualize",
   },
 ] as const;
 
@@ -1370,7 +1368,6 @@ export function Composer() {
                   >
                     <div className="tools-menu-heading">插件</div>
                     {productivityPlugins.map((plugin) => {
-                      const PluginIcon = plugin.icon;
                       return (
                         <button
                           type="button"
@@ -1383,7 +1380,7 @@ export function Composer() {
                             textarea.current?.focus();
                           }}
                         >
-                          <PluginIcon size={14} aria-hidden="true" />
+                          <OnPeopleIcon name={plugin.icon} size={14} />
                           <span>
                             <strong>{plugin.name}</strong>
                             <small>{plugin.description}</small>

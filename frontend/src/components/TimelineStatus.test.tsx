@@ -144,6 +144,109 @@ describe("Timeline activity status", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not mark the group failed after a later retry succeeds", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-retry-success",
+      timeline: [
+        {
+          id: "command-first-success",
+          turnId: "turn-retry-success",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command: "date +%Y-%m-%d",
+          text: "2026-08-13",
+          status: "已完成",
+          exitCode: 0,
+          durationMs: 300,
+        },
+        {
+          id: "command-intermediate-failure",
+          turnId: "turn-retry-success",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command: 'curl -sS "https://wttr.in/Beijing?format=j1"',
+          text: "curl: (28) Connection timed out",
+          status: "失败",
+          exitCode: 28,
+          durationMs: 15_000,
+        },
+        {
+          id: "command-retry-success",
+          turnId: "turn-retry-success",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command:
+            'curl -sS --max-time 15 "https://api.open-meteo.com/v1/forecast?latitude=39.9"',
+          text: '{"current":{"temperature_2m":28.5}}',
+          status: "已完成",
+          exitCode: 0,
+          durationMs: 2_000,
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    const view = render(<Timeline />);
+    const group = view.container.querySelector(".activity-summary");
+    const summary = view.container.querySelector(".activity-summary > summary");
+
+    expect(summary).toHaveTextContent("运行了命令");
+    expect(summary).not.toHaveTextContent("命令运行失败");
+    expect(summary).not.toHaveTextContent("退出 28");
+    expect(group).not.toHaveClass("is-failed");
+
+    fireEvent.click(summary!);
+    expect(screen.getByText("命令运行失败")).toBeVisible();
+  });
+
+  it("keeps the group failed while the last attempt is a failure", () => {
+    useWorkbenchStore.setState({
+      threadLoading: false,
+      selectedThreadId: "thread-final-failure",
+      timeline: [
+        {
+          id: "command-early-success",
+          turnId: "turn-final-failure",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command: "date +%Y-%m-%d",
+          text: "2026-08-13",
+          status: "已完成",
+          exitCode: 0,
+          durationMs: 300,
+        },
+        {
+          id: "command-final-failure",
+          turnId: "turn-final-failure",
+          role: "tool",
+          kind: "command",
+          title: "运行命令",
+          command: 'curl -sS "https://wttr.in/Beijing?format=j1"',
+          text: "curl: (28) Connection timed out",
+          status: "失败",
+          exitCode: 28,
+          durationMs: 15_000,
+        },
+      ],
+      turnStartedAt: {},
+      turnDurations: {},
+    });
+
+    const view = render(<Timeline />);
+    const group = view.container.querySelector(".activity-summary");
+    const summary = view.container.querySelector(".activity-summary > summary");
+
+    expect(summary).toHaveTextContent("命令运行失败");
+    expect(summary).toHaveTextContent("退出 28");
+    expect(group).toHaveClass("is-failed");
+  });
+
   it("does not compete with automatic recovery while the failed turn is live", () => {
     useWorkbenchStore.setState({
       runtime: {
