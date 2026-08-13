@@ -33,5 +33,8 @@ jobs:
         run: npm ci --legacy-peer-deps
       - name: Install browser used by end-to-end tests
         run: npx playwright install chromium
+      - name: Prepare rollback-shell resource root
+        run: |
+          node -e "require('node:fs').mkdirSync('.embedded-runtime', { recursive: true })"
       - name: Verify source, contracts, tests, and production build
         run: npm run check
