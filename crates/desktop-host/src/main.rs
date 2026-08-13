@@ -144,11 +144,14 @@ async fn serve_socket(runtime: Arc<CoreRuntime>, path: PathBuf) -> Result<(), Ap
 }
 
 #[cfg(not(unix))]
-async fn serve_socket(_runtime: Arc<CoreRuntime>, _path: PathBuf) -> Result<(), AppError> {
-    Err(AppError::new(
+fn serve_socket(
+    _runtime: Arc<CoreRuntime>,
+    _path: PathBuf,
+) -> impl Future<Output = Result<(), AppError>> {
+    std::future::ready(Err(AppError::new(
         onpeople_types::ErrorCode::Unsupported,
         "当前平台不支持 Unix Socket transport",
-    ))
+    )))
 }
 
 async fn serve<R, W>(runtime: Arc<CoreRuntime>, reader: R, writer: W) -> Result<(), AppError>

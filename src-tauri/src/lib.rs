@@ -1747,7 +1747,7 @@ end run"#,
             return Ok(vec![image_path]);
         }
         let _ = std::fs::remove_file(&image_path);
-        return Ok(Vec::new());
+        Ok(Vec::new())
     }
 
     #[cfg(not(any(target_os = "macos", windows)))]
