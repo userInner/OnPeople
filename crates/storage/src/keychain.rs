@@ -139,7 +139,7 @@ fn decrypt_dpapi(encrypted: &[u8]) -> Result<Option<String>, AppError> {
         Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},
     };
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: encrypted.len() as u32,
         pbData: encrypted.as_ptr().cast_mut(),
     };
@@ -149,13 +149,13 @@ fn decrypt_dpapi(encrypted: &[u8]) -> Result<Option<String>, AppError> {
     };
     let success = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &raw const input,
             null_mut(),
             null(),
             null(),
             null_mut(),
             0,
-            &mut output,
+            &raw mut output,
         )
     };
     if success == 0 {
