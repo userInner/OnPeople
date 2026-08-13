@@ -34,6 +34,12 @@ describe("Sidebar account modal", () => {
     expect(appRoot).not.toHaveAttribute("inert");
     expect(appRoot.querySelector(".project-rail-modal-scrim")).toBeNull();
 
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
     view.unmount();
     expect(document.body).not.toHaveClass("account-auth-open");
   });

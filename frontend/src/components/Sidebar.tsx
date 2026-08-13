@@ -126,6 +126,14 @@ export function Sidebar() {
     if (!menuOpen && !authOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (
+        authOpen &&
+        event.target instanceof Element &&
+        !event.target.closest(".account-button, .account-auth-popover")
+      ) {
+        setMenuOpen(null);
+        return;
+      }
+      if (
         event.target instanceof Element &&
         event.target.closest(
           ".brand-switcher, .project-switcher, .account-button, .sidebar-popup, .project-switcher-popover, .project-rail, .account-auth-popover",
@@ -134,7 +142,6 @@ export function Sidebar() {
         return;
       }
       setMenuOpen(null);
-      setAuthOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
