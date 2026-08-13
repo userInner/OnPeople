@@ -142,7 +142,7 @@ export class ElectronShellAdapter {
       case "shell.app-update.check":
         return {
           available: false,
-          currentVersion: process.env.npm_package_version ?? "0.30.0",
+          currentVersion: process.env.npm_package_version ?? "0.30.1",
           version: null,
           date: null,
           body: null,
@@ -150,7 +150,7 @@ export class ElectronShellAdapter {
       case "shell.app-update.download":
         return {
           available: false,
-          currentVersion: process.env.npm_package_version ?? "0.30.0",
+          currentVersion: process.env.npm_package_version ?? "0.30.1",
           downloaded: false,
           version: null,
           bytes: null,
@@ -158,7 +158,7 @@ export class ElectronShellAdapter {
       case "shell.app-update.install":
         return {
           installed: false,
-          version: process.env.npm_package_version ?? "0.30.0",
+          version: process.env.npm_package_version ?? "0.30.1",
         };
       case "shell.app-update.open-download":
         return this.#openUrl("https://github.com/userinner/onpeople/releases");
@@ -222,7 +222,7 @@ export class ElectronShellAdapter {
     return {
       supported: false,
       status: "idle",
-      currentVersion: process.env.npm_package_version ?? "0.30.0",
+      currentVersion: process.env.npm_package_version ?? "0.30.1",
       availableVersion: null,
       progress: null,
       message: null,

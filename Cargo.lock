@@ -3592,7 +3592,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "onpeople-cli"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "onpeople-core-runtime",
  "onpeople-integrations",
@@ -3604,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-core-runtime"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3630,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-desktop-api"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "chrono",
  "onpeople-core-runtime",
@@ -3645,7 +3645,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-desktop-host"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "onpeople-core-runtime",
  "onpeople-desktop-api",
@@ -3659,7 +3659,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-integrations"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "axum",
  "bytes",
@@ -3681,7 +3681,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-mcp-host"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "base64 0.22.1",
  "calamine",
@@ -3704,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-storage"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "aes 0.8.4",
  "base64 0.22.1",
@@ -3731,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-tauri"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -3774,7 +3774,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-types"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "chrono",
  "serde",
@@ -3786,7 +3786,7 @@ dependencies = [
 
 [[package]]
 name = "onpeople-workspace"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "chrono",
  "globset",
@@ -7698,7 +7698,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "onpeople-core-runtime",
  "onpeople-desktop-api",

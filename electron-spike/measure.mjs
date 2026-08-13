@@ -68,7 +68,7 @@ const metrics = JSON.parse(await readFile(metricsPath, "utf8"));
 const archive = path.join(
   repositoryRoot,
   "dist-electron",
-  `onpeople-0.30.0-${process.arch}.zip`,
+  `onpeople-0.30.1-${process.arch}.zip`,
 );
 const archiveBytes = (await exists(archive))
   ? (await stat(archive)).size

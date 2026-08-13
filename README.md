@@ -1,6 +1,6 @@
-# OnPeople Desktop 0.30.0
+# OnPeople Desktop 0.30.1
 
-OnPeople 0.30.0 的默认生产壳是 Electron 42：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 核心，SQLite WAL 数据层，以及稳定的 154 方法 Desktop API。Electron 通过 JSONL stdio/Unix Socket 调用 Rust sidecar；内置浏览器页面由主进程 `WebContentsView` 和隔离持久会话承载，React 只管理标签、地址栏与工具状态，普通外部链接仍可交给系统默认浏览器。Tauri 2.11 生产分支永久保留作为回退目标。
+OnPeople 0.30.1 的默认生产壳是 Electron 42：React 19 + TypeScript strict + Vite 8 前端，Rust 1.95 核心，SQLite WAL 数据层，以及稳定的 154 方法 Desktop API。Electron 通过 JSONL stdio/Unix Socket 调用 Rust sidecar；内置浏览器页面由主进程 `WebContentsView` 和隔离持久会话承载，React 只管理标签、地址栏与工具状态，普通外部链接仍可交给系统默认浏览器。Tauri 2.11 生产分支永久保留作为回退目标。
 
 ## 架构
 
@@ -83,6 +83,8 @@ viewport 的 Playwright 回归。`npm run eval` 运行隔离仓库任务与隐�
 [`evals/README.md`](evals/README.md)。
 
 `npm run audit` 会验证 161 个生产命令、13 个订阅、生产桥接边界、旧运行时路径和依赖残留。旧版的 5 个 Pet 命令及其订阅已按产品要求从最终版本移除。发布机还必须提供 Codex、Cua Driver、MCP host 和 OnPeople 无头命令的目标平台签名 sidecar，并设置 Tauri updater 签名密钥；密钥不得提交到仓库。缺少任一 sidecar 时，`runtime:stage` 必须失败，不能生成半成品生产包。
+
+第三方预编译 sidecar（Codex、Cua Driver）在入库时还会按 [`packaging/runtime-pins.json`](packaging/runtime-pins.json) 校验 SHA-256：哈希不匹配一律失败；升级 sidecar 时先核验新版本来源，再更新对应平台的 pin。尚未记录 pin 的平台可用 `ONPEOPLE_ALLOW_UNPINNED_RUNTIME=1` 显式放行一次，staging 日志会打印实际哈希便于补录。
 
 正式安装包的 smoke 会启动 Codex App Server，验证 initialize 握手、无头命令启动以及干净关闭；任一 sidecar 只存在但不能运行时，发布门禁必须失败。
 

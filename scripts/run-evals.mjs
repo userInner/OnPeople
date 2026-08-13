@@ -497,12 +497,54 @@ function classifyFailure(result) {
   };
 }
 
-function runCommand(argv, { cwd, stdin, timeoutMs, env = {} }) {
+// Oracles execute code the agent just produced, so they must never inherit
+// the harness credentials (API keys, tokens) that the agent adapter itself
+// needs. Instead of denylisting known secret names, oracle processes start
+// from this minimal allowlist.
+const ORACLE_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "windir",
+  "ComSpec",
+  "PATHEXT",
+  "ProgramData",
+  "ProgramFiles",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+];
+
+function oracleEnv() {
+  const env = {};
+  for (const name of ORACLE_ENV_ALLOWLIST) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
+  return env;
+}
+
+function runCommand(
+  argv,
+  { cwd, stdin, timeoutMs, env = {}, inheritEnv = true },
+) {
   return new Promise((resolvePromise) => {
     const startedAt = Date.now();
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
-      env: { ...process.env, ...env },
+      env: inheritEnv ? { ...process.env, ...env } : env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -625,6 +667,8 @@ async function runCase(testCase, adapter, commandTemplate, options, iteration) {
       const checkResult = await runCommand(argv, {
         cwd: paths.workspace,
         timeoutMs: check.timeoutMs ?? 60_000,
+        inheritEnv: false,
+        env: oracleEnv(),
       });
       result.checks.push({
         name: check.name,

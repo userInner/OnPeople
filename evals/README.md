@@ -90,3 +90,9 @@ also sent on stdin.
 
 Do not put credentials in suite files or command argv. Keep credentials in the
 adapter's normal secure store or process environment.
+
+Oracle checks execute code the agent just produced, so they run with a
+scrubbed environment: only basic variables such as `PATH`, `HOME`, and locale
+settings survive. Harness credentials (API keys, tokens) are visible to the
+adapter process only, never to oracles. Oracles must not depend on custom
+environment variables; everything they need arrives through argv tokens.

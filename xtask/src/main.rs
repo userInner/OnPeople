@@ -220,6 +220,14 @@ fn stage_runtime(platform: &str, arch: &str) -> Result<PathBuf, String> {
     }
     let bin = stage.join("bin");
     fs::create_dir_all(&bin).map_err(|error| error.to_string())?;
+    let pins_path = root.join("packaging/runtime-pins.json");
+    let pins: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&pins_path)
+            .map_err(|error| format!("read runtime pins {}: {error}", pins_path.display()))?,
+    )
+    .map_err(|error| format!("parse runtime pins {}: {error}", pins_path.display()))?;
+    let allow_unpinned = env::var("ONPEOPLE_ALLOW_UNPINNED_RUNTIME").as_deref() == Ok("1");
+    let platform_arch = format!("{platform}-{arch}");
     let executable_suffix = if platform == "win32" { ".exe" } else { "" };
     let components: [(&str, String, &[&str]); 4] = [
         (
@@ -288,11 +296,13 @@ fn stage_runtime(platform: &str, arch: &str) -> Result<PathBuf, String> {
             fs::set_permissions(&target, permissions).map_err(|error| error.to_string())?;
         }
         verify_target_binary(&target, platform, arch, name)?;
+        let digest = sha256(&target)?;
+        verify_runtime_pin(&pins, name, &platform_arch, &digest, allow_unpinned)?;
         let entry = serde_json::json!({
             "name": name,
             "source": source,
             "target": target.strip_prefix(&stage).map_err(|error| error.to_string())?,
-            "sha256": sha256(&target)?,
+            "sha256": digest,
         });
         entries.push(entry);
     }
@@ -382,6 +392,44 @@ fn stage_bundled_plugins(root: &Path, stage: &Path) -> Result<Vec<serde_json::Va
 fn sha256(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+/// Third-party sidecars are prebuilt binaries taken from outside this
+/// workspace, so staging re-verifies their identity against the committed pin
+/// list before they enter the signed bundle. First-party components
+/// (mcp-host, headless) are compiled from this source tree in the same
+/// pipeline and change on every build, so they are exempt.
+const PINNED_RUNTIME_COMPONENTS: &[&str] = &["codex", "cua-driver"];
+
+fn verify_runtime_pin(
+    pins: &serde_json::Value,
+    name: &str,
+    platform_arch: &str,
+    actual_sha256: &str,
+    allow_unpinned: bool,
+) -> Result<(), String> {
+    if !PINNED_RUNTIME_COMPONENTS.contains(&name) {
+        return Ok(());
+    }
+    match pins
+        .get(name)
+        .and_then(|component| component.get(platform_arch))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(expected) if expected.eq_ignore_ascii_case(actual_sha256) => Ok(()),
+        Some(expected) => Err(format!(
+            "{name} does not match the pinned upstream hash for {platform_arch}: pinned {expected}, staged {actual_sha256}; update packaging/runtime-pins.json only after verifying the new upstream release"
+        )),
+        None if allow_unpinned => {
+            eprintln!(
+                "warning: staging unpinned {name} for {platform_arch} (sha256 {actual_sha256}); add it to packaging/runtime-pins.json"
+            );
+            Ok(())
+        }
+        None => Err(format!(
+            "{name} has no pinned hash for {platform_arch}; after verifying the binary, add \"{platform_arch}\": \"{actual_sha256}\" under \"{name}\" in packaging/runtime-pins.json (or set ONPEOPLE_ALLOW_UNPINNED_RUNTIME=1 to stage once without a pin)"
+        )),
+    }
 }
 
 fn verify_target_binary(path: &Path, platform: &str, arch: &str, name: &str) -> Result<(), String> {
@@ -1628,7 +1676,10 @@ fn audit() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{path_is_file_provider_workspace, workspace_root};
+    use super::{
+        PINNED_RUNTIME_COMPONENTS, path_is_file_provider_workspace, verify_runtime_pin,
+        workspace_root,
+    };
 
     #[test]
     fn macos_bundle_declares_signed_microphone_access() {
@@ -1657,5 +1708,52 @@ mod tests {
         assert!(!path_is_file_provider_workspace(std::path::Path::new(
             "/private/tmp/OnPeople"
         )));
+    }
+
+    #[test]
+    fn runtime_pins_gate_third_party_sidecars() {
+        let pins = serde_json::json!({
+            "codex": { "darwin-arm64": "AABB" }
+        });
+        // First-party components built from this source tree are exempt.
+        assert!(verify_runtime_pin(&pins, "mcp-host", "darwin-arm64", "1234", false).is_ok());
+        assert!(verify_runtime_pin(&pins, "headless", "darwin-arm64", "1234", false).is_ok());
+        // A matching pin passes (hex comparison is case-insensitive).
+        assert!(verify_runtime_pin(&pins, "codex", "darwin-arm64", "aabb", false).is_ok());
+        // A mismatch is fatal even with the unpinned escape hatch.
+        assert!(verify_runtime_pin(&pins, "codex", "darwin-arm64", "cccc", true).is_err());
+        // Missing pins fail closed unless explicitly allowed for one staging.
+        assert!(verify_runtime_pin(&pins, "cua-driver", "darwin-arm64", "1234", false).is_err());
+        assert!(verify_runtime_pin(&pins, "codex", "win32-x64", "1234", false).is_err());
+        assert!(verify_runtime_pin(&pins, "cua-driver", "darwin-arm64", "1234", true).is_ok());
+    }
+
+    #[test]
+    fn committed_runtime_pins_are_wellformed() {
+        let pins: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(workspace_root().join("packaging/runtime-pins.json"))
+                .expect("read runtime pins"),
+        )
+        .expect("parse runtime pins");
+        for name in PINNED_RUNTIME_COMPONENTS {
+            let platforms = pins
+                .get(*name)
+                .and_then(serde_json::Value::as_object)
+                .expect("pinned component map");
+            assert!(!platforms.is_empty(), "{name} needs at least one pin");
+            for (platform_arch, value) in platforms {
+                assert!(
+                    platform_arch.split_once('-').is_some(),
+                    "platform-arch key: {platform_arch}"
+                );
+                let hash = value.as_str().expect("pin must be a string");
+                assert_eq!(
+                    hash.len(),
+                    64,
+                    "sha256 hex length for {name}/{platform_arch}"
+                );
+                assert!(hash.chars().all(|character| character.is_ascii_hexdigit()));
+            }
+        }
     }
 }

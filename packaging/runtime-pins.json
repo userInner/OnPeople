@@ -1,0 +1,12 @@
+{
+  "$comment": "预编译第三方 sidecar 的 SHA-256 pin，按 platform-arch 索引。`xtask stage-runtime` 在入库时校验 codex/cua-driver 的字节与 pin 一致，防止上游被替换后被原样打包签名。升级 sidecar 时，先核验新版本来源，再更新对应哈希；缺少 pin 的平台可用 ONPEOPLE_ALLOW_UNPINNED_RUNTIME=1 显式放行一次（哈希不匹配永远失败）。",
+  "codex": {
+    "darwin-arm64": "d96ae1ca1ff6fc8587842fa04c92d3ee4d31651a811c2f89b65fcfd9c28473e2",
+    "win32-x64": "39e9e041ea33ac34aad9578adfe660c5c7a6dc8f82620b77623960f9352a6ef3"
+  },
+  "cua-driver": {
+    "darwin-arm64": "a086d8ec8ad3682d91ca47c83d2746f6199d0e7ab3b58d44bd8e598ea21f3824",
+    "darwin-x64": "a086d8ec8ad3682d91ca47c83d2746f6199d0e7ab3b58d44bd8e598ea21f3824",
+    "win32-x64": "2bffab29a64dbe61b39d2051f74e97cc56268c67d7132445b475dfffcc5ffcbc"
+  }
+}

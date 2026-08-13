@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
@@ -120,6 +120,66 @@ test("built-in adapters use explicit writable ephemeral headless commands", () =
   assert.match(result.stdout, /gpt-5\.6-sol/);
   assert.match(result.stdout, /model_reasoning_effort/);
   assert.doesNotMatch(result.stdout, /--full-auto/);
+});
+
+test("oracle checks run without harness credentials in the environment", async () => {
+  const relativeSuite = `output/eval-env-suite-${process.pid}.json`;
+  const suitePath = join(repositoryRoot, relativeSuite);
+  const checkScript = [
+    'const forbidden = ["ONPEOPLE_API_KEY", "ONPEOPLE_SUB2API_KEY", "SUB2API_API_KEY", "OPENAI_API_KEY", "EVAL_TEST_CANARY"];',
+    "const leaked = forbidden.filter((name) => process.env[name] !== undefined);",
+    'if (leaked.length > 0) { console.error(`oracle env leaked: ${leaked.join(",")}`); process.exit(1); }',
+    'if (!process.env.PATH) { console.error("oracle env is missing PATH"); process.exit(1); }',
+  ].join("\n");
+  try {
+    await mkdir(dirname(suitePath), { recursive: true });
+    await writeFile(
+      suitePath,
+      JSON.stringify({
+        name: "env-scrub",
+        cases: [
+          {
+            id: "env-scrub",
+            title: "oracle environment is scrubbed",
+            prompt: "no-op agent for the environment scrubbing test",
+            fixture: "evals/fixtures/credit-boundary",
+            checks: [
+              {
+                name: "env-clean",
+                command: [process.execPath, "-e", checkScript],
+              },
+            ],
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/run-evals.mjs",
+        "--adapter",
+        "fixture",
+        "--suite",
+        relativeSuite,
+        "--command-json",
+        JSON.stringify([process.execPath, "-e", "process.exit(0)"]),
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ONPEOPLE_API_KEY: "sk-eval-test-secret-value-000000",
+          EVAL_TEST_CANARY: "1",
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /PASS fixture\s+env-scrub/);
+  } finally {
+    await rm(suitePath, { force: true });
+  }
 });
 
 test("evaluation reports redact API-key-shaped output", async () => {
