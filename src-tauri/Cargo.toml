@@ -5,6 +5,9 @@ description = "Tauri desktop runtime for OnPeople"
 authors = ["OnPeople"]
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 name = "onpeople_desktop_shell"

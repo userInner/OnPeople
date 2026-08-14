@@ -2,6 +2,12 @@
   "name": "onpeople-desktop",
   "version": "0.30.1",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/userInner/OnPeople.git"
+  },
+  "homepage": "https://aibro.vip/onpeople/",
   "description": "OnPeople local agent workbench with an Electron shell and Rust core.",
   "type": "module",
   "main": "electron-spike/main.mjs",

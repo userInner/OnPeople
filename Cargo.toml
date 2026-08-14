@@ -31,7 +31,9 @@ default-members = [
 version = "0.30.1"
 edition = "2024"
 rust-version = "1.95"
-license = "LicenseRef-Proprietary"
+license = "MIT"
+repository = "https://github.com/userInner/OnPeople"
+homepage = "https://aibro.vip/onpeople/"
 authors = ["OnPeople"]
 
 [workspace.dependencies]
